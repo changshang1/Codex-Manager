@@ -79,6 +79,63 @@ fn sample_api_key(
     }
 }
 
+#[test]
+fn account_rotation_instructions_follow_distribution_catalog_policy() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let body = br#"{"model":"future-official-model","instructions":"client"}"#.to_vec();
+
+    let account_body = apply_model_instructions_policy_for_rotation(
+        &storage,
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some("future-official-model"),
+        body.clone(),
+        crate::models_v2::instructions::InstructionProtocolV2::OpenAi,
+    )
+    .unwrap_or_else(|err| {
+        panic!(
+            "non-distribution account rotation should bypass managed instructions: {}",
+            err.message
+        )
+    });
+    assert_eq!(account_body, body);
+
+    for strategy in [
+        crate::apikey_profile::ROTATION_AGGREGATE_API,
+        crate::apikey_profile::ROTATION_HYBRID,
+        crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST,
+    ] {
+        let err = apply_model_instructions_policy_for_rotation(
+            &storage,
+            strategy,
+            Some("future-official-model"),
+            body.clone(),
+            crate::models_v2::instructions::InstructionProtocolV2::OpenAi,
+        )
+        .expect_err("managed catalog strategies should require a V2 model");
+        assert_eq!(err.status_code, 404);
+        assert!(err.message.contains("model_not_found"));
+    }
+
+    storage
+        .set_app_setting(
+            crate::APP_SETTING_DISTRIBUTION_ENABLED_KEY,
+            "true",
+            codexmanager_core::storage::now_ts(),
+        )
+        .expect("enable distribution mode");
+    let err = apply_model_instructions_policy_for_rotation(
+        &storage,
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some("future-official-model"),
+        body,
+        crate::models_v2::instructions::InstructionProtocolV2::OpenAi,
+    )
+    .expect_err("distribution account rotation should retain strict V2 validation");
+    assert_eq!(err.status_code, 404);
+    assert!(err.message.contains("model_not_found"));
+}
+
 /// 函数 `anthropic_key_keeps_empty_overrides`
 ///
 /// 作者: gaohongshun

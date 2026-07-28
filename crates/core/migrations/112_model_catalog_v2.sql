@@ -79,6 +79,7 @@ CREATE TABLE model_routes (
   enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
   priority INTEGER NOT NULL DEFAULT 0,
   weight INTEGER NOT NULL DEFAULT 1 CHECK (weight > 0),
+  sort_order INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(model_id, source_kind, source_id, upstream_model)
@@ -86,6 +87,8 @@ CREATE TABLE model_routes (
 
 CREATE INDEX idx_model_routes_model_enabled_order
   ON model_routes(model_id, enabled, priority DESC, id);
+CREATE INDEX idx_model_routes_model_sort_order
+  ON model_routes(model_id, sort_order, source_kind, source_id, id);
 CREATE INDEX idx_model_routes_source
   ON model_routes(source_kind, source_id, enabled);
 

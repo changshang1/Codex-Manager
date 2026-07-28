@@ -1,4 +1,4 @@
-use super::try_handle;
+use super::{aggregate_api_sort_updates_param, try_handle};
 use codexmanager_core::rpc::types::JsonRpcRequest;
 
 /// 函数 `rpc_request`
@@ -74,6 +74,30 @@ fn aggregate_api_update_accepts_id_and_api_id() {
     ))
     .expect("response");
     assert_ne!(error_message(&with_api_id), "aggregate api id required");
+}
+
+#[test]
+fn aggregate_api_sort_updates_accept_supported_ids_and_reject_bad_rows() {
+    let parsed = aggregate_api_sort_updates_param(&rpc_request(
+        "aggregateApi/updateSorts",
+        serde_json::json!({
+            "updates": [
+                { "apiId": "agg-a", "sort": 0 },
+                { "id": "agg-b", "sort": 5 }
+            ]
+        }),
+    ))
+    .expect("parse sort updates");
+    assert_eq!(parsed.len(), 2);
+    assert_eq!(parsed[0].api_id, "agg-a");
+    assert_eq!(parsed[1].api_id, "agg-b");
+
+    let error = aggregate_api_sort_updates_param(&rpc_request(
+        "aggregateApi/updateSorts",
+        serde_json::json!({ "updates": [{ "apiId": "agg-a" }] }),
+    ))
+    .expect_err("missing sort should fail");
+    assert!(error.contains("missing sort"));
 }
 
 /// 函数 `aggregate_api_test_connection_accepts_id_and_api_id`

@@ -12,6 +12,14 @@ const GPT56_PRICING_MIGRATION_VERSION: &str = "114_model_catalog_gpt56_prices";
 const CODEX_METADATA_MIGRATION_VERSION: &str = "115_model_catalog_codex_metadata";
 const GPT56_OFFICIAL_PRICING_MIGRATION_VERSION: &str = "121_model_catalog_gpt56_official_prices";
 const GPT56_OFFICIAL_PRICE_SOURCE: &str = "https://developers.openai.com/api/docs/models/compare";
+const MODEL_ROUTE_SORT_ORDER_BACKFILL_SQL: &str = "WITH ranked AS (
+    SELECT id,ROW_NUMBER() OVER (
+        PARTITION BY model_id ORDER BY priority DESC,id ASC
+    ) * 10 AS sort_order
+    FROM model_routes
+)
+UPDATE model_routes
+SET sort_order=(SELECT ranked.sort_order FROM ranked WHERE ranked.id=model_routes.id)";
 #[cfg(test)]
 const GPT_IMAGE_2_PRICE_SOURCE: &str =
     "https://developers.openai.com/api/docs/pricing#image-generation";
@@ -69,6 +77,8 @@ pub struct ModelRouteV2 {
     pub priority: i64,
     #[serde(default = "default_weight")]
     pub weight: i64,
+    #[serde(default)]
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -385,10 +395,33 @@ fn list_tiers(conn: &Connection, model_id: &str) -> Result<Vec<ModelPriceTierV2>
 }
 
 fn list_routes(conn: &Connection, model_id: &str) -> Result<Vec<ModelRouteV2>> {
-    let mut stmt = conn.prepare(
-        "SELECT id,source_kind,source_id,upstream_model,enabled,priority,weight
-         FROM model_routes WHERE model_id=?1 ORDER BY priority DESC,id ASC",
+    let has_aggregate_source_names = conn.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM pragma_table_info('aggregate_apis') WHERE name='supplier_name'
+         )",
+        [],
+        |row| row.get::<_, bool>(0),
     )?;
+    let sql = if has_aggregate_source_names {
+        "SELECT r.id,r.source_kind,r.source_id,r.upstream_model,r.enabled,r.priority,r.weight,
+                r.sort_order
+         FROM model_routes r
+         LEFT JOIN aggregate_apis a
+           ON r.source_kind='aggregate_api' AND a.id=r.source_id
+         WHERE r.model_id=?1
+         ORDER BY r.sort_order ASC,r.source_kind ASC,
+           CASE WHEN r.source_kind='aggregate_api'
+             THEN COALESCE(NULLIF(TRIM(a.supplier_name),''),r.source_id)
+             ELSE r.source_id
+           END COLLATE NOCASE ASC,
+           r.id ASC"
+    } else {
+        "SELECT id,source_kind,source_id,upstream_model,enabled,priority,weight,sort_order
+         FROM model_routes
+         WHERE model_id=?1
+         ORDER BY sort_order ASC,source_kind ASC,source_id COLLATE NOCASE ASC,id ASC"
+    };
+    let mut stmt = conn.prepare(sql)?;
     stmt.query_map([model_id], |row| {
         Ok(ModelRouteV2 {
             id: row.get(0)?,
@@ -398,6 +431,7 @@ fn list_routes(conn: &Connection, model_id: &str) -> Result<Vec<ModelRouteV2>> {
             enabled: row.get::<_, i64>(4)? != 0,
             priority: row.get(5)?,
             weight: row.get(6)?,
+            sort_order: row.get(7)?,
         })
     })?
     .collect()
@@ -510,9 +544,17 @@ fn insert_seed(
     };
     conn.execute(
         "INSERT OR IGNORE INTO model_routes (
-           id,model_id,source_kind,source_id,upstream_model,enabled,priority,weight,created_at,updated_at
-         ) VALUES (?1,?2,?3,?4,?5,1,0,1,?6,?6)",
-        params![route_id(&id, &route), id, route.source_kind, route.source_id, route.upstream_model, now],
+           id,model_id,source_kind,source_id,upstream_model,enabled,priority,weight,sort_order,
+           created_at,updated_at
+         ) VALUES (?1,?2,?3,?4,?5,1,0,1,10,?6,?6)",
+        params![
+            route_id(&id, &route),
+            id,
+            route.source_kind,
+            route.source_id,
+            route.upstream_model,
+            now
+        ],
     )?;
     Ok(())
 }
@@ -798,8 +840,19 @@ fn migrate_legacy_routes(conn: &Connection) -> Result<()> {
         };
         conn.execute(
             "INSERT OR IGNORE INTO model_routes(id,model_id,source_kind,source_id,upstream_model,
-               enabled,priority,weight,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
-            params![route_id(&model_id,&route),model_id,route.source_kind,route.source_id,route.upstream_model,route.enabled,route.priority,route.weight,now],
+               enabled,priority,weight,sort_order,created_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?9)",
+            params![
+                route_id(&model_id, &route),
+                model_id,
+                route.source_kind,
+                route.source_id,
+                route.upstream_model,
+                route.enabled,
+                route.priority,
+                route.weight,
+                now
+            ],
         )?;
     }
     Ok(())
@@ -980,7 +1033,8 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
         };
         tx.execute(
             "INSERT INTO model_routes(id,model_id,source_kind,source_id,upstream_model,
-            enabled,priority,weight,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+            enabled,priority,weight,sort_order,created_at,updated_at)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
             params![
                 route_id,
                 id,
@@ -990,6 +1044,7 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
                 route.enabled,
                 route.priority,
                 route.weight,
+                route.sort_order,
                 now
             ],
         )?;
@@ -1009,6 +1064,30 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
 }
 
 impl Storage {
+    pub(super) fn ensure_model_route_sort_order(&self) -> Result<()> {
+        if !self.has_column("model_routes", "sort_order")? {
+            self.conn.execute(
+                "ALTER TABLE model_routes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        let needs_backfill = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM model_routes WHERE sort_order=0)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if needs_backfill {
+            self.conn
+                .execute_batch(MODEL_ROUTE_SORT_ORDER_BACKFILL_SQL)?;
+        }
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_model_routes_model_sort_order
+             ON model_routes(model_id,sort_order,source_kind,source_id,id)",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub(super) fn apply_model_catalog_v2_migration(&self) -> Result<()> {
         if self.has_migration(MIGRATION_VERSION)? {
             return Ok(());

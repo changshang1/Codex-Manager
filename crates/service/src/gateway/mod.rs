@@ -84,6 +84,8 @@ mod local_response;
 mod local_validation;
 #[path = "observability/metrics.rs"]
 mod metrics;
+#[path = "routing/model_route.rs"]
+mod model_route;
 #[path = "request/official_responses_http.rs"]
 mod official_responses_http;
 #[path = "auth/openai_fallback.rs"]
@@ -1037,6 +1039,7 @@ pub(crate) fn gateway_supports_official_responses_websocket(
     }
     if api_key.rotation_strategy == crate::apikey_profile::ROTATION_AGGREGATE_API
         || api_key.rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+        || api_key.rotation_strategy == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
     {
         return false;
     }

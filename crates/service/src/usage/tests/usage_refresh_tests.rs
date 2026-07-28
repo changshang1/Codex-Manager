@@ -1,11 +1,11 @@
 use super::{
     clear_pending_usage_refresh_tasks_for_tests, enqueue_usage_refresh_with_worker,
     load_token_refresh_issuers_for_tokens, next_usage_poll_cursor, notify_usage_refresh_completed,
-    refresh_usage_for_account_result, reset_usage_poll_cursor_for_tests,
-    resolve_token_refresh_issuer, run_token_refresh_task, set_usage_refresh_completed_handler,
-    should_retry_usage_refresh_with_token, subscribe_usage_refresh_completed,
-    token_refresh_access_exp_cutoff, token_refresh_due_cutoff, token_refresh_schedule,
-    usage_poll_batch_indices,
+    refresh_usage_for_account_result, refresh_usage_for_account_result_with_policy,
+    reset_usage_poll_cursor_for_tests, resolve_token_refresh_issuer, run_token_refresh_task,
+    set_usage_refresh_completed_handler, should_retry_usage_refresh_with_token,
+    subscribe_usage_refresh_completed, token_refresh_access_exp_cutoff, token_refresh_due_cutoff,
+    token_refresh_schedule, usage_poll_batch_indices,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -124,6 +124,120 @@ fn refresh_usage_for_account_result_reports_missing_token() {
     assert_eq!(result.processed, 0);
     assert_eq!(result.total, 0);
     assert_eq!(result.message.as_deref(), Some("account token not found"));
+
+    let storage =
+        crate::storage_helpers::open_storage().expect("open storage after default refresh");
+    assert_eq!(
+        storage
+            .find_account_status_by_id("acc-no-token")
+            .expect("read account status")
+            .as_deref(),
+        Some("active")
+    );
+    drop(storage);
+
+    let required_result = refresh_usage_for_account_result_with_policy("acc-no-token", true)
+        .expect("required refresh result");
+    assert!(!required_result.ok);
+    let storage =
+        crate::storage_helpers::open_storage().expect("open storage after required refresh");
+    assert_eq!(
+        storage
+            .find_account_status_by_id("acc-no-token")
+            .expect("read required account status")
+            .as_deref(),
+        Some("unavailable")
+    );
+    assert_eq!(
+        storage
+            .latest_account_status_reasons(&["acc-no-token".to_string()])
+            .expect("read required account reason")
+            .get("acc-no-token")
+            .map(String::as_str),
+        Some("account_token_not_found")
+    );
+    drop(storage);
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn required_single_refresh_marks_http_failure_unavailable() {
+    let _guard = crate::test_env_guard();
+    let db_path = unique_temp_db_path("usage-refresh-required-http-failure");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", &db_path);
+    let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
+    let _ = std::fs::remove_file(&db_path);
+    crate::storage_helpers::initialize_storage().expect("init storage");
+
+    let server = Server::http("127.0.0.1:0").expect("start usage server");
+    let base_url = format!("http://{}", server.server_addr());
+    let _base_url_guard = EnvGuard::set("CODEXMANAGER_USAGE_BASE_URL", &base_url);
+    crate::usage_http::reload_usage_http_client_from_env();
+    let server_handle = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("usage server timeout")
+            .expect("receive usage request");
+        request
+            .respond(
+                Response::from_string("upstream failure").with_status_code(TinyStatusCode(500)),
+            )
+            .expect("respond usage request");
+    });
+
+    let now = now_ts();
+    let account_id = "acc-required-http-failure";
+    {
+        let storage = crate::storage_helpers::open_storage().expect("open storage");
+        storage
+            .insert_account(&Account {
+                id: account_id.to_string(),
+                label: "Required HTTP Failure".to_string(),
+                issuer: "https://auth.openai.com".to_string(),
+                chatgpt_account_id: None,
+                workspace_id: None,
+                group_name: None,
+                sort: 0,
+                status: "active".to_string(),
+                created_at: now,
+                updated_at: now,
+            })
+            .expect("insert account");
+        storage
+            .insert_token(&Token {
+                account_id: account_id.to_string(),
+                id_token: String::new(),
+                access_token: "access-token".to_string(),
+                refresh_token: String::new(),
+                api_key_access_token: None,
+                last_refresh: now,
+            })
+            .expect("insert token");
+    }
+
+    let error = refresh_usage_for_account_result_with_policy(account_id, true)
+        .expect_err("HTTP failure should be returned");
+    server_handle.join().expect("join usage server");
+    assert!(error.contains("500"));
+
+    let storage = crate::storage_helpers::open_storage().expect("open storage after failure");
+    assert_eq!(
+        storage
+            .find_account_status_by_id(account_id)
+            .expect("read account status")
+            .as_deref(),
+        Some("unavailable")
+    );
+    assert_eq!(
+        storage
+            .latest_account_status_reasons(&[account_id.to_string()])
+            .expect("read account reason")
+            .get(account_id)
+            .map(String::as_str),
+        Some("usage_http_500")
+    );
+    drop(storage);
 
     let _ = std::fs::remove_file(&db_path);
 }

@@ -21,6 +21,7 @@ mod gateway;
 mod http;
 mod lifecycle;
 mod logging;
+mod marketplace;
 mod model_groups;
 mod models_v2;
 mod plugin;
@@ -52,6 +53,7 @@ pub(crate) use account::warmup as account_warmup;
 pub(crate) use aggregate_api::{
     create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
     refresh_aggregate_api_balance, test_aggregate_api_connection, update_aggregate_api,
+    update_aggregate_api_sorts,
 };
 pub(crate) use apikey::create as apikey_create;
 pub(crate) use apikey::delete as apikey_delete;
@@ -172,6 +174,10 @@ pub use lifecycle::bootstrap::{initialize_storage_if_needed, portable};
 pub use lifecycle::shutdown::{clear_shutdown_flag, request_shutdown, shutdown_requested};
 pub use lifecycle::startup::{start_one_shot_server, start_server, ServerHandle};
 pub use logging::init_logging;
+pub use marketplace::{
+    ensure_polling as ensure_marketplace_polling,
+    set_notification_handler as set_marketplace_notification_handler,
+};
 pub use rpc_actor::{RpcActor, ROLE_ADMIN, ROLE_MEMBER, ROLE_SYSTEM_ADMIN};
 pub use usage::tray_summary::{read_tray_usage_reset_summary, TrayUsageResetSummary};
 pub use usage_refresh::{set_usage_refresh_completed_handler, UsageRefreshCompletedEvent};

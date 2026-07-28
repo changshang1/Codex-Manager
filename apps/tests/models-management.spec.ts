@@ -202,6 +202,7 @@ function builtinModel(
         sourceId: "default",
         upstreamModel: slug,
         enabled: true,
+        sortOrder: 10,
         priority: 0,
         weight: 1,
       },
@@ -1084,6 +1085,8 @@ test("长路由来源不会覆盖相邻的模型和批量路由字段", async ({
   const modelDialog = page.getByRole("dialog");
   await modelDialog.getByRole("tab", { name: "路由" }).click();
   await modelDialog.getByRole("button", { name: "添加聚合路由" }).click();
+  await expect(modelDialog.locator("#route-sort-order-0")).toHaveValue("10");
+  await expect(modelDialog.locator("#route-sort-order-1")).toHaveValue("20");
   await modelDialog.locator("#route-source-1").click();
   await page.getByRole("option", { name: `聚合 API：${LONG_AGGREGATE_NAME}` }).click();
 
@@ -1112,6 +1115,8 @@ test("长路由来源不会覆盖相邻的模型和批量路由字段", async ({
 
   const batchDialog = page.getByRole("dialog", { name: "批量分配模型路由" });
   await batchDialog.getByRole("button", { name: "添加聚合路由" }).click();
+  await expect(batchDialog.locator("#batch-route-sort-order-0")).toHaveValue("10");
+  await expect(batchDialog.locator("#batch-route-sort-order-1")).toHaveValue("20");
   await batchDialog.locator("#batch-route-source-1").click();
   await page.getByRole("option", { name: `聚合 API：${LONG_AGGREGATE_NAME}` }).click();
 
@@ -1260,12 +1265,14 @@ test("模型目录支持中文展示并为多个模型批量分配路由", async
           sourceId: "default",
           upstreamModel: slug,
           enabled: true,
+          sortOrder: 10,
         }),
         expect.objectContaining({
           sourceKind: "aggregate_api",
           sourceId: "agg-1",
           upstreamModel: slug,
           enabled: true,
+          sortOrder: 20,
         }),
       ]),
     );
@@ -1359,11 +1366,13 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
         sourceKind: "account_pool",
         sourceId: "default",
         upstreamModel: "my-custom-model",
+        sortOrder: 10,
       }),
       expect.objectContaining({
         sourceKind: "aggregate_api",
         sourceId: "agg-1",
         upstreamModel: "upstream-custom-v1",
+        sortOrder: 20,
       }),
     ]),
   );

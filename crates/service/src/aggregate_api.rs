@@ -6,6 +6,7 @@ use codexmanager_core::storage::{now_ts, AggregateApi};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashSet;
 use std::io::Read;
 use std::time::Instant;
 
@@ -25,6 +26,17 @@ const AGGREGATE_API_BALANCE_TEMPLATE_CUSTOM: &str = "custom";
 const CUSTOM_BALANCE_AUTH_PROVIDER_BEARER: &str = "provider_bearer";
 const CUSTOM_BALANCE_AUTH_BALANCE_BEARER: &str = "balance_bearer";
 const CUSTOM_BALANCE_AUTH_NONE: &str = "none";
+
+#[derive(Debug, Clone)]
+pub(crate) struct AggregateApiSortUpdate {
+    pub api_id: String,
+    pub sort: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct AggregateApiSortUpdateResult {
+    updated: usize,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1958,6 +1970,38 @@ pub(crate) fn update_aggregate_api(
         }
     }
     Ok(())
+}
+
+pub(crate) fn update_aggregate_api_sorts(
+    updates: Vec<AggregateApiSortUpdate>,
+) -> Result<AggregateApiSortUpdateResult, String> {
+    let mut normalized = Vec::with_capacity(updates.len());
+    let mut seen = HashSet::new();
+    for update in updates {
+        let api_id = update.api_id.trim().to_string();
+        if api_id.is_empty() {
+            return Err("missing aggregate api id".to_string());
+        }
+        if !seen.insert(api_id.clone()) {
+            return Err(format!("duplicate aggregate api id: {api_id}"));
+        }
+        normalized.push((api_id, update.sort));
+    }
+    if normalized.is_empty() {
+        return Err("missing aggregate api sort updates".to_string());
+    }
+
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let updated = storage
+        .update_aggregate_api_sorts(normalized.as_slice(), now_ts())
+        .map_err(|err| {
+            let message = err.to_string();
+            message
+                .strip_prefix("Invalid parameter name: ")
+                .unwrap_or(message.as_str())
+                .to_string()
+        })?;
+    Ok(AggregateApiSortUpdateResult { updated })
 }
 
 /// 函数 `delete_aggregate_api`

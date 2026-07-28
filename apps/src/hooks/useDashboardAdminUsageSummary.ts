@@ -5,7 +5,10 @@ import { useDeferredDesktopActivation } from "@/hooks/useDeferredDesktopActivati
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { dashboardClient } from "@/lib/api/dashboard-client";
 import { useAppStore } from "@/lib/store/useAppStore";
-import type { DashboardAdminUsageSummary } from "@/types";
+import type {
+  DashboardAdminUsageSummary,
+  DashboardSourceRef,
+} from "@/types";
 
 export const DASHBOARD_ADMIN_USAGE_QUERY_KEY = [
   "dashboard",
@@ -18,6 +21,9 @@ interface DashboardAdminUsageSummaryQueryParams {
   includeBreakdowns?: boolean;
   includeSeries?: boolean;
   seriesBucketSeconds?: number | null;
+  sourceKinds?: string[];
+  selectedSources?: DashboardSourceRef[];
+  includeUnavailableSources?: boolean;
 }
 
 export function useDashboardAdminUsageSummary(
@@ -40,6 +46,9 @@ export function useDashboardAdminUsageSummary(
       params?.includeBreakdowns ?? true,
       params?.includeSeries ?? false,
       params?.seriesBucketSeconds ?? null,
+      params?.sourceKinds ?? [],
+      params?.selectedSources ?? [],
+      params?.includeUnavailableSources ?? true,
     ],
     queryFn: () =>
       dashboardClient.getAdminUsageSummary({
@@ -48,6 +57,9 @@ export function useDashboardAdminUsageSummary(
         includeBreakdowns: params?.includeBreakdowns ?? true,
         includeSeries: params?.includeSeries ?? false,
         seriesBucketSeconds: params?.seriesBucketSeconds ?? null,
+        sourceKinds: params?.sourceKinds ?? [],
+        selectedSources: params?.selectedSources ?? [],
+        includeUnavailableSources: params?.includeUnavailableSources ?? true,
       }),
     enabled: isQueryEnabled,
     retry: 1,

@@ -10,6 +10,7 @@ import { EN_DASHBOARD_MESSAGES } from "./sections/en-dashboard";
 import { EN_DYNAMIC_UI_MESSAGES } from "./sections/en-dynamic-ui";
 import { EN_MODEL_CATALOG_MESSAGES } from "./sections/en-model-catalog";
 import { EN_MODEL_GROUPS_MESSAGES } from "./sections/en-model-groups";
+import { EN_MARKETPLACE_MESSAGES } from "./sections/en-marketplace";
 import { EN_MODELS_MESSAGES } from "./sections/en-models";
 import { EN_PLATFORM_MODE_MESSAGES } from "./sections/en-platform-mode";
 import { EN_PROJECTS_MESSAGES } from "./sections/en-projects";
@@ -19,6 +20,7 @@ import { EN_SKILLS_MESSAGES } from "./sections/en-skills";
 export const EN_MESSAGES: MessageCatalog = {
   ...EN_PROJECTS_MESSAGES,
   ...EN_SKILLS_MESSAGES,
+  ...EN_MARKETPLACE_MESSAGES,
   "延迟测试设置": "Latency test settings",
   "速度测试设置": "Speed test settings",
   "下载预设": "Download preset",
@@ -1202,6 +1204,31 @@ export const EN_MESSAGES: MessageCatalog = {
   适合小规模或低峰值场景: "Suitable for small scale or low peaks",
   "顺序优先：按账号候选顺序优先尝试，默认只会在头部小窗口内按健康度做轻微换头；均衡轮询：按“平台密钥 + 模型”维度严格轮询可用账号，默认不做健康度换头。":
     "Ordered: try accounts in order, with slight health-based head swapping in the top small window; Balanced: strictly round-robin available accounts by “API key + model”, no health swapping by default.",
+  "模型 route 先按来源分别调度：优先级越大越先尝试，同优先级按权重平滑轮转，顺序号只控制模型管理页面排序。这里的账号选路策略只控制账号池 route 内的具体账号，不控制聚合 API route。":
+    "Model routes are scheduled separately by source: higher priority is tried first, equal-priority routes use smooth weighted rotation, and sort order only controls the management UI. This account routing setting only selects accounts inside an account-pool route; it does not control aggregate API routes.",
+  允许接入: "Allow access",
+  停止接入: "Stop access",
+  允许账号接入: "allow account access",
+  停止账号接入: "stop account access",
+  账号已停止接入: "Account access stopped",
+  "账号已允许接入，但刷新失败: {error}":
+    "Account access is allowed, but refresh failed: {error}",
+  "账号已允许接入，但刷新未执行: {message}":
+    "Account access is allowed, but refresh did not run: {message}",
+  "账号已允许接入，但当前无法确认健康状态":
+    "Account access is allowed, but health cannot currently be confirmed",
+  账号已允许接入并完成刷新: "Account access allowed and refresh completed",
+  "允许接入只控制人工停用；账号是否真正参与请求仍取决于旁边的健康状态。开启后会立即刷新验证。":
+    "Allow access only controls manual disabling. Actual request eligibility still depends on the adjacent health status. Enabling it immediately refreshes and validates the account.",
+  当前账号已经在分组最前面: "This account is already first in its group",
+  当前账号已经在分组最后面: "This account is already last in its group",
+  "聚合 API 顺序已更新": "Aggregate API order updated",
+  "调整聚合 API 顺序失败": "Failed to reorder aggregate APIs",
+  "当前聚合 API 已经在最前面": "This aggregate API is already first",
+  "当前聚合 API 已经在最后面": "This aggregate API is already last",
+  "未找到目标聚合 API，请刷新后重试":
+    "Target aggregate API was not found. Refresh and try again.",
+  "聚合 API 顺序未变化": "Aggregate API order did not change",
   速度和资源占用比较均衡: "Balanced speed and resource usage",
   "同一账号同时能处理多少个请求。满了以后会优先换下一个账号；填 0 表示关闭上限。":
     "How many requests a single account can handle concurrently. When full, it switches to the next account; 0 disables the limit.",

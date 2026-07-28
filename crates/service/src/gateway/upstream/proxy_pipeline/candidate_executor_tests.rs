@@ -208,6 +208,7 @@ fn run_candidate_sequence_with_statuses(
             request_shape: Some("responses"),
             trace_id: test_name,
             model_for_log: None,
+            account_model_routes: &[],
             response_adapter: ResponseAdapter::Passthrough,
             gemini_stream_output_mode: None,
             tool_name_restore_map: &tool_name_restore_map,

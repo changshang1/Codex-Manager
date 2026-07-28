@@ -180,7 +180,15 @@ Service 模式由以下二进制组成：
 - API Key
 - 请求日志
 - token 统计
+- 模型目录、模型 route 及页面顺序
+- 聚合 API 连接及其显示顺序
+- 商品池来源、报价、完整快照、变化记录、提醒规则、提醒状态和收藏商家
 - app settings
+
+商品池的数据流保持在独立领域内：`/marketplace/` 页面通过 Tauri 命令或 Web transport
+调用 `marketplace/*` RPC，Service 负责 PriceAI 分页抓取、渠道/页面二次验证、变化记录和提醒
+评估，Core storage 写入 `marketplace_*` 表。服务启动时自动同步一次，随后每小时轮询；关闭
+主窗口不会停止 Service 或轮询，只有退出程序才结束。商品池不读写现有账号池密码或凭据。
 
 ### 6.2 运行配置
 

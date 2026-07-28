@@ -262,6 +262,7 @@ pub(super) fn seed_model_catalog_models(storage: &Storage, models: &[&str]) {
             enabled: true,
             priority: 0,
             weight: 1,
+            sort_order: 0,
         }];
         storage
             .upsert_managed_model_v2(&ManagedModelV2Upsert {
@@ -302,6 +303,7 @@ pub(super) fn seed_model_catalog_route(
         enabled: true,
         priority,
         weight: 1,
+        sort_order: 0,
     });
     storage
         .upsert_managed_model_v2(&ManagedModelV2Upsert {

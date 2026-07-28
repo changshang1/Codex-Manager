@@ -27,6 +27,17 @@ test("管理员用量查询显式请求模型序列和时间粒度", async () =>
   );
 });
 
+test("仪表盘来源筛选保留翻译标签、下拉定位和稳定顺序", async () => {
+  const source = await readSource(
+    "src/components/dashboard/admin-usage-source-filter.tsx",
+  );
+
+  assert.match(source, /<SelectValue>[\s\S]*?t\("账号池"\)[\s\S]*?t\("聚合 API"\)[\s\S]*?t\("全部来源"\)/);
+  assert.match(source, /<SelectContent align="start" alignItemWithTrigger=\{false\}>/);
+  assert.match(source, /\[\.\.\.query\.options, \.\.\.query\.selectedItems\]/);
+  assert.doesNotMatch(source, /selectedKeys\.has\([\s\S]{0,80}sort\(/);
+});
+
 test("模型曲线保留原日曲线回退并提供可访问交互", async () => {
   const [pageSource, chartSource, gatewayStatusSource] = await Promise.all([
     readSource("src/app/page.tsx"),

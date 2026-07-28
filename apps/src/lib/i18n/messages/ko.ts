@@ -10,6 +10,7 @@ import { KO_DASHBOARD_MESSAGES } from "./sections/ko-dashboard";
 import { KO_DYNAMIC_UI_MESSAGES } from "./sections/ko-dynamic-ui";
 import { KO_MODEL_CATALOG_MESSAGES } from "./sections/ko-model-catalog";
 import { KO_MODEL_GROUPS_MESSAGES } from "./sections/ko-model-groups";
+import { KO_MARKETPLACE_MESSAGES } from "./sections/ko-marketplace";
 import { KO_MODELS_MESSAGES } from "./sections/ko-models";
 import { KO_PLATFORM_MODE_MESSAGES } from "./sections/ko-platform-mode";
 import { KO_PROJECTS_MESSAGES } from "./sections/ko-projects";
@@ -19,6 +20,7 @@ import { KO_SKILLS_MESSAGES } from "./sections/ko-skills";
 export const KO_MESSAGES: MessageCatalog = {
   ...KO_PROJECTS_MESSAGES,
   ...KO_SKILLS_MESSAGES,
+  ...KO_MARKETPLACE_MESSAGES,
   仪表盘: "대시보드",
   概览: "개요",
   平台接入: "플랫폼 연결",
@@ -1089,6 +1091,31 @@ export const KO_MESSAGES: MessageCatalog = {
   适合小规模或低峰值场景: "소규모 또는 낮은 피크에 적합",
   "顺序优先：按账号候选顺序优先尝试，默认只会在头部小窗口内按健康度做轻微换头；均衡轮询：按“平台密钥 + 模型”维度严格轮询可用账号，默认不做健康度换头。":
     "순서 우선: 후보 계정 순서대로 시도하며, 기본으로 상단 작은 창에서만 건강도 기준의 약간의 교체를 합니다. 균형 라운드로빈: “API 키 + 모델” 기준으로 사용 가능한 계정을 엄격히 순환하며 기본적으로 건강도 교체를 하지 않습니다.",
+  "模型 route 先按来源分别调度：优先级越大越先尝试，同优先级按权重平滑轮转，顺序号只控制模型管理页面排序。这里的账号选路策略只控制账号池 route 内的具体账号，不控制聚合 API route。":
+    "모델 route는 소스별로 따로 스케줄링됩니다. 우선순위가 높을수록 먼저 시도하고, 같은 우선순위에서는 가중치에 따라 부드럽게 순환하며, 순서 번호는 관리 화면 정렬에만 사용됩니다. 이 계정 라우팅 설정은 계정 풀 route 내부 계정만 제어하며 집계 API route는 제어하지 않습니다.",
+  允许接入: "접근 허용",
+  停止接入: "접근 중지",
+  允许账号接入: "계정 접근 허용",
+  停止账号接入: "계정 접근 중지",
+  账号已停止接入: "계정 접근이 중지되었습니다",
+  "账号已允许接入，但刷新失败: {error}":
+    "계정 접근은 허용되었지만 새로 고침에 실패했습니다: {error}",
+  "账号已允许接入，但刷新未执行: {message}":
+    "계정 접근은 허용되었지만 새로 고침이 실행되지 않았습니다: {message}",
+  "账号已允许接入，但当前无法确认健康状态":
+    "계정 접근은 허용되었지만 현재 상태를 확인할 수 없습니다",
+  账号已允许接入并完成刷新: "계정 접근 허용 및 새로 고침이 완료되었습니다",
+  "允许接入只控制人工停用；账号是否真正参与请求仍取决于旁边的健康状态。开启后会立即刷新验证。":
+    "접근 허용은 수동 비활성화만 제어합니다. 실제 요청 참여 여부는 옆의 상태에 따라 결정되며, 활성화하면 즉시 새로 고침하여 검증합니다.",
+  当前账号已经在分组最前面: "이 계정은 이미 그룹의 첫 번째입니다",
+  当前账号已经在分组最后面: "이 계정은 이미 그룹의 마지막입니다",
+  "聚合 API 顺序已更新": "집계 API 순서가 업데이트되었습니다",
+  "调整聚合 API 顺序失败": "집계 API 순서 조정에 실패했습니다",
+  "当前聚合 API 已经在最前面": "이 집계 API는 이미 첫 번째입니다",
+  "当前聚合 API 已经在最后面": "이 집계 API는 이미 마지막입니다",
+  "未找到目标聚合 API，请刷新后重试":
+    "대상 집계 API를 찾지 못했습니다. 새로 고침 후 다시 시도하세요.",
+  "聚合 API 顺序未变化": "집계 API 순서가 변경되지 않았습니다",
   速度和资源占用比较均衡: "속도와 자원 사용이 균형적",
   "同一账号同时能处理多少个请求。满了以后会优先换下一个账号；填 0 表示关闭上限。":
     "한 계정이 동시에 처리할 수 있는 요청 수입니다. 한도에 도달하면 다음 계정으로 전환하며, 0은 제한 해제입니다.",

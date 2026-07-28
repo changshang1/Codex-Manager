@@ -14,3 +14,4 @@ export * from "@/types/quota";
 export * from "@/types/runtime";
 export * from "@/types/settings";
 export * from "@/types/startup";
+export * from "@/types/marketplace";

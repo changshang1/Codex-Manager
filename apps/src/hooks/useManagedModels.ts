@@ -406,6 +406,7 @@ export function useManagedModels() {
             sourceId: route.sourceId,
             upstreamModel: model.slug,
             enabled: true,
+            sortOrder: route.sortOrder,
             priority: route.priority,
             weight: route.weight,
           };

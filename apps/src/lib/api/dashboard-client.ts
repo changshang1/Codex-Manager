@@ -1,9 +1,17 @@
 import { invoke, withAddr } from "./transport";
-import { normalizeModelCatalog, normalizeRequestLogs } from "./normalize";
+import {
+  normalizeModelCatalog,
+  normalizeRequestLogs,
+  normalizeUsageAggregateSummary,
+} from "./normalize";
 import type {
+  DashboardAccountPoolSummary,
   DashboardAdminUsageSummary,
   DashboardDailyUsagePoint,
   DashboardModelUsageSeries,
+  DashboardSourceOption,
+  DashboardSourceOptionsResult,
+  DashboardSourceRef,
   DashboardSourceUsageSummary,
   DashboardTokenUsage,
   DashboardUsageSeriesPoint,
@@ -132,6 +140,63 @@ function readSourceUsageSummary(value: unknown): DashboardSourceUsageSummary | n
   };
 }
 
+function readAccountPoolSummary(value: unknown): DashboardAccountPoolSummary {
+  const source = asRecord(value);
+  return {
+    scopedAccountCount: asNumber(
+      source.scopedAccountCount ?? source.scoped_account_count,
+    ),
+    availableAccountCount: asNumber(
+      source.availableAccountCount ?? source.available_account_count,
+    ),
+    usage: normalizeUsageAggregateSummary(source.usage),
+  };
+}
+
+function readSourceOption(value: unknown): DashboardSourceOption | null {
+  const source = asRecord(value);
+  const sourceKind = asString(source.sourceKind ?? source.source_kind);
+  const sourceId = asString(source.sourceId ?? source.source_id);
+  if (
+    (sourceKind !== "openai_account" && sourceKind !== "aggregate_api") ||
+    !sourceId
+  ) {
+    return null;
+  }
+  const availability = asString(source.availability);
+  return {
+    sourceKind,
+    sourceId,
+    name: nullableString(source.name),
+    provider: nullableString(source.provider),
+    status: nullableString(source.status),
+    availability:
+      availability === "available" || availability === "deleted"
+        ? availability
+        : "unavailable",
+    availabilityReason: nullableString(
+      source.availabilityReason ?? source.availability_reason,
+    ),
+    rangeUsage: readTokenUsage(source.rangeUsage ?? source.range_usage),
+  };
+}
+
+function readSourceOptions(value: unknown): DashboardSourceOptionsResult {
+  const source = asRecord(value);
+  return {
+    items: asArray(source.items)
+      .map(readSourceOption)
+      .filter((item): item is DashboardSourceOption => Boolean(item)),
+    selectedItems: asArray(source.selectedItems ?? source.selected_items)
+      .map(readSourceOption)
+      .filter((item): item is DashboardSourceOption => Boolean(item)),
+    total: asNumber(source.total),
+    page: asNumber(source.page, 1),
+    pageSize: asNumber(source.pageSize ?? source.page_size, 30),
+    hasMore: asBoolean(source.hasMore ?? source.has_more),
+  };
+}
+
 function readAdminUsageSummary(value: unknown): DashboardAdminUsageSummary {
   const source = asRecord(value);
   return {
@@ -162,6 +227,9 @@ function readAdminUsageSummary(value: unknown): DashboardAdminUsageSummary {
     aggregateApis: asArray(source.aggregateApis ?? source.aggregate_apis)
       .map(readSourceUsageSummary)
       .filter((item): item is DashboardSourceUsageSummary => Boolean(item)),
+    accountPool: readAccountPoolSummary(
+      source.accountPool ?? source.account_pool,
+    ),
   };
 }
 
@@ -311,6 +379,9 @@ export const dashboardClient = {
     includeBreakdowns?: boolean;
     includeSeries?: boolean;
     seriesBucketSeconds?: number | null;
+    sourceKinds?: string[];
+    selectedSources?: DashboardSourceRef[];
+    includeUnavailableSources?: boolean;
   }): Promise<DashboardAdminUsageSummary> {
     const result = await invoke<unknown>(
       "service_dashboard_admin_usage_summary",
@@ -320,9 +391,37 @@ export const dashboardClient = {
         includeBreakdowns: params?.includeBreakdowns ?? null,
         includeSeries: params?.includeSeries ?? null,
         seriesBucketSeconds: params?.seriesBucketSeconds ?? null,
+        sourceKinds: params?.sourceKinds ?? [],
+        selectedSources: params?.selectedSources ?? [],
+        includeUnavailableSources: params?.includeUnavailableSources ?? true,
       }),
     );
     return readAdminUsageSummary(result);
+  },
+  async getSourceOptions(params: {
+    startTs?: number | null;
+    endTs?: number | null;
+    sourceKinds?: string[];
+    search?: string;
+    page?: number;
+    pageSize?: number;
+    includeUnavailableSources?: boolean;
+    selectedSources?: DashboardSourceRef[];
+  }): Promise<DashboardSourceOptionsResult> {
+    const result = await invoke<unknown>(
+      "service_dashboard_source_options",
+      withAddr({
+        startTs: params.startTs ?? null,
+        endTs: params.endTs ?? null,
+        sourceKinds: params.sourceKinds ?? [],
+        search: params.search ?? "",
+        page: params.page ?? 1,
+        pageSize: params.pageSize ?? 30,
+        includeUnavailableSources: params.includeUnavailableSources ?? true,
+        selectedSources: params.selectedSources ?? [],
+      }),
+    );
+    return readSourceOptions(result);
   },
   async getMemberSummary(params?: {
     userId?: string | null;

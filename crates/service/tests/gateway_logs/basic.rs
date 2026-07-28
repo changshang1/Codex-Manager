@@ -288,11 +288,34 @@ fn gateway_reports_platform_model_route_errors() {
         ],
     );
     server.join();
+    assert_eq!(status, 503, "response body: {body}");
+    assert!(
+        body.contains("no_available_account"),
+        "official account models should pass local V2 validation, got {body}"
+    );
+
+    storage
+        .set_app_setting("distribution.enabled", "true", now)
+        .expect("enable distribution mode");
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let (status, body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        r#"{"model":"missing-platform","input":"hello"}"#,
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
     assert_eq!(status, 404, "response body: {body}");
     assert!(
         body.contains("model_not_found"),
-        "gateway should report missing platform model, got {body}"
+        "distribution mode should reject unpriced models outside V2, got {body}"
     );
+    storage
+        .set_app_setting("distribution.enabled", "false", now)
+        .expect("restore non-distribution mode");
 
     seed_model_catalog_models(&storage, &["gpt-platform"]);
 

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowDown,
+  ArrowUp,
   Copy,
   Database,
   Eye,
@@ -50,7 +52,11 @@ import { useDeferredDesktopActivation } from "@/hooks/useDeferredDesktopActivati
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
 import { usePageTransitionReady } from "@/hooks/usePageTransitionReady";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
-import { accountClient } from "@/lib/api/account-client";
+import {
+  accountClient,
+  type AggregateApiSortUpdatePayload,
+} from "@/lib/api/account-client";
+import { getAppErrorMessage } from "@/lib/api/transport";
 import { aggregateApiProviderMatchesFilter } from "@/lib/aggregate-api-provider";
 import { useI18n } from "@/lib/i18n/provider";
 import { useAppStore } from "@/lib/store/useAppStore";
@@ -68,6 +74,23 @@ const PROVIDER_LABELS: Record<string, string> = {
   gemini: "Gemini",
   compatible: "Codex + Claude",
 };
+
+const AGGREGATE_API_SORT_STEP = 5;
+
+function buildAggregateApiOrderUpdates(
+  orderedApis: AggregateApi[],
+): AggregateApiSortUpdatePayload[] {
+  return orderedApis.reduce<AggregateApiSortUpdatePayload[]>(
+    (updates, api, index) => {
+      const sort = index * AGGREGATE_API_SORT_STEP;
+      if ((Number(api.sort) || 0) !== sort) {
+        updates.push({ apiId: api.id, sort });
+      }
+      return updates;
+    },
+    [],
+  );
+}
 
 function parseBalanceSnapshot(api: AggregateApi): AggregateApiBalanceSnapshot | null {
   const raw = String(api.lastBalanceJson || "").trim();
@@ -166,6 +189,10 @@ export default function AggregateApiPage() {
           ),
     [aggregateApis, providerFilter],
   );
+  const filteredApiIndexMap = useMemo(
+    () => new Map(filteredApis.map((api, index) => [api.id, index])),
+    [filteredApis],
+  );
   const defaultCreateSort = useMemo(
     () =>
       aggregateApis.reduce(
@@ -244,6 +271,19 @@ export default function AggregateApiPage() {
     onSettled: () => setTogglingApiId(null),
   });
 
+  const reorderMutation = useMutation({
+    mutationFn: (updates: AggregateApiSortUpdatePayload[]) =>
+      accountClient.updateAggregateApiSorts(updates),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["aggregate-apis"] });
+      toast.success(t("聚合 API 顺序已更新"));
+    },
+    onError: async (error: unknown) => {
+      await queryClient.invalidateQueries({ queryKey: ["aggregate-apis"] });
+      toast.error(`${t("调整聚合 API 顺序失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+
   const toggleSecret = async (apiId: string) => {
     if (revealedSecrets[apiId]) {
       setRevealedSecrets((current) => {
@@ -261,6 +301,42 @@ export default function AggregateApiPage() {
       toast.error(`${t("读取密钥失败")}: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setLoadingSecretId(null);
+    }
+  };
+
+  const handleMoveApi = async (
+    api: AggregateApi,
+    direction: "up" | "down",
+  ) => {
+    const filteredIndex = filteredApiIndexMap.get(api.id) ?? -1;
+    const targetIndex = direction === "up" ? filteredIndex - 1 : filteredIndex + 1;
+    if (filteredIndex === -1 || targetIndex < 0 || targetIndex >= filteredApis.length) {
+      toast.info(
+        direction === "up"
+          ? t("当前聚合 API 已经在最前面")
+          : t("当前聚合 API 已经在最后面"),
+      );
+      return;
+    }
+
+    const target = filteredApis[targetIndex];
+    const reordered = aggregateApis.filter((item) => item.id !== api.id);
+    const anchorIndex = reordered.findIndex((item) => item.id === target.id);
+    if (anchorIndex === -1) {
+      toast.error(t("未找到目标聚合 API，请刷新后重试"));
+      return;
+    }
+    reordered.splice(direction === "up" ? anchorIndex : anchorIndex + 1, 0, api);
+    const updates = buildAggregateApiOrderUpdates(reordered);
+    if (updates.length === 0) {
+      toast.info(t("聚合 API 顺序未变化"));
+      return;
+    }
+
+    try {
+      await reorderMutation.mutateAsync(updates);
+    } catch {
+      // The mutation owns error reporting and list invalidation.
     }
   };
 
@@ -322,6 +398,7 @@ export default function AggregateApiPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t("供应商")}</TableHead>
+                    <TableHead className="w-[132px]">{t("顺序")}</TableHead>
                     <TableHead>{t("类型")}</TableHead>
                     <TableHead>{t("密钥")}</TableHead>
                     <TableHead>{t("模型路由")}</TableHead>
@@ -335,14 +412,14 @@ export default function AggregateApiPage() {
                   {isLoading ? (
                     Array.from({ length: 4 }).map((_, index) => (
                       <TableRow key={index}>
-                        {Array.from({ length: 8 }).map((__, cell) => (
+                        {Array.from({ length: 9 }).map((__, cell) => (
                           <TableCell key={cell}><Skeleton className="h-7 w-full" /></TableCell>
                         ))}
                       </TableRow>
                     ))
                   ) : filteredApis.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={8} className="h-48 text-center text-muted-foreground">
+                      <TableCell colSpan={9} className="h-48 text-center text-muted-foreground">
                         {t("暂无聚合 API，点击右上角新建")}
                       </TableCell>
                     </TableRow>
@@ -351,6 +428,7 @@ export default function AggregateApiPage() {
                       const revealed = revealedSecrets[api.id];
                       const balance = parseBalanceSnapshot(api);
                       const testError = String(api.lastTestError || "").trim();
+                      const filteredIndex = filteredApiIndexMap.get(api.id) ?? -1;
                       return (
                         <TableRow key={api.id}>
                           <TableCell className="min-w-[240px]">
@@ -358,6 +436,46 @@ export default function AggregateApiPage() {
                             <div className="max-w-[360px] truncate font-mono text-[11px] text-muted-foreground">{api.url}</div>
                             <div className="mt-1 text-[10px] text-muted-foreground">
                               {t("创建时间")}: {formatTsFromSeconds(api.createdAt, "-")}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <span className="rounded bg-muted/50 px-2 py-0.5 font-mono text-xs">
+                                {api.sort}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-primary"
+                                disabled={
+                                  !isServiceReady ||
+                                  filteredIndex <= 0 ||
+                                  reorderMutation.isPending
+                                }
+                                onClick={() => void handleMoveApi(api, "up")}
+                                aria-label={t("上移一位")}
+                                title={t("上移一位")}
+                              >
+                                <ArrowUp className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-primary"
+                                disabled={
+                                  !isServiceReady ||
+                                  filteredIndex === -1 ||
+                                  filteredIndex >= filteredApis.length - 1 ||
+                                  reorderMutation.isPending
+                                }
+                                onClick={() => void handleMoveApi(api, "down")}
+                                aria-label={t("下移一位")}
+                                title={t("下移一位")}
+                              >
+                                <ArrowDown className="h-3.5 w-3.5" />
+                              </Button>
                             </div>
                           </TableCell>
                           <TableCell>

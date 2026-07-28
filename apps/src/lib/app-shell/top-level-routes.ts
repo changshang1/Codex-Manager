@@ -72,6 +72,12 @@ export const TOP_LEVEL_ROUTE_CONFIG = [
     roles: ["system_admin", "admin"],
   },
   {
+    path: "/marketplace",
+    label: "商品池",
+    section: "resources",
+    roles: ["system_admin", "admin"],
+  },
+  {
     path: "/platform-mode",
     label: "Codex 接入方式",
     section: "platform-config",

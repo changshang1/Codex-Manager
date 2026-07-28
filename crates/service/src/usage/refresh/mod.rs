@@ -175,7 +175,8 @@ pub(crate) use self::batch::refresh_usage_for_all_accounts_result;
 #[cfg(test)]
 use self::batch::{next_usage_poll_cursor, usage_poll_batch_indices};
 use self::errors::{
-    mark_usage_unreachable_if_needed, record_usage_refresh_failure, should_retry_with_refresh,
+    mark_usage_unavailable_after_required_refresh, mark_usage_unreachable_if_needed,
+    record_usage_refresh_failure, should_retry_with_refresh,
 };
 #[cfg(test)]
 use self::queue::clear_pending_usage_refresh_tasks_for_tests;
@@ -485,6 +486,54 @@ fn load_token_refresh_issuers_for_tokens(
 /// # 返回
 /// 返回函数执行结果
 pub(crate) fn refresh_usage_for_account_result(
+    account_id: &str,
+) -> Result<UsageRefreshRunResult, String> {
+    refresh_usage_for_account_result_with_policy(account_id, false)
+}
+
+pub(crate) fn refresh_usage_for_account_result_with_policy(
+    account_id: &str,
+    mark_unavailable_on_failure: bool,
+) -> Result<UsageRefreshRunResult, String> {
+    let result = refresh_usage_for_account_result_inner(account_id);
+    if !mark_unavailable_on_failure {
+        return result;
+    }
+
+    // Quick enable has already changed disabled -> active. A failed validation must
+    // invalidate that health state so an older usable snapshot cannot route traffic.
+    let account_id = account_id.trim();
+    let failure_message = match &result {
+        Ok(run) if !run.ok => run
+            .message
+            .as_deref()
+            .unwrap_or("usage refresh did not run"),
+        Err(err) => err.as_str(),
+        Ok(_) => return result,
+    };
+    if account_id.is_empty() {
+        return result;
+    }
+    let mark_result = open_storage()
+        .ok_or_else(|| "storage unavailable".to_string())
+        .and_then(|storage| {
+            mark_usage_unavailable_after_required_refresh(&storage, account_id, failure_message)
+        });
+    if let Err(mark_error) = mark_result {
+        let refresh_error = match result {
+            Err(err) => err,
+            Ok(run) => run
+                .message
+                .unwrap_or_else(|| "usage refresh did not run".to_string()),
+        };
+        return Err(format!(
+            "{refresh_error}; failed to mark account unavailable: {mark_error}"
+        ));
+    }
+    result
+}
+
+fn refresh_usage_for_account_result_inner(
     account_id: &str,
 ) -> Result<UsageRefreshRunResult, String> {
     // 刷新单个账号用量

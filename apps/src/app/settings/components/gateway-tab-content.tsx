@@ -149,6 +149,11 @@ export function GatewayTabContent({
               "顺序优先：按账号候选顺序优先尝试，默认只会在头部小窗口内按健康度做轻微换头；均衡轮询：按“平台密钥 + 模型”维度严格轮询可用账号，默认不做健康度换头。",
             )}
           </p>
+          <p className="text-[10px] text-muted-foreground">
+            {t(
+              "模型 route 先按来源分别调度：优先级越大越先尝试，同优先级按权重平滑轮转，顺序号只控制模型管理页面排序。这里的账号选路策略只控制账号池 route 内的具体账号，不控制聚合 API route。",
+            )}
+          </p>
         </div>
 
         <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row sm:items-start sm:justify-between">

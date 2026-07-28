@@ -145,6 +145,7 @@ pub(crate) fn apply_route_strategy_with_source(
 ///
 /// # 返回
 /// 无
+#[cfg(test)]
 pub(crate) fn apply_balanced_round_robin<T>(
     candidates: &mut [T],
     key_id: &str,
@@ -174,6 +175,7 @@ fn apply_balanced_account_round_robin(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn preview_balanced_round_robin<T>(
     candidates: &mut [T],
     key_id: &str,
@@ -388,6 +390,7 @@ pub(crate) fn clear_manual_preferred_account() {
 ///
 /// # 返回
 /// 返回函数执行结果
+#[cfg(test)]
 fn next_start_index(key_id: &str, model: Option<&str>, candidate_count: usize) -> usize {
     let lock = ROUTE_STATE.get_or_init(|| Mutex::new(RouteRoundRobinState::default()));
     let mut state_guard = crate::lock_utils::lock_recover(lock, "route_state");
@@ -471,6 +474,7 @@ fn next_account_start_index(
     start
 }
 
+#[cfg(test)]
 fn current_start_index(key_id: &str, model: Option<&str>, candidate_count: usize) -> usize {
     if candidate_count == 0 {
         return 0;

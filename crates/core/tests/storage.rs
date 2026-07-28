@@ -610,6 +610,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             enabled: true,
             priority: 10,
             weight: 1,
+            sort_order: 10,
         },
         ModelRouteV2 {
             id: String::new(),
@@ -619,6 +620,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             enabled: true,
             priority: 0,
             weight: 1,
+            sort_order: 20,
         },
     ];
     storage

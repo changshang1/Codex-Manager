@@ -1,5 +1,6 @@
 import type { ModelInfo } from "@/types/model";
 import type { RequestLog } from "@/types/request-log";
+import type { UsageAggregateSummary } from "@/types/account";
 
 export interface DashboardTokenUsage {
   inputTokens: number;
@@ -52,6 +53,37 @@ export interface DashboardSourceUsageSummary {
   rangeUsage: DashboardTokenUsage;
 }
 
+export type DashboardSourceKind = "openai_account" | "aggregate_api";
+
+export interface DashboardSourceRef {
+  sourceKind: DashboardSourceKind;
+  sourceId: string;
+}
+
+export interface DashboardAccountPoolSummary {
+  scopedAccountCount: number;
+  availableAccountCount: number;
+  usage: UsageAggregateSummary;
+}
+
+export interface DashboardSourceOption extends DashboardSourceRef {
+  name: string | null;
+  provider: string | null;
+  status: string | null;
+  availability: "available" | "unavailable" | "deleted";
+  availabilityReason: string | null;
+  rangeUsage: DashboardTokenUsage;
+}
+
+export interface DashboardSourceOptionsResult {
+  items: DashboardSourceOption[];
+  selectedItems: DashboardSourceOption[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+}
+
 export interface DashboardAdminUsageSummary {
   rangeStartTs: number;
   rangeEndTs: number;
@@ -65,6 +97,7 @@ export interface DashboardAdminUsageSummary {
   users: DashboardUserUsageSummary[];
   openaiAccounts: DashboardSourceUsageSummary[];
   aggregateApis: DashboardSourceUsageSummary[];
+  accountPool: DashboardAccountPoolSummary;
 }
 
 export interface MemberDashboardWallet {

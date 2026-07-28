@@ -38,6 +38,7 @@ type BatchRouteDraft = {
   key: string;
   sourceKind: ModelRouteSourceKindV2;
   sourceId: string;
+  sortOrder: string;
   priority: string;
   weight: string;
 };
@@ -56,11 +57,13 @@ interface BatchModelRoutesModalProps {
 function createRouteDraft(
   sourceKind: ModelRouteSourceKindV2,
   sourceId = "",
+  sortOrder = 10,
 ): BatchRouteDraft {
   return {
     key: `batch-route-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     sourceKind,
     sourceId: sourceKind === "account_pool" ? "default" : sourceId,
+    sortOrder: String(sortOrder),
     priority: "0",
     weight: "1",
   };
@@ -122,10 +125,25 @@ export function BatchModelRoutesModal({
   };
 
   const addRoute = (sourceKind: ModelRouteSourceKindV2) => {
-    setRoutes((current) => [
-      ...current,
-      createRouteDraft(sourceKind, aggregateApis[0]?.id || ""),
-    ]);
+    setRoutes((current) => {
+      const largestSortOrder = current.reduce<number | null>((largest, route) => {
+        const value = integer(route.sortOrder);
+        if (value == null) return largest;
+        return largest == null ? value : Math.max(largest, value);
+      }, null);
+      const previousSortOrder = largestSortOrder ?? 0;
+      const nextSortOrder = Number.isSafeInteger(previousSortOrder + 10)
+        ? previousSortOrder + 10
+        : previousSortOrder;
+      return [
+        ...current,
+        createRouteDraft(
+          sourceKind,
+          aggregateApis[0]?.id || "",
+          nextSortOrder,
+        ),
+      ];
+    });
   };
 
   const handleApply = async () => {
@@ -141,14 +159,17 @@ export function BatchModelRoutesModal({
       const normalizedRoutes = routes.map((route) => {
         const sourceId =
           route.sourceKind === "account_pool" ? "default" : route.sourceId.trim();
+        const sortOrder = integer(route.sortOrder);
         const priority = integer(route.priority);
         const weight = integer(route.weight, 1);
         if (!sourceId) throw new Error(t("请选择聚合 API"));
+        if (sortOrder == null) throw new Error(t("路由顺序号必须是整数"));
         if (priority == null) throw new Error(t("路由优先级必须是整数"));
         if (weight == null) throw new Error(t("路由权重必须是正整数"));
         return {
           sourceKind: route.sourceKind,
           sourceId,
+          sortOrder,
           priority,
           weight,
         };
@@ -264,6 +285,9 @@ export function BatchModelRoutesModal({
                 </Button>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground">
+              {t("优先级和权重只在同一来源类型内生效。优先级越大越先尝试，不同优先级是硬分层；同一优先级按权重平滑轮转，失败时先继续同级路由，再尝试低优先级。顺序号越小越靠前，只控制页面排序，不参与运行时选路。")}
+            </p>
 
             {routes.length === 0 ? (
               <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
@@ -365,7 +389,22 @@ export function BatchModelRoutesModal({
                       )}
                     </div>
 
-                    <div className="min-w-[92px] flex-[0.55_1_108px] space-y-2">
+                    <div className="min-w-[88px] flex-[0.5_1_100px] space-y-2">
+                      <Label className="leading-5" htmlFor={`batch-route-sort-order-${index}`}>
+                        {t("顺序号")}
+                      </Label>
+                      <Input
+                        id={`batch-route-sort-order-${index}`}
+                        type="number"
+                        step="1"
+                        value={route.sortOrder}
+                        onChange={(event) =>
+                          updateRoute(index, "sortOrder", event.target.value)
+                        }
+                      />
+                    </div>
+
+                    <div className="min-w-[88px] flex-[0.5_1_100px] space-y-2">
                       <Label className="leading-5" htmlFor={`batch-route-priority-${index}`}>
                         {t("优先级")}
                       </Label>
@@ -379,7 +418,7 @@ export function BatchModelRoutesModal({
                       />
                     </div>
 
-                    <div className="min-w-[92px] flex-[0.55_1_108px] space-y-2">
+                    <div className="min-w-[88px] flex-[0.5_1_100px] space-y-2">
                       <Label className="leading-5" htmlFor={`batch-route-weight-${index}`}>
                         {t("权重")}
                       </Label>

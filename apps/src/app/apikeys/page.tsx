@@ -83,6 +83,7 @@ const ROTATION_STRATEGY_LABELS: Record<string, string> = {
   account_rotation: "账号轮转",
   aggregate_api_rotation: "聚合API轮转",
   hybrid_rotation: "混合轮转（账号优先）",
+  hybrid_aggregate_first_rotation: "混合轮转（聚合 API 优先）",
 };
 
 function userCanOwnApiKey(user: AppUser): boolean {
@@ -796,7 +797,14 @@ export default function ApiKeysPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex max-w-[190px] flex-col items-start gap-1">
-                          <Badge variant="secondary" className="text-[10px] font-normal">
+                          <Badge
+                            variant="secondary"
+                            className="h-auto min-h-5 max-w-full whitespace-normal py-1 text-center text-[10px] font-normal leading-tight"
+                            title={t(
+                              ROTATION_STRATEGY_LABELS[key.rotationStrategy] ||
+                                key.rotationStrategy,
+                            )}
+                          >
                             {t(
                               ROTATION_STRATEGY_LABELS[key.rotationStrategy] ||
                                 key.rotationStrategy,

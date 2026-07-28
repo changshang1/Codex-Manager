@@ -131,6 +131,15 @@ export interface AccountSortUpdatePayload {
   sort: number;
 }
 
+export interface AccountUsageRefreshOptions {
+  markUnavailableOnFailure?: boolean;
+}
+
+export interface AggregateApiSortUpdatePayload {
+  apiId: string;
+  sort: number;
+}
+
 export interface AccountUsageRefreshResult {
   ok: boolean;
   source: string;
@@ -687,15 +696,21 @@ export const accountClient = {
     const result = await invoke<unknown>("service_usage_list", withAddr());
     return normalizeUsageList(result);
   },
-  async refreshUsage(accountId?: string): Promise<AccountUsageRefreshResult> {
+  async refreshUsage(
+    accountId?: string,
+    options?: AccountUsageRefreshOptions,
+  ): Promise<AccountUsageRefreshResult> {
     const targetAccountId = accountId?.trim();
+    const params: Record<string, unknown> = targetAccountId
+      ? { accountId: targetAccountId, account_id: targetAccountId }
+      : {};
+    if (options?.markUnavailableOnFailure === true) {
+      params.markUnavailableOnFailure = true;
+      params.mark_unavailable_on_failure = true;
+    }
     const result = await invoke<unknown>(
       "service_usage_refresh",
-      withAddr(
-        targetAccountId
-          ? { accountId: targetAccountId, account_id: targetAccountId }
-          : {}
-      )
+      withAddr(params),
     );
     return normalizeUsageRefreshResult(result);
   },
@@ -865,6 +880,16 @@ export const accountClient = {
             ? params.balanceQueryConfigJson
             : null,
       })
+    ),
+  updateAggregateApiSorts: (updates: AggregateApiSortUpdatePayload[]) =>
+    invoke(
+      "service_aggregate_api_update_sorts",
+      withAddr({
+        updates: updates.map((update) => ({
+          apiId: update.apiId,
+          sort: update.sort,
+        })),
+      }),
     ),
   deleteAggregateApi: (apiId: string) =>
     invoke("service_aggregate_api_delete", withAddr({ id: apiId })),

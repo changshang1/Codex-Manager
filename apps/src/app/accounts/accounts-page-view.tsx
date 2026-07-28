@@ -102,7 +102,6 @@ import {
   formatAccountPlanValueLabel,
   formatPlanFilterLabel,
   formatStatusFilterLabel,
-  getAccountStatusAction,
 } from "@/app/accounts/accounts-page-helpers";
 
 interface PlanTypeOption {
@@ -245,7 +244,6 @@ export interface AccountsPageViewProps {
   toggleAccountStatus: (
     accountId: string,
     enabled: boolean,
-    currentStatus: string,
   ) => void;
 }
 
@@ -842,7 +840,10 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                 <TableHead className="w-[132px]">{t("顺序")}</TableHead>
                 <TableHead className="min-w-[180px]">{t("账号代理")}</TableHead>
                 <TableHead className="w-[112px]">{t("状态")}</TableHead>
-                <TableHead className="table-sticky-action-head w-[112px] text-center">
+                <TableHead className="table-sticky-access-head w-[104px] min-w-[104px] text-center">
+                  {t("允许接入")}
+                </TableHead>
+                <TableHead className="table-sticky-action-head w-[112px] min-w-[112px] text-center">
                   {t("操作")}
                 </TableHead>
               </TableRow>
@@ -873,14 +874,17 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     <TableCell>
                       <Skeleton className="h-6 w-16 rounded-full" />
                     </TableCell>
-                    <TableCell className="table-sticky-action-cell">
+                    <TableCell className="table-sticky-access-cell w-[104px] min-w-[104px]">
+                      <Skeleton className="mx-auto h-5 w-9 rounded-full" />
+                    </TableCell>
+                    <TableCell className="table-sticky-action-cell w-[112px] min-w-[112px]">
                       <Skeleton className="mx-auto h-8 w-24" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : visibleAccounts.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-48 text-center">
+                  <TableCell colSpan={8} className="h-48 text-center">
                     <div className="flex w-[calc(100dvw-6rem)] flex-col items-center justify-center gap-2 text-muted-foreground sm:w-auto">
                       <Search className="h-8 w-8 opacity-20" />
                       <p>{t("未找到符合条件的账号")}</p>
@@ -890,8 +894,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               ) : (
                 visibleAccounts.map((account) => {
                   const quotaItems = buildQuotaSummaryItems(account, t);
-                  const statusAction = getAccountStatusAction(account, t);
-                  const StatusActionIcon = statusAction.icon;
                   const isRefreshingCurrentAccount =
                     isRefreshingAccountId === account.id;
                   const isRefreshingCurrentRt =
@@ -902,9 +904,24 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   const canMoveDown =
                     filteredIndex !== -1 &&
                     filteredIndex < filteredAccounts.length - 1;
-                  const isAtListTop = accounts[0]?.id === account.id;
+                  const canMoveWithinGroupUp =
+                    canMoveUp &&
+                    filteredAccounts[filteredIndex - 1]?.isAvailable ===
+                      account.isAvailable;
+                  const canMoveWithinGroupDown =
+                    canMoveDown &&
+                    filteredAccounts[filteredIndex + 1]?.isAvailable ===
+                      account.isAvailable;
+                  const availabilityGroup = accounts.filter(
+                    (item) => item.isAvailable === account.isAvailable,
+                  );
+                  const isAtListTop = availabilityGroup[0]?.id === account.id;
                   const isAtListBottom =
-                    accounts[accounts.length - 1]?.id === account.id;
+                    availabilityGroup[availabilityGroup.length - 1]?.id ===
+                    account.id;
+                  const accessEnabled =
+                    String(account.status || "").trim().toLowerCase() !==
+                    "disabled";
                   return (
                     <TableRow key={account.id} className="group">
                       <TableCell className="text-center">
@@ -966,7 +983,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                             className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={
                               !isServiceReady ||
-                              !canMoveUp ||
+                              !canMoveWithinGroupUp ||
                               isReorderingAccounts ||
                               isUpdatingProfileAccountId === account.id
                             }
@@ -981,7 +998,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                             className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
                             disabled={
                               !isServiceReady ||
-                              !canMoveDown ||
+                              !canMoveWithinGroupDown ||
                               isReorderingAccounts ||
                               isUpdatingProfileAccountId === account.id
                             }
@@ -1014,7 +1031,32 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       <TableCell>
                         <AccountStatusCell account={account} />
                       </TableCell>
-                      <TableCell className="table-sticky-action-cell">
+                      <TableCell className="table-sticky-access-cell w-[104px] min-w-[104px] text-center">
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={<span />}
+                            className="inline-flex"
+                          >
+                            <Switch
+                              checked={accessEnabled}
+                              disabled={
+                                !isServiceReady ||
+                                isUpdatingStatusAccountId === account.id
+                              }
+                              onCheckedChange={(enabled) =>
+                                toggleAccountStatus(account.id, enabled)
+                              }
+                              aria-label={t("允许接入")}
+                            />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            {t(
+                              "允许接入只控制人工停用；账号是否真正参与请求仍取决于旁边的健康状态。开启后会立即刷新验证。",
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell className="table-sticky-action-cell w-[112px] min-w-[112px]">
                         <div className="table-action-cell gap-1">
                           <Button
                             variant="ghost"
@@ -1132,25 +1174,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                               >
                                 <Network className="h-4 w-4" />
                                 {t("账号代理")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={
-                                  !isServiceReady ||
-                                  isUpdatingStatusAccountId === account.id ||
-                                  statusAction.action === null
-                                }
-                                onClick={() =>
-                                  statusAction.action &&
-                                  toggleAccountStatus(
-                                    account.id,
-                                    statusAction.action === "enable",
-                                    account.status,
-                                  )
-                                }
-                              >
-                                <StatusActionIcon className="h-4 w-4" />
-                                {statusAction.label}
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem

@@ -28,6 +28,10 @@ import {
   AdminUsageTrendChart,
   type AdminUsageGranularity,
 } from "@/components/dashboard/admin-usage-trend-chart";
+import {
+  AdminUsageSourceFilter,
+  type DashboardSourceType,
+} from "@/components/dashboard/admin-usage-source-filter";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -90,6 +94,8 @@ import {
 import type {
   DashboardAdminUsageSummary,
   DashboardDailyUsagePoint,
+  DashboardSourceKind,
+  DashboardSourceRef,
   DashboardTokenUsage,
   MemberDashboardAlert,
   MemberDashboardKeyUsage,
@@ -108,7 +114,7 @@ interface MetricCardProps {
   valueClassName?: string;
 }
 
-type AdminUsageRangePreset = "7d" | "14d" | "30d" | "custom";
+type AdminUsageRangePreset = "today" | "7d" | "14d" | "30d" | "custom";
 
 interface AdminUsageRangeValue {
   startTs: number | null;
@@ -172,7 +178,8 @@ function buildAdminUsagePresetRange(
   localDayStartTs: number,
   localDayEndTs: number,
 ): AdminUsageRangeValue {
-  const days = preset === "14d" ? 14 : preset === "30d" ? 30 : 7;
+  const days =
+    preset === "today" ? 1 : preset === "14d" ? 14 : preset === "30d" ? 30 : 7;
   const todayStart = new Date(localDayStartTs * 1000);
   const startDate = new Date(
     todayStart.getFullYear(),
@@ -186,7 +193,10 @@ function buildAdminUsagePresetRange(
 
   return {
     startTs: Math.floor(startDate.getTime() / 1000),
-    endTs: localDayEndTs,
+    endTs:
+      preset === "today"
+        ? Math.min(localDayEndTs, Math.floor(Date.now() / 1000) + 1)
+        : localDayEndTs,
     startInput: formatDateInputValue(startDate),
     endInput: formatDateInputValueFromSeconds(Math.max(localDayStartTs, localDayEndTs - 1)),
   };
@@ -658,8 +668,9 @@ function AdminUsageAnalyticsCard({
   }
 
   const isTodayOnlyRange =
-    summary.rangeStartTs === summary.todayStartTs &&
-    summary.rangeEndTs === summary.todayEndTs;
+    rangePreset === "today" ||
+    (summary.rangeStartTs === summary.todayStartTs &&
+      summary.rangeEndTs === summary.todayEndTs);
   const rangeUsage = isTodayOnlyRange
     ? summary.todayUsage
     : sumDashboardTokenUsages(summary.dailyUsage.map((item) => item.usage));
@@ -701,10 +712,21 @@ function AdminUsageAnalyticsCard({
                 }
               >
                 <SelectTrigger className="w-[132px] bg-background/40">
-                  <SelectValue />
+                  <SelectValue>
+                    {rangePreset === "today"
+                      ? t("今日")
+                      : rangePreset === "7d"
+                        ? t("最近 7 天")
+                        : rangePreset === "14d"
+                          ? t("最近 14 天")
+                          : rangePreset === "30d"
+                            ? t("最近 30 天")
+                            : t("自定义区间")}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
+                    <SelectItem value="today">{t("今日")}</SelectItem>
                     <SelectItem value="7d">{t("最近 7 天")}</SelectItem>
                     <SelectItem value="14d">{t("最近 14 天")}</SelectItem>
                     <SelectItem value="30d">{t("最近 30 天")}</SelectItem>
@@ -813,6 +835,7 @@ function AdminUsageAnalyticsCard({
 }
 
 function AdminDashboard() {
+  const { t } = useI18n();
   const { stats, isLoading, isServiceReady } = useDashboardStats({
     requestLogLimit: 0,
     includeAccountHints: false,
@@ -841,6 +864,28 @@ function AdminDashboard() {
     });
   const [adminUsageGranularity, setAdminUsageGranularity] =
     useState<AdminUsageGranularity>("day");
+  const [adminUsageSourceType, setAdminUsageSourceType] =
+    useState<DashboardSourceType>("all");
+  const [adminUsageSelectedSources, setAdminUsageSelectedSources] = useState<
+    DashboardSourceRef[]
+  >([]);
+  const [adminUsageIncludeUnavailable, setAdminUsageIncludeUnavailable] =
+    useState(true);
+  const [adminUsageNowTs, setAdminUsageNowTs] = useState(() =>
+    Math.floor(Date.now() / 1000),
+  );
+  const adminUsageSourceKinds = useMemo<DashboardSourceKind[]>(() => {
+    if (adminUsageSourceType === "all") return [];
+    return [adminUsageSourceType];
+  }, [adminUsageSourceType]);
+
+  useEffect(() => {
+    if (adminUsageRangePreset !== "today") return;
+    const refreshNow = () => setAdminUsageNowTs(Math.floor(Date.now() / 1000));
+    refreshNow();
+    const interval = window.setInterval(refreshNow, 60_000);
+    return () => window.clearInterval(interval);
+  }, [adminUsageRangePreset]);
 
   useEffect(() => {
     if (adminUsageRangePreset === "custom") {
@@ -863,6 +908,7 @@ function AdminDashboard() {
     };
   }, [
     adminUsageRangePreset,
+    adminUsageNowTs,
     localDayRange.dayEndTs,
     localDayRange.dayStartTs,
   ]);
@@ -879,11 +925,29 @@ function AdminDashboard() {
       includeBreakdowns: false,
       includeSeries: true,
       seriesBucketSeconds: adminUsageGranularity === "hour" ? 3_600 : 86_400,
+      sourceKinds: adminUsageSourceKinds,
+      selectedSources: adminUsageSelectedSources,
+      includeUnavailableSources: adminUsageIncludeUnavailable,
     },
     true,
   );
   usePageTransitionReady("/", !isServiceReady || !isLoading);
 
+  const filteredAccountPool = adminUsageSummary?.accountPool;
+  const filteredPoolUsage = filteredAccountPool?.usage;
+  const filteredPrimaryRemain = filteredAccountPool
+    ? filteredPoolUsage?.primaryRemainPercent
+    : stats.poolRemain?.primary;
+  const filteredSecondaryRemain = filteredAccountPool
+    ? filteredPoolUsage?.secondaryRemainPercent
+    : stats.poolRemain?.secondary;
+  const poolEmptyLabel = filteredAccountPool
+    ? filteredAccountPool.scopedAccountCount === 0
+      ? t("当前筛选无账号")
+      : filteredAccountPool.availableAccountCount === 0
+        ? t("暂无可用账号")
+        : null
+    : null;
   const isCustomAdminUsageRangeInvalid =
     adminUsageRangePreset === "custom" &&
     (() => {
@@ -894,6 +958,27 @@ function AdminDashboard() {
 
   return (
     <div className="space-y-5 animate-in fade-in duration-500 xl:space-y-7">
+      {!isDirectAccountMode ? (
+        <div className="flex flex-col gap-3 border-y border-border/60 bg-muted/20 px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold">{t("统计来源")}</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {t("以下筛选同时作用于 Token、请求、费用、趋势和账号池剩余")}
+            </p>
+          </div>
+          <AdminUsageSourceFilter
+            startTs={adminUsageRangeParams.startTs}
+            endTs={adminUsageRangeParams.endTs}
+            sourceType={adminUsageSourceType}
+            selectedSources={adminUsageSelectedSources}
+            includeUnavailableSources={adminUsageIncludeUnavailable}
+            onSourceTypeChange={setAdminUsageSourceType}
+            onSelectedSourcesChange={setAdminUsageSelectedSources}
+            onIncludeUnavailableSourcesChange={setAdminUsageIncludeUnavailable}
+          />
+        </div>
+      ) : null}
+
       <DashboardGatewayStatus
         connected={isServiceReady}
         directMode={isDirectAccountMode}
@@ -912,12 +997,28 @@ function AdminDashboard() {
       />
 
       <DashboardPoolRemaining
-        primary={stats.poolRemain.primary}
-        secondary={stats.poolRemain.secondary}
-        primaryKnownCount={stats.poolRemain.primaryKnownCount}
-        primaryBucketCount={stats.poolRemain.primaryBucketCount}
-        secondaryKnownCount={stats.poolRemain.secondaryKnownCount}
-        secondaryBucketCount={stats.poolRemain.secondaryBucketCount}
+        primary={poolEmptyLabel ? null : filteredPrimaryRemain ?? null}
+        secondary={poolEmptyLabel ? null : filteredSecondaryRemain ?? null}
+        primaryKnownCount={
+          poolEmptyLabel
+            ? 0
+            : filteredPoolUsage?.primaryKnownCount ?? stats.poolRemain.primaryKnownCount
+        }
+        primaryBucketCount={
+          poolEmptyLabel
+            ? 0
+            : filteredPoolUsage?.primaryBucketCount ?? stats.poolRemain.primaryBucketCount
+        }
+        secondaryKnownCount={
+          poolEmptyLabel
+            ? 0
+            : filteredPoolUsage?.secondaryKnownCount ?? stats.poolRemain.secondaryKnownCount
+        }
+        secondaryBucketCount={
+          poolEmptyLabel
+            ? 0
+            : filteredPoolUsage?.secondaryBucketCount ?? stats.poolRemain.secondaryBucketCount
+        }
         isLoading={isLoading}
       />
 

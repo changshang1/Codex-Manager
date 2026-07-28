@@ -9,6 +9,7 @@ pub mod codex_projects;
 pub mod codex_skills;
 pub mod dashboard;
 pub mod login;
+pub mod marketplace;
 pub mod plugin;
 pub mod quota;
 mod registry;

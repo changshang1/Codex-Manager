@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::account_status::{
-    mark_account_unavailable_for_deactivation_error,
+    classify_account_availability_signal, mark_account_unavailable_for_deactivation_error,
     mark_account_unavailable_for_refresh_token_error,
-    mark_account_unavailable_for_usage_http_error,
+    mark_account_unavailable_for_usage_http_error, set_account_status, AccountAvailabilitySignal,
+    REFRESH_TOKEN_REGION_BLOCKED_REASON,
 };
 
 const DEFAULT_USAGE_REFRESH_FAILURE_EVENT_WINDOW_SECS: i64 = 60;
@@ -54,6 +55,56 @@ pub(super) fn record_usage_refresh_failure(storage: &Storage, account_id: &str, 
             created_at,
         });
     }
+}
+
+pub(super) fn mark_usage_unavailable_after_required_refresh(
+    storage: &Storage,
+    account_id: &str,
+    message: &str,
+) -> Result<(), String> {
+    let reason = required_refresh_failure_reason(message);
+    set_account_status(storage, account_id, "unavailable", &reason);
+
+    let persisted_status = storage
+        .find_account_status_by_id(account_id)
+        .map_err(|err| format!("verify account status failed: {err}"))?;
+    if persisted_status.as_deref() != Some("unavailable") {
+        return Err("account status was not persisted as unavailable".to_string());
+    }
+    let persisted_reason = storage
+        .latest_account_status_reasons(&[account_id.to_string()])
+        .map_err(|err| format!("verify account status reason failed: {err}"))?
+        .remove(account_id);
+    if persisted_reason.as_deref() != Some(reason.as_str()) {
+        return Err("account unavailable reason was not persisted".to_string());
+    }
+    Ok(())
+}
+
+fn required_refresh_failure_reason(message: &str) -> String {
+    if message
+        .trim()
+        .eq_ignore_ascii_case("account token not found")
+    {
+        return "account_token_not_found".to_string();
+    }
+    if let Some(signal) = classify_account_availability_signal(message) {
+        return match signal {
+            AccountAvailabilitySignal::RefreshToken(reason) => {
+                format!("refresh_token_invalid:{}", reason.as_code())
+            }
+            AccountAvailabilitySignal::RefreshTokenRegionBlocked => {
+                REFRESH_TOKEN_REGION_BLOCKED_REASON.to_string()
+            }
+            AccountAvailabilitySignal::Deactivation(reason) => reason.to_string(),
+            AccountAvailabilitySignal::UsageHttp(status_code) => {
+                format!("usage_http_{status_code}")
+            }
+        };
+    }
+    status_reason_for_refresh_failure(&classify_usage_refresh_error(message))
+        .unwrap_or("usage_refresh_failed")
+        .to_string()
 }
 
 /// 函数 `mark_usage_unreachable_if_needed`

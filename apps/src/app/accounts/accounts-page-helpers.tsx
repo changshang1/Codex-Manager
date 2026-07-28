@@ -31,7 +31,6 @@ export type AccountMovePlacement =
   | { type: "before"; anchorAccountId: string }
   | { type: "after"; anchorAccountId: string };
 
-const ACCOUNT_SORT_STEP = 5;
 
 export function fitLongTextClassName(
   value: string,
@@ -400,6 +399,9 @@ export function formatAccountStatusReasonLabel(
   if (reason === "usage_refresh_failed") {
     return t("用量刷新失败，请查看后台日志");
   }
+  if (reason === "account_token_not_found") {
+    return t("账号缺少登录凭证，无法刷新用量");
+  }
 
   const usageHttpStatus = reason.match(/^usage_http_(\d{3})$/);
   if (usageHttpStatus) {
@@ -586,55 +588,6 @@ export function normalizeTagsDraft(tagsDraft: string): string[] {
     .filter(Boolean);
 }
 
-export function buildAccountOrderUpdates(orderedAccounts: Account[]) {
-  return orderedAccounts.reduce<Array<{ accountId: string; sort: number }>>(
-    (updates, account, index) => {
-      const nextSort = index * ACCOUNT_SORT_STEP;
-      const currentSort = Number.isFinite(account.priority)
-        ? account.priority
-        : Number(account.sort) || 0;
-      if (currentSort !== nextSort) {
-        updates.push({ accountId: account.id, sort: nextSort });
-      }
-      return updates;
-    },
-    [],
-  );
-}
-
-// 按目标位置重排账号；锚点账号不存在时返回 null，由调用方提示刷新。
-export function buildAccountsByMovedOrder(
-  orderedAccounts: Account[],
-  account: Account,
-  placement: AccountMovePlacement,
-): Account[] | null {
-  const reorderedAccounts = orderedAccounts.filter(
-    (item) => item.id !== account.id,
-  );
-
-  if (placement.type === "top") {
-    reorderedAccounts.unshift(account);
-    return reorderedAccounts;
-  }
-  if (placement.type === "bottom") {
-    reorderedAccounts.push(account);
-    return reorderedAccounts;
-  }
-
-  const anchorIndex = reorderedAccounts.findIndex(
-    (item) => item.id === placement.anchorAccountId,
-  );
-  if (anchorIndex === -1) {
-    return null;
-  }
-  reorderedAccounts.splice(
-    placement.type === "before" ? anchorIndex : anchorIndex + 1,
-    0,
-    account,
-  );
-  return reorderedAccounts;
-}
-
 export function getAccountSizeGroup(
   account: Account,
 ): "large" | "standard" | "small" {
@@ -669,6 +622,39 @@ export function buildAccountsBySizeOrder(
   return mode === "large-first"
     ? [...buckets.large, ...buckets.standard, ...buckets.small]
     : [...buckets.small, ...buckets.standard, ...buckets.large];
+}
+
+// 按目标位置重排账号；锚点账号不存在时返回 null，由调用方提示刷新。
+export function buildAccountsByMovedOrder(
+  orderedAccounts: Account[],
+  account: Account,
+  placement: AccountMovePlacement,
+): Account[] | null {
+  const reorderedAccounts = orderedAccounts.filter(
+    (item) => item.id !== account.id,
+  );
+
+  if (placement.type === "top") {
+    reorderedAccounts.unshift(account);
+    return reorderedAccounts;
+  }
+  if (placement.type === "bottom") {
+    reorderedAccounts.push(account);
+    return reorderedAccounts;
+  }
+
+  const anchorIndex = reorderedAccounts.findIndex(
+    (item) => item.id === placement.anchorAccountId,
+  );
+  if (anchorIndex === -1) {
+    return null;
+  }
+  reorderedAccounts.splice(
+    placement.type === "before" ? anchorIndex : anchorIndex + 1,
+    0,
+    account,
+  );
+  return reorderedAccounts;
 }
 
 export function formatAccountExportModeLabel(value: string, t: TranslateFn) {

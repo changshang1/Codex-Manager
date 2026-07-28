@@ -4467,16 +4467,30 @@ fn start_mock_proxy_slow_server(
     thread::JoinHandle<()>,
 ) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake proxy");
+    listener
+        .set_nonblocking(true)
+        .expect("set fake proxy nonblocking");
     let addr = format!("http://{}", listener.local_addr().expect("fake proxy addr"));
     let (tx, rx) = std::sync::mpsc::channel();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept proxy connection");
-        let mut buffer = vec![0_u8; 8192];
-        let size = stream.read(&mut buffer).expect("read proxy request");
-        tx.send(String::from_utf8_lossy(&buffer[..size]).to_string())
-            .expect("send proxy request");
-        thread::sleep(delay);
-        let _ = stream.write_all(response.as_bytes());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buffer = vec![0_u8; 8192];
+                    let size = stream.read(&mut buffer).expect("read proxy request");
+                    tx.send(String::from_utf8_lossy(&buffer[..size]).to_string())
+                        .expect("send proxy request");
+                    thread::sleep(delay);
+                    let _ = stream.write_all(response.as_bytes());
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept proxy connection: {error}"),
+            }
+        }
     });
     (addr, rx, handle)
 }

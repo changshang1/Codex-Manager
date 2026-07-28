@@ -100,6 +100,9 @@ fn should_try_provider_executor_aggregate_route(
                     && !has_enabled_default_account_pool_route(model)
             })
         }
+        GatewayUpstreamRouteKind::HybridAggregateFirst => {
+            configured_model.is_none_or(has_enabled_aggregate_api_route)
+        }
         GatewayUpstreamRouteKind::AccountRotation => false,
     }
 }
@@ -111,6 +114,19 @@ fn is_hybrid_account_first_route(
         execution_plan.route_kind,
         GatewayUpstreamRouteKind::HybridAccountFirst
     )
+}
+
+fn is_hybrid_aggregate_first_route(
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+) -> bool {
+    matches!(
+        execution_plan.route_kind,
+        GatewayUpstreamRouteKind::HybridAggregateFirst
+    )
+}
+
+fn is_hybrid_route(execution_plan: super::executor::GatewayUpstreamExecutionPlan) -> bool {
+    is_hybrid_account_first_route(execution_plan) || is_hybrid_aggregate_first_route(execution_plan)
 }
 
 fn respond_when_account_candidates_empty(
@@ -126,6 +142,14 @@ fn should_fallback_to_aggregate_after_account_exhaustion(
 ) -> bool {
     is_hybrid_account_first_route(execution_plan)
         && configured_model.is_none_or(has_enabled_aggregate_api_route)
+}
+
+fn should_fallback_to_account_after_aggregate_exhaustion(
+    execution_plan: super::executor::GatewayUpstreamExecutionPlan,
+    configured_model: Option<&ManagedModelV2>,
+) -> bool {
+    is_hybrid_aggregate_first_route(execution_plan)
+        && configured_model.is_none_or(has_enabled_default_account_pool_route)
 }
 
 fn low_quota_candidate_mode_for_protocol(
@@ -152,6 +176,7 @@ fn route_kind_label(value: GatewayUpstreamRouteKind) -> &'static str {
         GatewayUpstreamRouteKind::AccountRotation => "account_rotation",
         GatewayUpstreamRouteKind::AggregateApi => "aggregate_api",
         GatewayUpstreamRouteKind::HybridAccountFirst => "hybrid_account_first",
+        GatewayUpstreamRouteKind::HybridAggregateFirst => "hybrid_aggregate_first",
     }
 }
 
@@ -180,6 +205,15 @@ fn validate_model_route(
     let managed_model: Option<ManagedModelV2> = storage
         .get_enabled_model_v2(model)
         .map_err(|err| (500, format!("model_catalog_v2_read_failed: {err}")))?;
+    let strict_managed_validation = execution_plan.route_kind
+        != GatewayUpstreamRouteKind::AccountRotation
+        || crate::distribution_enabled_for_storage(storage);
+    if !strict_managed_validation {
+        // The official account-pool catalog is independent from local V2 visibility and routes.
+        // Keep an enabled V2 model as optional route metadata, but fall back to the original
+        // requested model when the local model is missing, disabled, or has no account route.
+        return Ok(managed_model);
+    }
     let Some(managed_model) = managed_model else {
         return Err((404, format!("model_not_found: {model}")));
     };
@@ -212,6 +246,10 @@ fn validate_model_route(
         }
         GatewayUpstreamRouteKind::AggregateApi => has_enabled_aggregate_api_route(&managed_model),
         GatewayUpstreamRouteKind::HybridAccountFirst => {
+            has_enabled_default_account_pool_route(&managed_model)
+                || has_enabled_aggregate_api_route(&managed_model)
+        }
+        GatewayUpstreamRouteKind::HybridAggregateFirst => {
             has_enabled_default_account_pool_route(&managed_model)
                 || has_enabled_aggregate_api_route(&managed_model)
         }
@@ -303,6 +341,7 @@ fn resolve_aggregate_candidates_for_route(
     storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
     aggregate_api_id: Option<&str>,
+    key_id: &str,
     model_for_log: Option<&str>,
 ) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
     let explicit_candidate =
@@ -321,7 +360,7 @@ fn resolve_aggregate_candidates_for_route(
         candidates.retain(|candidate| candidate.id != explicit_candidate.id);
         candidates.insert(0, explicit_candidate);
     }
-    apply_aggregate_model_filter(storage, candidates, model_for_log)
+    apply_aggregate_model_filter(storage, candidates, aggregate_api_id, key_id, model_for_log)
 }
 
 fn resolve_active_explicit_aggregate_candidate(
@@ -343,7 +382,9 @@ fn resolve_active_explicit_aggregate_candidate(
 
 fn apply_aggregate_model_filter(
     storage: &codexmanager_core::storage::Storage,
-    mut candidates: Vec<codexmanager_core::storage::AggregateApi>,
+    candidates: Vec<codexmanager_core::storage::AggregateApi>,
+    aggregate_api_id: Option<&str>,
+    key_id: &str,
     model_for_log: Option<&str>,
 ) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
     let Some(model) = model_for_log
@@ -356,30 +397,37 @@ fn apply_aggregate_model_filter(
         .get_enabled_model_v2(model)
         .map_err(|err| format!("read aggregate model routes V2 failed: {err}"))?
         .ok_or_else(|| format!("model_not_found: {model}"))?;
-    let mut routes = std::collections::HashMap::new();
-    for route in managed_model
-        .routes
+    let candidates_by_id = candidates
         .into_iter()
-        .filter(|route| route.enabled && route.source_kind == "aggregate_api")
+        .map(|candidate| (candidate.id.clone(), candidate))
+        .collect::<std::collections::HashMap<_, _>>();
+    let routes = super::super::model_route::schedule_model_routes(
+        managed_model.routes.as_slice(),
+        key_id,
+        Some(model),
+        "aggregate_api",
+    );
+    let mut routed_candidates = routes
+        .into_iter()
+        .filter_map(|route| {
+            let mut candidate = candidates_by_id.get(&route.source_id)?.clone();
+            candidate.model_override = Some(route.upstream_model);
+            Some(candidate)
+        })
+        .collect::<Vec<_>>();
+    if let Some(preferred_id) = aggregate_api_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
-        let replace = routes.get(&route.source_id).is_none_or(
-            |current: &codexmanager_core::storage::ModelRouteV2| route.priority > current.priority,
+        super::protocol::aggregate_api::promote_preferred_aggregate_candidate(
+            &mut routed_candidates,
+            preferred_id,
         );
-        if replace {
-            routes.insert(route.source_id.clone(), route);
-        }
     }
-    candidates.retain_mut(|api| {
-        let Some(route) = routes.get(&api.id) else {
-            return false;
-        };
-        api.model_override = Some(route.upstream_model.clone());
-        true
-    });
-    if candidates.is_empty() {
+    if routed_candidates.is_empty() {
         Err(format!("model_unavailable: {model}"))
     } else {
-        Ok(candidates)
+        Ok(routed_candidates)
     }
 }
 
@@ -557,7 +605,8 @@ fn proxy_with_aggregate_candidates(
     request_deadline: Option<Instant>,
     started_at: Instant,
     aggregate_api_candidates: Vec<codexmanager_core::storage::AggregateApi>,
-) -> Result<(), String> {
+    defer_exhaustion_response: bool,
+) -> Result<super::protocol::aggregate_api::AggregateProxyResult, String> {
     let mut aggregate_api_candidates = aggregate_api_candidates;
     super::protocol::aggregate_api::apply_gateway_route_strategy_to_aggregate_candidates(
         &mut aggregate_api_candidates,
@@ -600,51 +649,11 @@ fn proxy_with_aggregate_candidates(
             effective_service_tier_for_log,
             service_tier_source_for_log,
             aggregate_api_candidates,
+            defer_exhaustion_response,
             request_deadline,
             started_at,
         },
     )
-}
-
-fn resolve_hybrid_aggregate_candidates_for_prepare(
-    storage: &codexmanager_core::storage::Storage,
-    protocol_type: &str,
-    aggregate_api_id: Option<&str>,
-    key_id: &str,
-    model_for_log: Option<&str>,
-    trace_id: &str,
-) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
-    let candidates = resolve_aggregate_candidates_for_route(
-        storage,
-        protocol_type,
-        aggregate_api_id,
-        model_for_log,
-    )?;
-    let mut preview = candidates.clone();
-    super::protocol::aggregate_api::preview_gateway_route_strategy_to_aggregate_candidates(
-        &mut preview,
-        key_id,
-        model_for_log,
-        aggregate_api_id,
-    );
-    super::protocol::aggregate_api::prepare_first_aggregate_candidate_client(
-        preview.as_slice(),
-        trace_id,
-    );
-    Ok(candidates)
-}
-
-fn take_or_resolve_aggregate_candidates(
-    prepared: &mut Option<Result<Vec<codexmanager_core::storage::AggregateApi>, String>>,
-    storage: &codexmanager_core::storage::Storage,
-    protocol_type: &str,
-    aggregate_api_id: Option<&str>,
-    model_for_log: Option<&str>,
-) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
-    if let Some(result) = prepared.take() {
-        return result;
-    }
-    resolve_aggregate_candidates_for_route(storage, protocol_type, aggregate_api_id, model_for_log)
 }
 
 /// 函数 `proxy_validated_request`
@@ -780,20 +789,27 @@ pub(in super::super) fn proxy_validated_request(
         }
     };
 
+    let mut request = request;
+    let mut aggregate_first_error = None;
     if should_try_provider_executor_aggregate_route(execution_plan, configured_model.as_ref()) {
-        let (aggregate_path, aggregate_body) = if is_hybrid_account_first_route(execution_plan) {
+        let (aggregate_path, aggregate_body) = if is_hybrid_route(execution_plan) {
             (passthrough_path.as_str(), &passthrough_body)
         } else {
             (path.as_str(), &body)
         };
+        let defer_exhaustion_response = should_fallback_to_account_after_aggregate_exhaustion(
+            execution_plan,
+            configured_model.as_ref(),
+        );
         match resolve_aggregate_candidates_for_route(
             &storage,
             protocol_type.as_str(),
             aggregate_api_id.as_deref(),
+            key_id.as_str(),
             model_for_log.as_deref(),
         ) {
             Ok(aggregate_api_candidates) => {
-                return proxy_with_aggregate_candidates(
+                match proxy_with_aggregate_candidates(
                     request,
                     &storage,
                     trace_id.as_str(),
@@ -818,8 +834,19 @@ pub(in super::super) fn proxy_validated_request(
                     request_deadline,
                     started_at,
                     aggregate_api_candidates,
-                );
+                    defer_exhaustion_response,
+                )? {
+                    super::protocol::aggregate_api::AggregateProxyResult::Handled => return Ok(()),
+                    super::protocol::aggregate_api::AggregateProxyResult::Exhausted {
+                        request: returned_request,
+                        message,
+                    } => {
+                        request = *returned_request;
+                        aggregate_first_error = Some(message);
+                    }
+                }
             }
+            Err(err) if defer_exhaustion_response => aggregate_first_error = Some(err),
             Err(err) => {
                 return respond_aggregate_route_error(
                     request,
@@ -847,7 +874,33 @@ pub(in super::super) fn proxy_validated_request(
         }
     }
 
-    let mut prepared_hybrid_aggregate_candidates = None;
+    if is_hybrid_aggregate_first_route(execution_plan) {
+        // 聚合优先的计数请求先交给聚合渠道；只有聚合候选耗尽后，才恢复账号池的
+        // 本地计数行为，避免将账号上游通常不支持的工具端点直接转发出去。
+        request = match super::super::maybe_respond_local_count_tokens(
+            request,
+            trace_id.as_str(),
+            key_id.as_str(),
+            protocol_type.as_str(),
+            original_path.as_str(),
+            path.as_str(),
+            response_adapter,
+            request_method.as_str(),
+            passthrough_body.as_ref(),
+            model_for_log.as_deref(),
+            reasoning_for_log.as_deref(),
+            &storage,
+        )? {
+            Some(request) => request,
+            None => return Ok(()),
+        };
+    }
+
+    let respond_when_account_candidates_empty = if is_hybrid_aggregate_first_route(execution_plan) {
+        aggregate_first_error.is_none()
+    } else {
+        respond_when_account_candidates_empty(execution_plan, configured_model.as_ref())
+    };
     let (request, mut candidates) = match prepare_candidates_for_proxy(
         request,
         &storage,
@@ -862,18 +915,43 @@ pub(in super::super) fn proxy_validated_request(
         account_group_filter.as_deref(),
         account_plan_filter.as_deref(),
         low_quota_candidate_mode_for_protocol(protocol_type.as_str()),
-        respond_when_account_candidates_empty(execution_plan, configured_model.as_ref()),
+        respond_when_account_candidates_empty,
     ) {
         CandidatePrecheckResult::Ready {
             request,
             candidates,
         } => (request, candidates),
         CandidatePrecheckResult::Empty { request } => {
-            match take_or_resolve_aggregate_candidates(
-                &mut prepared_hybrid_aggregate_candidates,
+            if let Some(aggregate_error) = aggregate_first_error {
+                return respond_hybrid_route_error(
+                    request,
+                    &storage,
+                    trace_id.as_str(),
+                    key_id.as_str(),
+                    original_path.as_str(),
+                    path.as_str(),
+                    request_method.as_str(),
+                    response_adapter,
+                    service_tier_for_log.as_deref(),
+                    effective_service_tier_for_log.as_deref(),
+                    service_tier_source_for_log.as_deref(),
+                    gateway_mode_for_log.as_deref(),
+                    client_model_for_log.as_deref(),
+                    model_for_log.as_deref(),
+                    model_source_for_log.as_deref(),
+                    client_reasoning_for_log.as_deref(),
+                    reasoning_for_log.as_deref(),
+                    reasoning_source_for_log.as_deref(),
+                    started_at,
+                    Some("无可用账号(no available account)"),
+                    aggregate_error,
+                );
+            }
+            match resolve_aggregate_candidates_for_route(
                 &storage,
                 protocol_type.as_str(),
                 aggregate_api_id.as_deref(),
+                key_id.as_str(),
                 model_for_log.as_deref(),
             ) {
                 Ok(aggregate_api_candidates) => {
@@ -902,7 +980,9 @@ pub(in super::super) fn proxy_validated_request(
                         request_deadline,
                         started_at,
                         aggregate_api_candidates,
-                    );
+                        false,
+                    )
+                    .map(|_| ());
                 }
                 Err(err) => {
                     return respond_hybrid_route_error(
@@ -933,7 +1013,27 @@ pub(in super::super) fn proxy_validated_request(
         }
         CandidatePrecheckResult::Responded => return Ok(()),
     };
-    let setup = prepare_request_setup(
+    let account_model_routes = configured_model
+        .as_ref()
+        .map(|model| {
+            let default_pool_routes = model
+                .routes
+                .iter()
+                .filter(|route| route.source_id == "default")
+                .cloned()
+                .collect::<Vec<_>>();
+            super::super::model_route::schedule_model_routes(
+                default_pool_routes.as_slice(),
+                key_id.as_str(),
+                model_for_log.as_deref(),
+                "account_pool",
+            )
+            .into_iter()
+            .map(|route| route.upstream_model)
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut setup = prepare_request_setup(
         &storage,
         path.as_str(),
         protocol_type.as_str(),
@@ -950,28 +1050,10 @@ pub(in super::super) fn proxy_validated_request(
         model_for_log.as_deref(),
         trace_id.as_str(),
     );
+    setup.candidate_count = setup
+        .candidate_count
+        .saturating_mul(account_model_routes.len().max(1));
     let base = setup.upstream_base.as_str();
-    if should_fallback_to_aggregate_after_account_exhaustion(
-        execution_plan,
-        configured_model.as_ref(),
-    ) {
-        prepared_hybrid_aggregate_candidates =
-            Some(resolve_hybrid_aggregate_candidates_for_prepare(
-                &storage,
-                protocol_type.as_str(),
-                aggregate_api_id.as_deref(),
-                key_id.as_str(),
-                model_for_log.as_deref(),
-                trace_id.as_str(),
-            ));
-        if let Some(Err(err)) = prepared_hybrid_aggregate_candidates.as_ref() {
-            log::debug!(
-                "event=gateway_hybrid_aggregate_candidate_prepare_deferred trace_id={} err={}",
-                trace_id,
-                err
-            );
-        }
-    }
 
     let context = GatewayUpstreamExecutionContext::new(
         &trace_id,
@@ -1021,6 +1103,7 @@ pub(in super::super) fn proxy_validated_request(
             request_shape: request_shape.as_deref(),
             trace_id: trace_id.as_str(),
             model_for_log: model_for_log.as_deref(),
+            account_model_routes: account_model_routes.as_slice(),
             response_adapter,
             gemini_stream_output_mode,
             tool_name_restore_map: &tool_name_restore_map,
@@ -1066,15 +1149,40 @@ pub(in super::super) fn proxy_validated_request(
         skipped_inflight,
         last_attempt_error.as_deref(),
     );
+    if let Some(aggregate_error) = aggregate_first_error {
+        return respond_hybrid_route_error(
+            request,
+            &storage,
+            trace_id.as_str(),
+            key_id.as_str(),
+            original_path.as_str(),
+            path.as_str(),
+            request_method.as_str(),
+            response_adapter,
+            service_tier_for_log.as_deref(),
+            effective_service_tier_for_log.as_deref(),
+            service_tier_source_for_log.as_deref(),
+            gateway_mode_for_log.as_deref(),
+            client_model_for_log.as_deref(),
+            model_for_log.as_deref(),
+            model_source_for_log.as_deref(),
+            client_reasoning_for_log.as_deref(),
+            reasoning_for_log.as_deref(),
+            reasoning_source_for_log.as_deref(),
+            started_at,
+            Some(final_error.as_str()),
+            aggregate_error,
+        );
+    }
     if should_fallback_to_aggregate_after_account_exhaustion(
         execution_plan,
         configured_model.as_ref(),
     ) {
-        match take_or_resolve_aggregate_candidates(
-            &mut prepared_hybrid_aggregate_candidates,
+        match resolve_aggregate_candidates_for_route(
             &storage,
             protocol_type.as_str(),
             aggregate_api_id.as_deref(),
+            key_id.as_str(),
             model_for_log.as_deref(),
         ) {
             Ok(aggregate_api_candidates) => {
@@ -1103,7 +1211,9 @@ pub(in super::super) fn proxy_validated_request(
                     request_deadline,
                     started_at,
                     aggregate_api_candidates,
-                );
+                    false,
+                )
+                .map(|_| ());
             }
             Err(err) => {
                 return respond_hybrid_route_error(

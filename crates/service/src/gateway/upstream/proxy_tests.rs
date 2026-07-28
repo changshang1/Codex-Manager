@@ -2,7 +2,8 @@ use super::{
     exhausted_gateway_error_for_log, has_enabled_aggregate_api_route,
     has_enabled_default_account_pool_route, hybrid_route_error_message, provider_upstream_hint,
     request_deadline_for_path, resolve_aggregate_candidates_for_route, resolve_upstream_is_stream,
-    respond_when_account_candidates_empty, should_fallback_to_aggregate_after_account_exhaustion,
+    respond_when_account_candidates_empty, should_fallback_to_account_after_aggregate_exhaustion,
+    should_fallback_to_aggregate_after_account_exhaustion,
     should_try_provider_executor_aggregate_route, validate_model_route,
 };
 use crate::gateway::upstream::executor::{
@@ -122,6 +123,19 @@ fn add_model_route_v2(
     source_id: &str,
     upstream_model: &str,
 ) {
+    add_model_route_v2_with_schedule(storage, slug, source_kind, source_id, upstream_model, 0, 1);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_model_route_v2_with_schedule(
+    storage: &Storage,
+    slug: &str,
+    source_kind: &str,
+    source_id: &str,
+    upstream_model: &str,
+    priority: i64,
+    weight: i64,
+) {
     seed_platform_catalog(storage, slug);
     let mut model = storage
         .get_managed_model_v2(slug)
@@ -132,7 +146,8 @@ fn add_model_route_v2(
         source_id: source_id.to_string(),
         upstream_model: upstream_model.to_string(),
         enabled: true,
-        weight: 1,
+        priority,
+        weight,
         ..Default::default()
     });
     storage
@@ -195,9 +210,14 @@ fn aggregate_candidate_filter_keeps_model_override_candidate_for_client_model() 
         "MiniMax-M3",
     );
 
-    let candidates =
-        resolve_aggregate_candidates_for_route(&storage, "openai_responses", None, Some("gpt-5.4"))
-            .expect("resolve aggregate candidates");
+    let candidates = resolve_aggregate_candidates_for_route(
+        &storage,
+        "openai_responses",
+        None,
+        "key-route",
+        Some("gpt-5.4"),
+    )
+    .expect("resolve aggregate candidates");
 
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "agg-minimax");
@@ -494,6 +514,7 @@ fn aggregate_route_model_filter_uses_v2_routes() {
         &storage,
         "openai_responses",
         None,
+        "key-route",
         Some("vendor-batched"),
     )
     .expect("resolve aggregate candidates");
@@ -501,6 +522,160 @@ fn aggregate_route_model_filter_uses_v2_routes() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].id, "agg-with-model");
     assert_eq!(candidates[0].model_override.as_deref(), Some("vendor-top"));
+}
+
+#[test]
+fn hybrid_aggregate_first_tries_aggregate_then_allows_account_fallback() {
+    let hybrid = execution_plan(GatewayUpstreamRouteKind::HybridAggregateFirst);
+    let aggregate_only = model_with_routes(&[("aggregate_api", "agg-test")]);
+    let account_only = model_with_routes(&[("account_pool", "default")]);
+    let dual_route =
+        model_with_routes(&[("account_pool", "default"), ("aggregate_api", "agg-test")]);
+
+    assert!(should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(should_fallback_to_account_after_aggregate_exhaustion(
+        hybrid,
+        Some(&dual_route),
+    ));
+    assert!(!should_fallback_to_account_after_aggregate_exhaustion(
+        hybrid,
+        Some(&aggregate_only),
+    ));
+    assert!(!should_try_provider_executor_aggregate_route(
+        hybrid,
+        Some(&account_only),
+    ));
+}
+
+#[test]
+fn aggregate_model_routes_use_hard_priority_tiers() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    insert_test_aggregate_api(&storage, "agg-priority-low");
+    insert_test_aggregate_api(&storage, "agg-priority-high");
+    add_model_route_v2_with_schedule(
+        &storage,
+        "vendor-priority",
+        "aggregate_api",
+        "agg-priority-low",
+        "vendor-low",
+        1,
+        100,
+    );
+    add_model_route_v2_with_schedule(
+        &storage,
+        "vendor-priority",
+        "aggregate_api",
+        "agg-priority-high",
+        "vendor-high",
+        10,
+        1,
+    );
+
+    let candidates = resolve_aggregate_candidates_for_route(
+        &storage,
+        "openai_responses",
+        None,
+        "key-priority",
+        Some("vendor-priority"),
+    )
+    .expect("resolve aggregate candidates");
+
+    assert_eq!(candidates[0].id, "agg-priority-high");
+    assert_eq!(candidates[1].id, "agg-priority-low");
+}
+
+#[test]
+fn aggregate_model_routes_use_smooth_weighted_primary_selection() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    insert_test_aggregate_api(&storage, "agg-weight-a");
+    insert_test_aggregate_api(&storage, "agg-weight-b");
+    add_model_route_v2_with_schedule(
+        &storage,
+        "vendor-weight",
+        "aggregate_api",
+        "agg-weight-a",
+        "vendor-a",
+        10,
+        3,
+    );
+    add_model_route_v2_with_schedule(
+        &storage,
+        "vendor-weight",
+        "aggregate_api",
+        "agg-weight-b",
+        "vendor-b",
+        10,
+        1,
+    );
+
+    let mut a_first = 0;
+    let mut b_first = 0;
+    for _ in 0..40 {
+        let candidates = resolve_aggregate_candidates_for_route(
+            &storage,
+            "openai_responses",
+            None,
+            "key-weight",
+            Some("vendor-weight"),
+        )
+        .expect("resolve aggregate candidates");
+        assert_eq!(candidates.len(), 2);
+        match candidates[0].id.as_str() {
+            "agg-weight-a" => a_first += 1,
+            "agg-weight-b" => b_first += 1,
+            other => panic!("unexpected candidate: {other}"),
+        }
+    }
+
+    assert_eq!((a_first, b_first), (30, 10));
+}
+
+#[test]
+fn aggregate_api_can_be_attempted_by_multiple_upstream_model_routes() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    insert_test_aggregate_api(&storage, "agg-multi-route");
+    add_model_route_v2_with_schedule(
+        &storage,
+        "vendor-multi-route",
+        "aggregate_api",
+        "agg-multi-route",
+        "vendor-primary",
+        10,
+        1,
+    );
+    add_model_route_v2_with_schedule(
+        &storage,
+        "vendor-multi-route",
+        "aggregate_api",
+        "agg-multi-route",
+        "vendor-secondary",
+        0,
+        1,
+    );
+
+    let candidates = resolve_aggregate_candidates_for_route(
+        &storage,
+        "openai_responses",
+        None,
+        "key-multi-route",
+        Some("vendor-multi-route"),
+    )
+    .expect("resolve aggregate candidates");
+    let upstream_models = candidates
+        .iter()
+        .filter_map(|candidate| candidate.model_override.as_deref())
+        .collect::<Vec<_>>();
+
+    assert_eq!(upstream_models, vec!["vendor-primary", "vendor-secondary"]);
+    assert!(candidates
+        .iter()
+        .all(|candidate| candidate.id == "agg-multi-route"));
 }
 
 #[test]
@@ -528,6 +703,7 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
         &storage,
         "openai_responses",
         Some("agg-claude-explicit"),
+        "key-openai",
         Some("vendor-cross-provider"),
     )
     .expect("resolve openai candidates with explicit claude aggregate");
@@ -548,6 +724,7 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
         &storage,
         "anthropic_native",
         Some("agg-codex-explicit"),
+        "key-anthropic",
         Some("vendor-cross-provider"),
     )
     .expect("resolve anthropic candidates with explicit codex aggregate");
@@ -566,9 +743,16 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
 }
 
 #[test]
-fn account_route_model_validation_ignores_aggregate_only_mapping() {
+fn distribution_account_route_rejects_aggregate_only_mapping() {
     let storage = Storage::open_in_memory().expect("open storage");
     storage.init().expect("init storage");
+    storage
+        .set_app_setting(
+            crate::APP_SETTING_DISTRIBUTION_ENABLED_KEY,
+            "true",
+            now_ts(),
+        )
+        .expect("enable distribution mode");
     seed_platform_catalog(&storage, "vendor-account-route");
     add_model_route_v2(
         &storage,
@@ -588,6 +772,114 @@ fn account_route_model_validation_ignores_aggregate_only_mapping() {
 
     assert_eq!(err.0, 503);
     assert!(err.1.contains("model_unavailable"));
+}
+
+#[test]
+fn non_distribution_account_route_allows_model_missing_from_v2() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+
+    let configured_model = validate_model_route(
+        &storage,
+        "key-route",
+        Some("future-official-model"),
+        execution_plan(GatewayUpstreamRouteKind::AccountRotation),
+    )
+    .expect("official account model should not require local V2 metadata");
+
+    assert!(configured_model.is_none());
+}
+
+#[test]
+fn non_distribution_account_route_allows_locally_disabled_model() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    seed_platform_catalog(&storage, "official-disabled-locally");
+    let mut model = storage
+        .get_managed_model_v2("official-disabled-locally")
+        .expect("read V2 model")
+        .expect("V2 model");
+    model.enabled = false;
+    storage
+        .upsert_managed_model_v2(&ManagedModelV2Upsert {
+            previous_slug: Some("official-disabled-locally".to_string()),
+            model,
+        })
+        .expect("disable local V2 model");
+
+    let configured_model = validate_model_route(
+        &storage,
+        "key-route",
+        Some("official-disabled-locally"),
+        execution_plan(GatewayUpstreamRouteKind::AccountRotation),
+    )
+    .expect("local visibility should not block official account models");
+
+    assert!(configured_model.is_none());
+}
+
+#[test]
+fn non_distribution_account_route_keeps_v2_metadata_without_default_route() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    seed_platform_catalog(&storage, "official-with-optional-metadata");
+
+    let configured_model = validate_model_route(
+        &storage,
+        "key-route",
+        Some("official-with-optional-metadata"),
+        execution_plan(GatewayUpstreamRouteKind::AccountRotation),
+    )
+    .expect("missing account route should fall back to the requested official model")
+    .expect("enabled V2 metadata should remain available");
+
+    assert!(!has_enabled_default_account_pool_route(&configured_model));
+}
+
+#[test]
+fn managed_routes_still_reject_model_missing_from_v2() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+
+    for route_kind in [
+        GatewayUpstreamRouteKind::AggregateApi,
+        GatewayUpstreamRouteKind::HybridAccountFirst,
+        GatewayUpstreamRouteKind::HybridAggregateFirst,
+    ] {
+        let err = validate_model_route(
+            &storage,
+            "key-route",
+            Some("future-official-model"),
+            execution_plan(route_kind),
+        )
+        .expect_err("managed catalog routes should require a V2 model");
+        assert_eq!(err.0, 404);
+        assert!(err.1.contains("model_not_found"));
+    }
+}
+
+#[test]
+fn distribution_account_route_rejects_model_missing_from_v2() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    storage
+        .set_app_setting(
+            crate::APP_SETTING_DISTRIBUTION_ENABLED_KEY,
+            "true",
+            now_ts(),
+        )
+        .expect("enable distribution mode");
+
+    let err = validate_model_route(
+        &storage,
+        "key-route",
+        Some("future-official-model"),
+        execution_plan(GatewayUpstreamRouteKind::AccountRotation),
+    )
+    .expect_err("distribution mode must not allow an unpriced official model");
+
+    assert_eq!(err.0, 404);
+    assert!(err.1.contains("model_not_found"));
 }
 
 #[test]
@@ -724,6 +1016,7 @@ fn model_route_validation_preserves_missing_model_default_paths() {
         GatewayUpstreamRouteKind::AccountRotation,
         GatewayUpstreamRouteKind::AggregateApi,
         GatewayUpstreamRouteKind::HybridAccountFirst,
+        GatewayUpstreamRouteKind::HybridAggregateFirst,
     ] {
         let configured_model =
             validate_model_route(&storage, "key-route", None, execution_plan(route_kind))

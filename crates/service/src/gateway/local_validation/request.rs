@@ -103,6 +103,23 @@ fn apply_model_instructions_policy(
     })
 }
 
+fn apply_model_instructions_policy_for_rotation(
+    storage: &codexmanager_core::storage::Storage,
+    rotation_strategy: &str,
+    model_slug: Option<&str>,
+    body: Vec<u8>,
+    protocol: crate::models_v2::instructions::InstructionProtocolV2,
+) -> Result<Vec<u8>, LocalValidationError> {
+    if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
+        && !crate::distribution_enabled_for_storage(storage)
+    {
+        // Pure account rotation follows the official OpenAI catalog. Outside distribution mode,
+        // local V2 visibility and instruction settings must not block or rewrite official models.
+        return Ok(body);
+    }
+    apply_model_instructions_policy(storage, model_slug, body, protocol)
+}
+
 fn is_removed_openai_compat_request_path(normalized_path: &str) -> bool {
     normalized_path.starts_with("/v1/completions")
 }
@@ -1941,8 +1958,9 @@ pub(super) fn build_local_validation_result(
             effective_service_tier_for_log.as_deref(),
             api_key.service_tier.as_deref(),
         );
-        rewritten_body = apply_model_instructions_policy(
+        rewritten_body = apply_model_instructions_policy_for_rotation(
             &storage,
+            api_key.rotation_strategy.as_str(),
             model_for_log.as_deref(),
             rewritten_body,
             instruction_protocol_for_passthrough(effective_protocol_type),
@@ -2030,8 +2048,9 @@ pub(super) fn build_local_validation_result(
         .as_deref()
         .or(api_key.model_slug.as_deref())
         .or(initial_request_meta.model.as_deref());
-    passthrough_body = apply_model_instructions_policy(
+    passthrough_body = apply_model_instructions_policy_for_rotation(
         &storage,
+        api_key.rotation_strategy.as_str(),
         passthrough_model_for_policy,
         passthrough_body,
         instruction_protocol_for_passthrough(effective_protocol_type),
@@ -2187,8 +2206,9 @@ pub(super) fn build_local_validation_result(
     let instruction_model = effective_model
         .as_deref()
         .or(initial_request_meta.model.as_deref());
-    body = apply_model_instructions_policy(
+    body = apply_model_instructions_policy_for_rotation(
         &storage,
+        api_key.rotation_strategy.as_str(),
         instruction_model,
         body,
         crate::models_v2::instructions::InstructionProtocolV2::OpenAi,

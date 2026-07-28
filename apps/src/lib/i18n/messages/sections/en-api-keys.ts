@@ -9,6 +9,11 @@ export const EN_API_KEYS_MESSAGES: MessageCatalog = {
   已达上限: "Limit reached",
   管理员视图: "Admin view",
   成员视图: "Member view",
+  "混合轮转（聚合 API 优先）": "Hybrid rotation (aggregate APIs first)",
+  "账号轮转只走账号池；聚合API轮转只走聚合API；账号优先混合轮转先完整尝试账号池，失败后使用聚合API；聚合API优先混合轮转先完整尝试聚合API，失败后使用账号池。":
+    "Account rotation uses only the account pool; aggregate API rotation uses only aggregate APIs; accounts-first hybrid rotation exhausts the account pool before falling back to aggregate APIs; aggregate-APIs-first hybrid rotation does the reverse.",
+  "仅对会访问账号池的策略生效，可限制这把平台密钥只从指定账号计划类型中选择路由账号。":
+    "Applies only to strategies that can access the account pool. Limits this platform key to routing through accounts with the selected plan type.",
   "请选择平台 Key 归属成员": "Select the member owner for this platform key",
   账号组筛选: "Account group filter",
   账号计划筛选: "Account plan filter",

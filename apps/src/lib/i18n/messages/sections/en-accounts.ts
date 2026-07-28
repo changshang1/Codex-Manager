@@ -206,6 +206,7 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "用量刷新连接失败，请检查网络或代理":
     "Usage refresh connection failed. Check your network or proxy.",
   "用量刷新失败，请查看后台日志": "Usage refresh failed. Check backend logs.",
+  "账号缺少登录凭证，无法刷新用量": "The account has no login token, so usage cannot be refreshed.",
   "用量限制": "Usage limit",
   "留空使用计划模板": "Leave blank to use the plan template",
   账号分组: "Account group",

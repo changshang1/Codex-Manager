@@ -464,6 +464,7 @@ fn dashboard_admin_usage_summary_serialization_uses_camel_case() {
             today_usage: usage.clone(),
             range_usage: usage,
         }],
+        account_pool: Default::default(),
     };
 
     let value = serde_json::to_value(result).expect("serialize dashboard admin usage");
@@ -480,6 +481,7 @@ fn dashboard_admin_usage_summary_serialization_uses_camel_case() {
         "modelUsage",
         "openaiAccounts",
         "aggregateApis",
+        "accountPool",
     ] {
         assert!(obj.contains_key(key), "missing key: {key}");
     }

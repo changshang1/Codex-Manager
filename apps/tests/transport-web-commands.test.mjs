@@ -17,6 +17,7 @@ const modulePaths = [
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "codex-skills.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "gateway.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "login.ts"),
+  path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "marketplace.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "misc.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "proxy-profiles.ts"),
   path.join(appsRoot, "src", "lib", "api", "transport-web-commands", "quota.ts"),
@@ -33,6 +34,7 @@ function rewriteImports(outputText) {
     .replaceAll('./transport-web-commands/codex-skills', './transport-web-commands/codex-skills.js')
     .replaceAll('./transport-web-commands/gateway', './transport-web-commands/gateway.js')
     .replaceAll('./transport-web-commands/login', './transport-web-commands/login.js')
+    .replaceAll('./transport-web-commands/marketplace', './transport-web-commands/marketplace.js')
     .replaceAll('./transport-web-commands/misc', './transport-web-commands/misc.js')
     .replaceAll('./transport-web-commands/proxy-profiles', './transport-web-commands/proxy-profiles.js')
     .replaceAll('./transport-web-commands/quota', './transport-web-commands/quota.js')
@@ -84,6 +86,12 @@ async function loadTransportWebCommandsModule() {
 
 const transportWebCommands = await loadTransportWebCommandsModule();
 const commandMap = transportWebCommands.createWebCommandMap(async () => ({}));
+
+test("createWebCommandMap exposes aggregate API batch sort updates", () => {
+  assert.deepEqual(commandMap.service_aggregate_api_update_sorts, {
+    rpcMethod: "aggregateApi/updateSorts",
+  });
+});
 
 test("createWebCommandMap keeps app and gateway transport settings payloads aligned", () => {
   const appSettingsSet = commandMap.app_settings_set;
@@ -184,6 +192,31 @@ test("createWebCommandMap 为账号预热命令提供 Web RPC 映射", () => {
   const warmup = commandMap.service_account_warmup;
   assert.deepEqual(warmup, {
     rpcMethod: "account/warmup",
+  });
+});
+
+test("createWebCommandMap 为商品池 payload 命令解包参数", () => {
+  const sourceUpsert = commandMap.service_marketplace_source_upsert;
+  assert.equal(sourceUpsert.rpcMethod, "marketplace/sourceUpsert");
+  assert.ok(sourceUpsert.mapParams);
+  assert.deepEqual(
+    sourceUpsert.mapParams({
+      payload: { id: "source-1", productId: "chatgpt-plus" },
+      addr: "http://127.0.0.1:48721",
+    }),
+    { id: "source-1", productId: "chatgpt-plus" },
+  );
+
+  const offerList = commandMap.service_marketplace_offer_list;
+  assert.equal(offerList.rpcMethod, "marketplace/offerList");
+  assert.ok(offerList.mapParams);
+  assert.deepEqual(offerList.mapParams({ payload: { limit: 20 } }), { limit: 20 });
+
+  assert.deepEqual(commandMap.service_marketplace_favorite_merchant_list, {
+    rpcMethod: "marketplace/favoriteMerchantList",
+  });
+  assert.deepEqual(commandMap.service_marketplace_favorite_merchant_set, {
+    rpcMethod: "marketplace/favoriteMerchantSet",
   });
 });
 
@@ -369,6 +402,9 @@ test("createWebCommandMap 为管理员用量分析提供 Web RPC 映射", () => 
       include_breakdowns: false,
       include_series: true,
       series_bucket_seconds: 3_600,
+      source_kinds: ["openai_account"],
+      selected_sources: [{ sourceKind: "openai_account", sourceId: "acc-1" }],
+      include_unavailable_sources: false,
     }),
     {
       startTs: 100,
@@ -376,6 +412,51 @@ test("createWebCommandMap 为管理员用量分析提供 Web RPC 映射", () => 
       includeBreakdowns: false,
       includeSeries: true,
       seriesBucketSeconds: 3_600,
+      sourceKinds: ["openai_account"],
+      selectedSources: [{ sourceKind: "openai_account", sourceId: "acc-1" }],
+      includeUnavailableSources: false,
+    },
+  );
+
+  const sources = commandMap.service_dashboard_source_options;
+  assert.equal(sources.rpcMethod, "dashboard/sourceOptions");
+  assert.deepEqual(
+    sources.mapParams({
+      start_ts: 100,
+      end_ts: 200,
+      source_kinds: ["aggregate_api"],
+      search: "supplier",
+      page: 2,
+      page_size: 30,
+      include_unavailable_sources: true,
+      selected_sources: [],
+    }),
+    {
+      startTs: 100,
+      endTs: 200,
+      sourceKinds: ["aggregate_api"],
+      search: "supplier",
+      page: 2,
+      pageSize: 30,
+      includeUnavailableSources: true,
+      selectedSources: [],
+    },
+  );
+});
+
+test("账号用量刷新 Web 映射保留快速开启失败隔离策略", () => {
+  const descriptor = commandMap.service_usage_refresh;
+  assert.equal(descriptor.rpcMethod, "account/usage/refresh");
+  assert.ok(descriptor.mapParams);
+  assert.deepEqual(
+    descriptor.mapParams({
+      account_id: "account-1",
+      mark_unavailable_on_failure: true,
+      addr: "http://127.0.0.1:48721",
+    }),
+    {
+      accountId: "account-1",
+      markUnavailableOnFailure: true,
     },
   );
 });

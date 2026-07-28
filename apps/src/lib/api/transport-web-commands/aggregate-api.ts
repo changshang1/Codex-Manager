@@ -5,6 +5,7 @@ export function createAggregateApiWebCommands(): Record<string, WebCommandDescri
     service_aggregate_api_list: { rpcMethod: "aggregateApi/list" },
     service_aggregate_api_create: { rpcMethod: "aggregateApi/create" },
     service_aggregate_api_update: { rpcMethod: "aggregateApi/update" },
+    service_aggregate_api_update_sorts: { rpcMethod: "aggregateApi/updateSorts" },
     service_aggregate_api_delete: { rpcMethod: "aggregateApi/delete" },
     service_aggregate_api_read_secret: { rpcMethod: "aggregateApi/readSecret" },
     service_aggregate_api_test_connection: { rpcMethod: "aggregateApi/testConnection" },

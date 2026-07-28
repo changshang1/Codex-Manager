@@ -18,6 +18,7 @@ mod codex_profile;
 mod codex_skills;
 mod dashboard;
 mod gateway;
+mod marketplace;
 mod model_groups;
 mod quota;
 mod requestlog;
@@ -224,6 +225,11 @@ const MEMBER_METHOD_ALLOWLIST: &[&str] = &[
     "apikey/usageStats",
     "appSettings/get",
     "dashboard/memberSummary",
+    "marketplace/offerList",
+    "marketplace/favoriteMerchantList",
+    "marketplace/changeList",
+    "marketplace/alertList",
+    "marketplace/notificationGet",
     "requestlog/list",
     "requestlog/list_with_summary",
     "requestlog/summary",
@@ -323,6 +329,9 @@ pub(crate) fn handle_request_with_actor(req: JsonRpcRequest, actor: RpcActor) ->
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = gateway::try_handle(&req) {
+        return JsonRpcMessage::Response(resp);
+    }
+    if let Some(resp) = marketplace::try_handle(&req) {
         return JsonRpcMessage::Response(resp);
     }
     if let Some(resp) = model_groups::try_handle(&req, &actor) {

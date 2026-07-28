@@ -1,5 +1,12 @@
 use crate::commands::shared::rpc_call_in_background;
 
+#[derive(Debug, serde::Deserialize)]
+pub struct AggregateApiSortUpdatePayload {
+    #[serde(rename = "apiId", alias = "api_id", alias = "id")]
+    api_id: String,
+    sort: i64,
+}
+
 /// 函数 `service_aggregate_api_list`
 ///
 /// 作者: gaohongshun
@@ -145,6 +152,28 @@ pub async fn service_aggregate_api_update(
         "balanceQueryConfigJson": balance_query_config_json,
     });
     rpc_call_in_background("aggregateApi/update", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_aggregate_api_update_sorts(
+    addr: Option<String>,
+    updates: Vec<AggregateApiSortUpdatePayload>,
+) -> Result<serde_json::Value, String> {
+    let updates = updates
+        .into_iter()
+        .map(|update| {
+            serde_json::json!({
+                "apiId": update.api_id,
+                "sort": update.sort,
+            })
+        })
+        .collect::<Vec<_>>();
+    rpc_call_in_background(
+        "aggregateApi/updateSorts",
+        addr,
+        Some(serde_json::json!({ "updates": updates })),
+    )
+    .await
 }
 
 /// 函数 `service_aggregate_api_read_secret`

@@ -5,6 +5,40 @@ pub(crate) enum Availability {
     Unavailable(&'static str),
 }
 
+pub(crate) fn is_account_available(
+    status: &str,
+    has_token: bool,
+    snapshot: Option<&UsageSnapshotRecord>,
+) -> bool {
+    let status = status.trim().to_ascii_lowercase();
+    if matches!(
+        status.as_str(),
+        "disabled" | "inactive" | "unavailable" | "limited" | "banned"
+    ) || !has_token
+    {
+        return false;
+    }
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    let (Some(primary_used), Some(_)) = (snapshot.used_percent, snapshot.window_minutes) else {
+        return false;
+    };
+    if primary_used >= 100.0 {
+        return false;
+    }
+
+    // Keep the account page semantics: a missing or partial secondary window
+    // does not make an otherwise valid primary quota window unavailable.
+    match (
+        snapshot.secondary_used_percent,
+        snapshot.secondary_window_minutes,
+    ) {
+        (Some(secondary_used), Some(_)) => secondary_used < 100.0,
+        _ => true,
+    }
+}
+
 /// 函数 `evaluate_snapshot`
 ///
 /// 作者: gaohongshun

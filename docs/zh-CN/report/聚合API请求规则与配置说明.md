@@ -4,13 +4,14 @@
 
 ## 适用范围
 
-聚合 API 是平台 Key 的一种上游来源。它不使用本地 OpenAI/Claude/Gemini 账号池，而是把客户端请求转发到第三方 API 供应商。
+聚合 API 是平台 Key 的一种上游来源。命中聚合来源时，请求会转发到第三方 API 供应商；混合轮转还可以在聚合来源与本地 OpenAI/Claude/Gemini 账号池之间故障转移。
 
 适合场景：
 
 - 使用 New API、One API、OpenAI-compatible、Anthropic-compatible、Gemini-compatible 这类外部供应商。
 - 某些平台 Key 不想使用账号池，直接绑定一个供应商。
 - 账号池优先，但账号池不可用时由聚合 API 兜底。
+- 聚合 API 优先，但全部聚合 route 失败时由账号池兜底。
 - 某个模型需要固定转发到某个供应商模型。
 
 不适合场景：
@@ -25,7 +26,7 @@
 平台 Key 是客户端使用的入口密钥。每个 Key 可以配置：
 
 - 协议类型：OpenAI-compatible、Claude native、Gemini native。
-- 轮转策略：账号池、聚合 API、账号池优先聚合兜底。
+- 轮转策略：账号池、聚合 API、账号池优先混合轮转、聚合 API 优先混合轮转。
 - 绑定模型、推理等级、服务层级等请求默认值。
 - 可选绑定一个首选聚合 API。
 
@@ -90,27 +91,30 @@ Service 侧还会按请求路径识别协议：
 | `account_rotation` | `account`、`account_rotate`、`账号轮转` | 只走账号池。 |
 | `aggregate_api_rotation` | `aggregateapi`、`aggregate_api`、`aggregateapirotation`、`聚合api`、`聚合api轮转` | 只走聚合 API。 |
 | `hybrid_rotation` | `hybrid`、`mixed`、`mixed_rotation`、`混合轮转`、`账号优先聚合兜底` | 先走账号池；账号池耗尽或不可用后再走聚合 API。 |
+| `hybrid_aggregate_first_rotation` | `hybrid_aggregate_first`、`aggregate_first_hybrid`、`聚合API优先混合轮转`、`聚合API优先账号兜底` | 先完整尝试聚合 API；全部失败且响应尚未开始时再走账号池。 |
 
-全局候选排序策略由 `CODEXMANAGER_ROUTE_STRATEGY` 或设置页控制：
+全局账号候选策略由 `CODEXMANAGER_ROUTE_STRATEGY` 或设置页控制：
 
-| 值 | 别名 | 聚合 API 行为 |
+| 值 | 别名 | 行为边界 |
 | --- | --- | --- |
-| `ordered` | `order`、`priority`、`sequential` | 按聚合 API 的 `sort ASC, created_at DESC, id ASC` 顺序尝试。 |
-| `balanced` | `round_robin`、`round-robin`、`rr` | 多个候选时按平台 Key + 模型维度轮询；如果平台 Key 绑定了首选聚合 API，首选项保持第一位，其余候选再轮询。 |
+| `ordered` | `order`、`priority`、`sequential` | 只控制一条账号池 route 内具体账号的顺序。 |
+| `balanced` | `round_robin`、`round-robin`、`rr` | 只在一条账号池 route 内均衡具体账号。 |
 
-默认策略是 `ordered`。
+默认策略是 `ordered`。这项全局设置不重排模型 route，也不重排聚合 API route。
 
 ## 候选源选择规则
 
-聚合 API 候选按以下步骤筛选：
+聚合 API 候选按以下步骤筛选和排序：
 
 1. 按请求协议映射供应商类型。
 2. 只取 `status = active` 的聚合 API。
 3. 只取供应商类型匹配的聚合 API。
-4. 按 `sort ASC, created_at DESC, id ASC` 排序。
-5. 读取请求平台模型的 enabled V2 aggregate routes，只保留 route 引用的聚合 API，并把 route 的 `upstreamModel` 绑定到各自候选。
-6. 如果平台 Key 绑定了 `aggregateApiId`，只在该 ID 同时存在匹配 V2 route 时把它放到候选第一位。
-7. 如果全局策略是 `balanced`，再按 Key + 模型做轮询排序。
+4. 读取请求平台模型的 enabled V2 aggregate routes，并按 `priority DESC` 分成硬优先级层。
+5. 同一优先级内按 route 的 `weight` 做平滑加权轮转；首选失败时先尝试同级其它 route，再进入低优先级。
+6. 将每条 route 的 `sourceId` 解析为聚合 API 连接，并把各自的 `upstreamModel` 绑定到候选。同一个连接的多条不同模型 route 会作为不同尝试保留。
+7. 如果平台 Key 显式绑定了 `aggregateApiId`，只在该 ID 同时存在匹配 V2 route 时把对应候选放到第一位。
+
+route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级”隔离，服务重启后重新开始。聚合 API 连接自身的 `sort` 以及全局 `ordered` / `balanced` 都不参与这一步。
 
 协议到供应商类型的映射：
 
@@ -133,7 +137,7 @@ Service 侧还会按请求路径识别协议：
 | --- | --- | --- | --- |
 | `providerType` | 否 | `codex` | 供应商类型。 |
 | `supplierName` | 是 | 无 | 供应商显示名。 |
-| `sort` | 否 | `0` | 候选排序值，越小越靠前。 |
+| `sort` | 否 | `0` | 只控制聚合 API 管理页和选择列表的显示顺序，不参与真实请求选路。 |
 | `url` | 否 | 按 providerType 默认 | 上游 base URL，只允许 `http` / `https`，尾部 `/` 会被移除。 |
 | `status` | 否 | `active` | `active` 或 `disabled`。 |
 | `authType` | 否 | `apikey` | `apikey` 或 `userpass`。 |
@@ -149,6 +153,12 @@ Service 侧还会按请求路径识别协议：
 | `balanceQueryAccessToken` | 否 | provider secret | 余额查询专用 access token，单独存储。 |
 | `balanceQueryUserId` | 否 | 无 | New API 查询时作为 `New-Api-User` header。 |
 | `balanceQueryConfigJson` | custom 模板时是 | 无 | 自定义余额 JSON 配置。 |
+
+### 管理页显示顺序
+
+聚合 API 列表会显示每条连接的 `sort`，并提供上移、下移按钮。点击按钮时，前端按调整后的页面顺序生成一组顺序值，通过批量接口在同一个 SQLite 事务中保存；任一连接不存在、ID 重复或写入失败时，整组更新都会回滚，不会留下只移动一部分的状态。编辑连接时仍可直接输入 `sort`，用于需要精确编号的场景。
+
+这里的顺序仅用于聚合 API 管理页和选择列表。它不会改变真实请求的主备顺序或流量比例；运行时聚合 route 的先后由模型 route 的 `priority` 和 `weight` 决定。
 
 列表响应中的 `modelSlugs` 仅由 V2 routes 派生，用于展示哪些平台模型引用当前连接；创建和更新连接时不接受该字段作为模型配置。
 
@@ -385,8 +395,13 @@ Accept: text/event-stream
 | URL 或 authParams 无效 | 记录失败，尝试下一个候选。 |
 | 上游超时 | 记录 504 失败，尝试重试或下一个候选。 |
 | 上游返回非 2xx | 摘要上游错误体，当前候选重试；最终对客户端按 502 处理。 |
+| 非流式上游返回 2xx，但响应体读取失败或被截断 | 在交付客户端前识别为当前候选失败，继续下一个候选。 |
 | 所有候选失败 | 返回最后一次失败信息。 |
 | 没有候选 | 返回 404 或 `aggregate api not found...`。 |
+
+非流式聚合成功响应会在交付客户端前完整缓冲。这样即使上游先返回 `2xx` 响应头、随后响应体断开，也仍可尝试下一条聚合 route；在 `hybrid_aggregate_first_rotation` 下，聚合候选最终耗尽后还可回退账号池。流式响应不能采用同样的完整缓冲，一旦已经向客户端开始输出，就不会再切换来源，避免把两个上游的响应拼接到同一个客户端请求中。
+
+`hybrid_aggregate_first_rotation` 下，上述候选全部失败或没有可用聚合 route 时，只要客户端响应尚未开始，原始请求会交回账号池继续尝试。对于 Anthropic `/v1/messages/count_tokens` 和 Gemini `:countTokens`，聚合候选耗尽后会使用原始协议请求体恢复账号侧的本地 token 估算响应，不会把这些工具路径错误转发给账号上游。手工配置错误、验证码、登录墙或 WAF 不会被绕过。
 
 请求日志会记录：
 
@@ -401,9 +416,15 @@ Accept: text/event-stream
 - 上游模型
 - 状态码、耗时、token、错误摘要
 
+以上“尝试过的聚合 API ID”适用于最终由聚合链路结束的请求。聚合优先混合轮转在聚合候选
+全部失败、随后由账号池结束请求时，当前最终请求日志只保留账号来源，不携带前置聚合尝试
+ID；因此不能仅凭 `actual_source_kind = openai_account` 判断网关没有先尝试聚合 API。
+
 ## 余额查询配置
 
-余额查询只影响管理界面展示，不参与实时请求转发。
+余额查询只影响管理界面展示，不参与实时请求转发。即使最近查询到 `remaining = 0`，本地也
+不会提前过滤该连接；只要连接仍为 `active` 且存在启用的模型 route，网关仍会请求上游。
+如果上游因余额或日额度耗尽返回错误，混合轮转才按策略尝试下一聚合候选或回退账号池。
 
 启用字段：
 
@@ -666,6 +687,10 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通
 
 聚合 API 不再维护供应商模型模板、模型池或来源映射。模型和 route 都由模型目录 V2 管理：
 
+这里的 V2 是 CodexManager 受管目录：`aggregate_api_rotation` 和两种混合轮转使用它；纯
+`account_rotation` 的模型列表与请求遵循 OpenAI 官方账号池目录。桌面端和 Web 端都不会
+写入或下载 `~/.codex/models_cache.json`，受管目录也不会覆盖 Codex 官方缓存。
+
 1. 在模型管理页新增或编辑平台模型。
 2. 添加 `sourceKind=aggregate_api` 的 route。
 3. 选择聚合 API 的 source ID，手工填写供应商真实 `upstreamModel`。
@@ -677,6 +702,9 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通
 - 如果平台模型没有 enabled route，会返回 `model_unavailable: <model>`。
 - 候选源只保留 enabled route 引用的 active 聚合 API。
 - 每个候选独立使用自己的 route `upstreamModel`，请求体不会在候选间泄漏。
+- route 的 `priority` 越大越优先；同优先级用 `weight` 做平滑加权，当前优先级全部失败后才进入低优先级。
+- route 的 `sortOrder` 只控制页面显示，允许负数、`0` 和重复值，不参与真实请求。
+- 聚合连接的 `sort` 也只控制管理页和下拉列表显示；不要用它配置主备请求顺序。
 - 连接测试从引用当前聚合 API 的 enabled V2 routes 中选择具体模型，不做发现或导入。
 
 ## 管理接口
@@ -688,6 +716,7 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通
 | 列表 | `service_aggregate_api_list` | `aggregateApi/list` |
 | 创建 | `service_aggregate_api_create` | `aggregateApi/create` |
 | 更新 | `service_aggregate_api_update` | `aggregateApi/update` |
+| 批量更新显示顺序 | `service_aggregate_api_update_sorts` | `aggregateApi/updateSorts` |
 | 读取 secret | `service_aggregate_api_read_secret` | `aggregateApi/readSecret` |
 | 删除 | `service_aggregate_api_delete` | `aggregateApi/delete` |
 | 测试连接 | `service_aggregate_api_test_connection` | `aggregateApi/testConnection` |
@@ -709,7 +738,7 @@ apps/src/lib/api/account-client.ts
 
 检查：
 
-1. 平台 Key 的 `rotationStrategy` 是否是 `aggregate_api_rotation` 或 `hybrid_rotation`。
+1. 平台 Key 的 `rotationStrategy` 是否是 `aggregate_api_rotation`、`hybrid_rotation` 或 `hybrid_aggregate_first_rotation`。
 2. 请求路径是否被识别成预期协议。
 3. 聚合 API 的 `providerType` 是否和协议匹配。
 4. 聚合 API 的 `status` 是否为 `active`。
@@ -725,6 +754,7 @@ apps/src/lib/api/account-client.ts
 4. route 的 `sourceKind` 是否为 `aggregate_api`。
 5. route 的 `sourceId` 是否对应当前 active 聚合 API。
 6. route 的 `upstreamModel` 是否填写为供应商真实模型名。
+7. route 的 `priority` / `weight` 是否让预期线路处于当前优先级；`sortOrder` 和连接 `sort` 不会改变请求顺序。
 
 典型错误：
 
@@ -770,10 +800,11 @@ model_unavailable: gpt-5.5
 ## 推荐配置规范
 
 1. 每个供应商都填写清晰的 `supplierName`，例如 `New API - 主线路`。
-2. 用 `sort` 表达固定优先级，主线路填小值，备用线路填大值。
+2. 用模型 route 的 `priority` 表达主备层级，数值越大越先尝试；同层流量比例使用 `weight`。
 3. 默认不要启用 action；只有供应商路径和客户端路径不一致时再启用。
 4. 所有上游模型名都在模型目录 V2 route 中维护，不在连接记录上配置全局覆盖。
 5. New API 优先用 `balanceQueryTemplate = new_api`。
 6. Claude-compatible 供应商优先显式配置 `x-api-key` raw header。
 7. Codex、Claude 和 Gemini 都手工维护 V2 route，不依赖远端发现。
-8. 多供应商生产环境建议使用 `CODEXMANAGER_ROUTE_STRATEGY=balanced`，但平台 Key 的首选 `aggregateApiId` 仍必须有匹配 route 才能进入候选。
+8. `sortOrder` 和聚合连接 `sort` 只用于页面整理；不要把它们当作运行时优先级。
+9. `CODEXMANAGER_ROUTE_STRATEGY=balanced` 只影响账号池 route 内的具体账号，不会均衡聚合 API route。

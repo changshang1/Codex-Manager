@@ -3,6 +3,7 @@ use codexmanager_core::rpc::types::{AggregateApiListResult, JsonRpcRequest, Json
 use crate::{
     create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
     refresh_aggregate_api_balance, test_aggregate_api_connection, update_aggregate_api,
+    update_aggregate_api_sorts,
 };
 
 /// 函数 `api_id_param`
@@ -132,6 +133,9 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 balance_query_config_json,
             ))
         }
+        "aggregateApi/updateSorts" => super::value_or_error(
+            aggregate_api_sort_updates_param(req).and_then(update_aggregate_api_sorts),
+        ),
         "aggregateApi/readSecret" => {
             let api_id = api_id_param(req).unwrap_or("");
             super::value_or_error(read_aggregate_api_secret(api_id))
@@ -152,6 +156,36 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
     };
 
     Some(super::response(req, result))
+}
+
+fn aggregate_api_sort_updates_param(
+    req: &JsonRpcRequest,
+) -> Result<Vec<crate::aggregate_api::AggregateApiSortUpdate>, String> {
+    let items = req
+        .params
+        .as_ref()
+        .and_then(|params| params.get("updates"))
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "missing aggregate api sort updates".to_string())?;
+    let mut updates = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let source = item.as_object().ok_or_else(|| {
+            format!("aggregate api sort update at index {index} must be an object")
+        })?;
+        let api_id = source
+            .get("apiId")
+            .or_else(|| source.get("api_id"))
+            .or_else(|| source.get("id"))
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| format!("aggregate api sort update at index {index} missing apiId"))?
+            .to_string();
+        let sort = source
+            .get("sort")
+            .and_then(|value| value.as_i64())
+            .ok_or_else(|| format!("aggregate api sort update at index {index} missing sort"))?;
+        updates.push(crate::aggregate_api::AggregateApiSortUpdate { api_id, sort });
+    }
+    Ok(updates)
 }
 
 #[cfg(test)]

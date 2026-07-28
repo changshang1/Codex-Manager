@@ -1694,6 +1694,47 @@ pub struct DashboardSourceUsageSummary {
     pub range_usage: DashboardTokenUsageResult,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSourceRef {
+    pub source_kind: String,
+    pub source_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardAccountPoolSummary {
+    pub scoped_account_count: i64,
+    pub available_account_count: i64,
+    pub usage: UsageAggregateSummaryResult,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSourceOption {
+    pub source_kind: String,
+    pub source_id: String,
+    pub name: Option<String>,
+    pub provider: Option<String>,
+    pub status: Option<String>,
+    pub availability: String,
+    pub availability_reason: Option<String>,
+    pub range_usage: DashboardTokenUsageResult,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardSourceOptionsResult {
+    #[serde(default)]
+    pub items: Vec<DashboardSourceOption>,
+    #[serde(default)]
+    pub selected_items: Vec<DashboardSourceOption>,
+    pub total: i64,
+    pub page: i64,
+    pub page_size: i64,
+    pub has_more: bool,
+}
+
 fn default_dashboard_series_bucket_seconds() -> i64 {
     86_400
 }
@@ -1720,6 +1761,8 @@ pub struct DashboardAdminUsageSummaryResult {
     pub openai_accounts: Vec<DashboardSourceUsageSummary>,
     #[serde(default)]
     pub aggregate_apis: Vec<DashboardSourceUsageSummary>,
+    #[serde(default)]
+    pub account_pool: DashboardAccountPoolSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

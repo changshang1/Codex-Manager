@@ -12,7 +12,8 @@ use super::{
     extract_new_api_balance, list_aggregate_apis, normalize_action_override,
     normalize_custom_balance_query_config, normalize_provider_type, normalize_provider_type_value,
     probe_claude_endpoint, probe_codex_endpoint, provider_default_url, read_aggregate_api_secret,
-    CustomBalanceQueryConfig, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_COMPATIBLE,
+    update_aggregate_api_sorts, AggregateApiSortUpdate, CustomBalanceQueryConfig,
+    AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_COMPATIBLE,
     AGGREGATE_API_PROVIDER_GEMINI,
 };
 
@@ -24,6 +25,84 @@ fn new_test_dir(prefix: &str) -> PathBuf {
     dir.push(format!("{prefix}-{}-{seq}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     dir
+}
+
+#[test]
+fn aggregate_api_sort_updates_are_atomic_and_reject_duplicate_ids() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-sort-updates");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let mut first = aggregate_api_with_action(None);
+    first.id = "agg-sort-first".to_string();
+    first.sort = 0;
+    let mut second = aggregate_api_with_action(None);
+    second.id = "agg-sort-second".to_string();
+    second.sort = 5;
+    storage
+        .insert_aggregate_api(&first)
+        .expect("insert first api");
+    storage
+        .insert_aggregate_api(&second)
+        .expect("insert second api");
+
+    let result = update_aggregate_api_sorts(vec![
+        AggregateApiSortUpdate {
+            api_id: first.id.clone(),
+            sort: 5,
+        },
+        AggregateApiSortUpdate {
+            api_id: second.id.clone(),
+            sort: 0,
+        },
+    ])
+    .expect("reorder aggregate apis");
+    assert_eq!(result.updated, 2);
+    assert_eq!(
+        storage
+            .find_aggregate_api_by_id(&first.id)
+            .expect("read first")
+            .expect("first exists")
+            .sort,
+        5
+    );
+
+    let missing_error = update_aggregate_api_sorts(vec![
+        AggregateApiSortUpdate {
+            api_id: first.id.clone(),
+            sort: 99,
+        },
+        AggregateApiSortUpdate {
+            api_id: "agg-sort-missing".to_string(),
+            sort: 10,
+        },
+    ])
+    .expect_err("missing api should roll back");
+    assert!(missing_error.contains("aggregate api not found"));
+    assert_eq!(
+        storage
+            .find_aggregate_api_by_id(&first.id)
+            .expect("read first after rollback")
+            .expect("first exists after rollback")
+            .sort,
+        5
+    );
+
+    let duplicate_error = update_aggregate_api_sorts(vec![
+        AggregateApiSortUpdate {
+            api_id: first.id.clone(),
+            sort: 0,
+        },
+        AggregateApiSortUpdate {
+            api_id: first.id.clone(),
+            sort: 5,
+        },
+    ])
+    .expect_err("duplicate ids should fail");
+    assert!(duplicate_error.contains("duplicate aggregate api id"));
 }
 
 struct EnvGuard {

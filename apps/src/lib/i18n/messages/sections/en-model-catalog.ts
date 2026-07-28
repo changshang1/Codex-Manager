@@ -62,12 +62,16 @@ export const EN_MODEL_CATALOG_MESSAGES: MessageCatalog = {
   "未知聚合 API": "Unknown aggregate API",
   "选择聚合 API": "Select aggregate API",
   上游模型: "Upstream model",
+  顺序号: "Display order",
   优先级: "Priority",
   权重: "Weight",
   路由优先级: "Route priority",
   路由权重: "Route weight",
+  "优先级和权重只在同一来源类型内生效。优先级越大越先尝试，不同优先级是硬分层；同一优先级按权重平滑轮转，失败时先继续同级路由，再尝试低优先级。顺序号越小越靠前，只控制页面排序，不参与运行时选路。":
+    "Priority and weight apply only within the same source type. Higher priority is tried first in strict tiers; routes at the same priority use smooth weighted rotation, and failures continue within the tier before trying a lower tier. A smaller display order appears first in the UI and does not affect runtime routing.",
   "每条路由都必须填写来源和上游模型":
     "Every route must specify a source and upstream model",
+  路由顺序号: "Route display order",
   "启用 route": "Enable route",
   启用路由: "Enable route",
   删除路由: "Delete route",

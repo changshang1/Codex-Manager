@@ -2,16 +2,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{apikey_list, requestlog_list, storage_helpers, time_bounds, RpcActor};
 use codexmanager_core::rpc::types::{
-    ApiKeySummary, DashboardAdminUsageSummaryResult, DashboardDailyUsagePoint,
-    DashboardModelUsageSeries, DashboardSourceUsageSummary, DashboardTokenUsageResult,
-    DashboardUsageSeriesPoint, DashboardUserUsageSummary, MemberDashboardAlert,
-    MemberDashboardApiKeySummary, MemberDashboardKeyUsage, MemberDashboardModelUsage,
-    MemberDashboardSummaryResult, MemberDashboardUsagePoint, MemberDashboardUsageToday,
-    MemberDashboardWalletResult, RequestLogListParams,
+    ApiKeySummary, DashboardAccountPoolSummary, DashboardAdminUsageSummaryResult,
+    DashboardDailyUsagePoint, DashboardModelUsageSeries, DashboardSourceOption,
+    DashboardSourceOptionsResult, DashboardSourceRef, DashboardSourceUsageSummary,
+    DashboardTokenUsageResult, DashboardUsageSeriesPoint, DashboardUserUsageSummary,
+    MemberDashboardAlert, MemberDashboardApiKeySummary, MemberDashboardKeyUsage,
+    MemberDashboardModelUsage, MemberDashboardSummaryResult, MemberDashboardUsagePoint,
+    MemberDashboardUsageToday, MemberDashboardWalletResult, RequestLogListParams,
 };
 use codexmanager_core::storage::{
-    DailyTokenUsageRollup, ModelTokenUsageRollup, SourceTokenUsageRollup, TokenUsageRollup,
-    UserTokenUsageRollup,
+    AccountSummaryStorageSnapshotOptions, DailyTokenUsageRollup, ModelTokenUsageRollup,
+    SourceTokenUsageRollup, TokenUsageRollup, TokenUsageSourceFilter, TokenUsageSourceRef,
+    UsageSnapshotRecord, UserTokenUsageRollup,
 };
 
 const TREND_DAYS: i64 = 7;
@@ -25,6 +27,34 @@ const ADMIN_TOP_SOURCE_LIMIT: usize = 12;
 const ADMIN_MODEL_SERIES_LIMIT: usize = 8;
 const ADMIN_HOURLY_SERIES_MAX_DAYS: i64 = 31;
 const HOUR_SECONDS: i64 = 3_600;
+const OPENAI_ACCOUNT_SOURCE: &str = "openai_account";
+const AGGREGATE_API_SOURCE: &str = "aggregate_api";
+const DASHBOARD_SOURCE_PAGE_SIZE: i64 = 30;
+const DASHBOARD_SOURCE_PAGE_SIZE_MAX: i64 = 100;
+
+#[derive(Debug, Clone)]
+struct CurrentDashboardSource {
+    source_kind: String,
+    source_id: String,
+    name: String,
+    provider: Option<String>,
+    status: String,
+    available: bool,
+    unavailable_reason: Option<String>,
+    search_text: String,
+}
+
+#[derive(Debug, Clone)]
+struct CurrentDashboardAccount {
+    id: String,
+    available: bool,
+}
+
+struct DashboardSourceContext {
+    current_sources: HashMap<(String, String), CurrentDashboardSource>,
+    accounts: Vec<CurrentDashboardAccount>,
+    usage_snapshots: Vec<UsageSnapshotRecord>,
+}
 
 pub(crate) fn read_admin_usage_summary(
     actor: &RpcActor,
@@ -33,6 +63,9 @@ pub(crate) fn read_admin_usage_summary(
     include_breakdowns: bool,
     include_series: bool,
     requested_series_bucket_seconds: Option<i64>,
+    source_kinds: &[String],
+    selected_sources: &[DashboardSourceRef],
+    include_unavailable_sources: bool,
 ) -> Result<DashboardAdminUsageSummaryResult, String> {
     if !actor.is_admin() {
         return Err("permission_denied: admin dashboard usage requires admin session".to_string());
@@ -40,6 +73,18 @@ pub(crate) fn read_admin_usage_summary(
     crate::initialize_storage_if_needed()?;
     let storage =
         storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let source_context = load_dashboard_source_context(&storage)?;
+    let normalized_source_kinds = normalize_dashboard_source_kinds(source_kinds);
+    let normalized_selected_sources =
+        normalize_dashboard_source_refs(selected_sources, &normalized_source_kinds);
+    let source_filter = resolve_token_usage_source_filter(
+        source_kinds,
+        &normalized_source_kinds,
+        selected_sources,
+        &normalized_selected_sources,
+        include_unavailable_sources,
+        &source_context.current_sources,
+    );
     let (today_start, today_end) = time_bounds::local_day_bounds_ts()?;
     let range_start = start_ts.filter(|value| *value > 0).unwrap_or_else(|| {
         today_start.saturating_sub((ADMIN_USAGE_RANGE_DAYS - 1) * time_bounds::DAY_SECONDS)
@@ -49,12 +94,22 @@ pub(crate) fn read_admin_usage_summary(
         .unwrap_or(today_end);
 
     let raw_daily_usage = storage
-        .summarize_request_token_stats_daily(range_start, range_end, time_bounds::DAY_SECONDS)
+        .summarize_request_token_stats_daily_filtered(
+            range_start,
+            range_end,
+            time_bounds::DAY_SECONDS,
+            Some(&source_filter),
+        )
         .map_err(|err| format!("summarize daily usage failed: {err}"))?;
     let today_usage = match daily_usage_bucket(&raw_daily_usage, today_start, today_end) {
         Some(usage) => usage,
         None => storage
-            .summarize_request_token_stats_daily(today_start, today_end, time_bounds::DAY_SECONDS)
+            .summarize_request_token_stats_daily_filtered(
+                today_start,
+                today_end,
+                time_bounds::DAY_SECONDS,
+                Some(&source_filter),
+            )
             .map_err(|err| format!("summarize today usage failed: {err}"))?
             .into_iter()
             .next()
@@ -71,7 +126,12 @@ pub(crate) fn read_admin_usage_summary(
             raw_daily_usage.clone()
         } else {
             storage
-                .summarize_request_token_stats_daily(range_start, range_end, series_bucket_seconds)
+                .summarize_request_token_stats_daily_filtered(
+                    range_start,
+                    range_end,
+                    series_bucket_seconds,
+                    Some(&source_filter),
+                )
                 .map_err(|err| format!("summarize usage series failed: {err}"))?
         };
         let series_usage = fill_usage_series(
@@ -85,10 +145,11 @@ pub(crate) fn read_admin_usage_summary(
             range_end,
             series_bucket_seconds,
             storage
-                .summarize_request_token_stats_by_model_timeline(
+                .summarize_request_token_stats_by_model_timeline_filtered(
                     range_start,
                     range_end,
                     series_bucket_seconds,
+                    Some(&source_filter),
                 )
                 .map_err(|err| format!("summarize model usage series failed: {err}"))?,
         );
@@ -106,34 +167,38 @@ pub(crate) fn read_admin_usage_summary(
         let users = build_dashboard_user_summaries(
             &storage,
             storage
-                .summarize_request_token_stats_by_user_between_limited(
+                .summarize_request_token_stats_by_user_between_limited_filtered(
                     today_start,
                     today_end,
                     Some(ADMIN_TOP_USER_LIMIT),
+                    Some(&source_filter),
                 )
                 .map_err(|err| format!("summarize today user usage failed: {err}"))?,
             storage
-                .summarize_request_token_stats_by_user_between_limited(
+                .summarize_request_token_stats_by_user_between_limited_filtered(
                     range_start,
                     range_end,
                     Some(ADMIN_TOP_USER_LIMIT),
+                    Some(&source_filter),
                 )
                 .map_err(|err| format!("summarize range user usage failed: {err}"))?,
         )?;
         let today_source_usage = storage
-            .summarize_request_token_stats_by_sources_between_limited(
+            .summarize_request_token_stats_by_sources_between_limited_filtered(
                 &["openai_account", "aggregate_api"],
                 today_start,
                 today_end,
                 Some(ADMIN_TOP_SOURCE_LIMIT),
+                Some(&source_filter),
             )
             .map_err(|err| format!("summarize today source usage failed: {err}"))?;
         let range_source_usage = storage
-            .summarize_request_token_stats_by_sources_between_limited(
+            .summarize_request_token_stats_by_sources_between_limited_filtered(
                 &["openai_account", "aggregate_api"],
                 range_start,
                 range_end,
                 Some(ADMIN_TOP_SOURCE_LIMIT),
+                Some(&source_filter),
             )
             .map_err(|err| format!("summarize range source usage failed: {err}"))?;
         let today_account_usage = filter_source_usage(&today_source_usage, "openai_account");
@@ -164,6 +229,13 @@ pub(crate) fn read_admin_usage_summary(
         (Vec::new(), Vec::new(), Vec::new())
     };
 
+    let account_pool = build_dashboard_account_pool_summary(
+        &source_context,
+        &normalized_source_kinds,
+        selected_sources,
+        &normalized_selected_sources,
+    );
+
     Ok(DashboardAdminUsageSummaryResult {
         range_start_ts: range_start,
         range_end_ts: range_end,
@@ -177,6 +249,418 @@ pub(crate) fn read_admin_usage_summary(
         users,
         openai_accounts,
         aggregate_apis,
+        account_pool,
+    })
+}
+
+pub(crate) fn read_dashboard_source_options(
+    actor: &RpcActor,
+    start_ts: Option<i64>,
+    end_ts: Option<i64>,
+    source_kinds: &[String],
+    search: Option<&str>,
+    page: Option<i64>,
+    page_size: Option<i64>,
+    include_unavailable_sources: bool,
+    selected_sources: &[DashboardSourceRef],
+) -> Result<DashboardSourceOptionsResult, String> {
+    if !actor.is_admin() {
+        return Err("permission_denied: dashboard sources require admin session".to_string());
+    }
+    crate::initialize_storage_if_needed()?;
+    let storage =
+        storage_helpers::open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    let (today_start, today_end) = time_bounds::local_day_bounds_ts()?;
+    let range_start = start_ts.filter(|value| *value > 0).unwrap_or_else(|| {
+        today_start.saturating_sub((ADMIN_USAGE_RANGE_DAYS - 1) * time_bounds::DAY_SECONDS)
+    });
+    let range_end = end_ts
+        .filter(|value| *value > range_start)
+        .unwrap_or(today_end);
+    let context = load_dashboard_source_context(&storage)?;
+    let normalized_kinds = normalize_dashboard_source_kinds(source_kinds);
+    let normalized_selected = normalize_dashboard_source_refs(selected_sources, &normalized_kinds);
+    let range_usage = storage
+        .summarize_request_token_stats_by_sources_between(
+            &[OPENAI_ACCOUNT_SOURCE, AGGREGATE_API_SOURCE],
+            range_start,
+            range_end,
+        )
+        .map_err(|err| format!("summarize dashboard source options failed: {err}"))?
+        .into_iter()
+        .map(|item| ((item.source_kind, item.source_id), item.usage))
+        .collect::<HashMap<_, _>>();
+
+    let needle = search.unwrap_or_default().trim().to_ascii_lowercase();
+    let mut items = if needle.is_empty() {
+        range_usage
+            .iter()
+            .filter(|((kind, _), _)| normalized_kinds.contains(kind.as_str()))
+            .filter_map(|((kind, id), usage)| {
+                dashboard_source_option(
+                    context.current_sources.get(&(kind.clone(), id.clone())),
+                    kind,
+                    id,
+                    Some(usage),
+                    include_unavailable_sources,
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        context
+            .current_sources
+            .values()
+            .filter(|source| normalized_kinds.contains(source.source_kind.as_str()))
+            .filter(|source| source.search_text.contains(&needle))
+            .filter_map(|source| {
+                let key = (source.source_kind.clone(), source.source_id.clone());
+                dashboard_source_option(
+                    Some(source),
+                    &source.source_kind,
+                    &source.source_id,
+                    range_usage.get(&key),
+                    include_unavailable_sources,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    items.sort_by(|left, right| {
+        right
+            .range_usage
+            .total_tokens
+            .cmp(&left.range_usage.total_tokens)
+            .then_with(|| {
+                left.name
+                    .as_deref()
+                    .unwrap_or(left.source_id.as_str())
+                    .cmp(right.name.as_deref().unwrap_or(right.source_id.as_str()))
+            })
+            .then_with(|| left.source_kind.cmp(&right.source_kind))
+            .then_with(|| left.source_id.cmp(&right.source_id))
+    });
+
+    let selected_items = normalized_selected
+        .iter()
+        .filter_map(|source_ref| {
+            let key = (source_ref.source_kind.clone(), source_ref.source_id.clone());
+            dashboard_source_option(
+                context.current_sources.get(&key),
+                &source_ref.source_kind,
+                &source_ref.source_id,
+                range_usage.get(&key),
+                include_unavailable_sources,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let total = items.len() as i64;
+    let page_size = page_size
+        .unwrap_or(DASHBOARD_SOURCE_PAGE_SIZE)
+        .clamp(1, DASHBOARD_SOURCE_PAGE_SIZE_MAX);
+    let page = page.unwrap_or(1).max(1);
+    let offset = (page - 1).saturating_mul(page_size) as usize;
+    let page_items = items
+        .into_iter()
+        .skip(offset)
+        .take(page_size as usize)
+        .collect::<Vec<_>>();
+
+    Ok(DashboardSourceOptionsResult {
+        has_more: offset.saturating_add(page_items.len()) < total as usize,
+        items: page_items,
+        selected_items,
+        total,
+        page,
+        page_size,
+    })
+}
+
+fn load_dashboard_source_context(
+    storage: &codexmanager_core::storage::Storage,
+) -> Result<DashboardSourceContext, String> {
+    let account_rows = storage
+        .list_account_summary_rows()
+        .map_err(|err| format!("list dashboard accounts failed: {err}"))?;
+    let account_ids = account_rows
+        .iter()
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    let account_snapshot = storage
+        .load_account_summary_storage_snapshot_with_options(
+            &account_ids,
+            AccountSummaryStorageSnapshotOptions {
+                include_preferred: false,
+                include_status_reasons: false,
+                include_tokens: true,
+                include_details: false,
+            },
+        )
+        .map_err(|err| format!("load dashboard account state failed: {err}"))?;
+    let token_ids = account_snapshot
+        .tokens
+        .iter()
+        .map(|token| token.account_id.as_str())
+        .collect::<HashSet<_>>();
+    let usage_by_account = account_snapshot
+        .usage_snapshots
+        .iter()
+        .map(|usage| (usage.account_id.as_str(), usage))
+        .collect::<HashMap<_, _>>();
+
+    let mut current_sources = HashMap::new();
+    let mut accounts = Vec::with_capacity(account_rows.len());
+    for account in account_rows {
+        let has_token = token_ids.contains(account.id.as_str());
+        let available = crate::account_availability::is_account_available(
+            &account.status,
+            has_token,
+            usage_by_account.get(account.id.as_str()).copied(),
+        );
+        let reason = (!available).then(|| {
+            if !has_token {
+                "missing_token".to_string()
+            } else if !matches!(
+                account.status.trim().to_ascii_lowercase().as_str(),
+                "active" | "available"
+            ) {
+                "account_disabled".to_string()
+            } else {
+                "account_usage_unavailable".to_string()
+            }
+        });
+        let source = CurrentDashboardSource {
+            source_kind: OPENAI_ACCOUNT_SOURCE.to_string(),
+            source_id: account.id.clone(),
+            name: account.label.clone(),
+            provider: Some("openai".to_string()),
+            status: account.status,
+            available,
+            unavailable_reason: reason,
+            search_text: format!("{} {}", account.label, account.id).to_ascii_lowercase(),
+        };
+        accounts.push(CurrentDashboardAccount {
+            id: account.id.clone(),
+            available,
+        });
+        current_sources.insert((OPENAI_ACCOUNT_SOURCE.to_string(), account.id), source);
+    }
+
+    let aggregate_apis = storage
+        .list_aggregate_apis()
+        .map_err(|err| format!("list dashboard aggregate APIs failed: {err}"))?;
+    for api in aggregate_apis {
+        let status = api.status.trim().to_ascii_lowercase();
+        let enabled = matches!(status.as_str(), "enabled" | "active" | "available");
+        let test_failed = api
+            .last_test_status
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("failed"));
+        let available = enabled && !test_failed;
+        let name = api
+            .supplier_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(api.url.as_str())
+            .to_string();
+        let source = CurrentDashboardSource {
+            source_kind: AGGREGATE_API_SOURCE.to_string(),
+            source_id: api.id.clone(),
+            name: name.clone(),
+            provider: Some(api.provider_type.clone()),
+            status: api.status,
+            available,
+            unavailable_reason: (!available).then(|| {
+                if test_failed {
+                    "connection_test_failed".to_string()
+                } else {
+                    "aggregate_api_disabled".to_string()
+                }
+            }),
+            search_text: format!("{} {} {} {}", name, api.id, api.url, api.provider_type)
+                .to_ascii_lowercase(),
+        };
+        current_sources.insert((AGGREGATE_API_SOURCE.to_string(), api.id), source);
+    }
+
+    Ok(DashboardSourceContext {
+        current_sources,
+        accounts,
+        usage_snapshots: account_snapshot.usage_snapshots,
+    })
+}
+
+fn normalize_dashboard_source_kinds(source_kinds: &[String]) -> HashSet<String> {
+    if source_kinds.is_empty() {
+        return [OPENAI_ACCOUNT_SOURCE, AGGREGATE_API_SOURCE]
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+    }
+    source_kinds
+        .iter()
+        .map(|kind| kind.trim())
+        .filter(|kind| matches!(*kind, OPENAI_ACCOUNT_SOURCE | AGGREGATE_API_SOURCE))
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn normalize_dashboard_source_refs(
+    source_refs: &[DashboardSourceRef],
+    allowed_kinds: &HashSet<String>,
+) -> Vec<DashboardSourceRef> {
+    let mut seen = HashSet::new();
+    source_refs
+        .iter()
+        .filter_map(|source_ref| {
+            let source_kind = source_ref.source_kind.trim();
+            let source_id = source_ref.source_id.trim();
+            if source_id.is_empty()
+                || !allowed_kinds.contains(source_kind)
+                || !seen.insert((source_kind.to_string(), source_id.to_string()))
+            {
+                return None;
+            }
+            Some(DashboardSourceRef {
+                source_kind: source_kind.to_string(),
+                source_id: source_id.to_string(),
+            })
+        })
+        .collect()
+}
+
+fn resolve_token_usage_source_filter(
+    requested_kinds: &[String],
+    normalized_kinds: &HashSet<String>,
+    requested_refs: &[DashboardSourceRef],
+    normalized_refs: &[DashboardSourceRef],
+    include_unavailable_sources: bool,
+    current_sources: &HashMap<(String, String), CurrentDashboardSource>,
+) -> TokenUsageSourceFilter {
+    let source_kinds = if requested_kinds.is_empty() {
+        Vec::new()
+    } else if normalized_kinds.is_empty() {
+        vec!["__match_none__".to_string()]
+    } else {
+        let mut kinds = normalized_kinds.iter().cloned().collect::<Vec<_>>();
+        kinds.sort();
+        kinds
+    };
+    let source_refs = if requested_refs.is_empty() {
+        if include_unavailable_sources {
+            None
+        } else {
+            Some(
+                current_sources
+                    .values()
+                    .filter(|source| {
+                        source.available && normalized_kinds.contains(&source.source_kind)
+                    })
+                    .map(|source| TokenUsageSourceRef {
+                        source_kind: source.source_kind.clone(),
+                        source_id: source.source_id.clone(),
+                    })
+                    .collect(),
+            )
+        }
+    } else {
+        Some(
+            normalized_refs
+                .iter()
+                .filter(|source_ref| {
+                    include_unavailable_sources
+                        || current_sources
+                            .get(&(source_ref.source_kind.clone(), source_ref.source_id.clone()))
+                            .is_some_and(|source| source.available)
+                })
+                .map(|source_ref| TokenUsageSourceRef {
+                    source_kind: source_ref.source_kind.clone(),
+                    source_id: source_ref.source_id.clone(),
+                })
+                .collect(),
+        )
+    };
+    TokenUsageSourceFilter {
+        source_kinds,
+        source_refs,
+    }
+}
+
+fn build_dashboard_account_pool_summary(
+    context: &DashboardSourceContext,
+    allowed_kinds: &HashSet<String>,
+    requested_refs: &[DashboardSourceRef],
+    normalized_refs: &[DashboardSourceRef],
+) -> DashboardAccountPoolSummary {
+    if !allowed_kinds.contains(OPENAI_ACCOUNT_SOURCE) {
+        return DashboardAccountPoolSummary::default();
+    }
+    let selected_account_ids = normalized_refs
+        .iter()
+        .filter(|source_ref| source_ref.source_kind == OPENAI_ACCOUNT_SOURCE)
+        .map(|source_ref| source_ref.source_id.as_str())
+        .collect::<HashSet<_>>();
+    let scoped_accounts = context
+        .accounts
+        .iter()
+        .filter(|account| {
+            requested_refs.is_empty() || selected_account_ids.contains(account.id.as_str())
+        })
+        .collect::<Vec<_>>();
+    let available_ids = scoped_accounts
+        .iter()
+        .filter(|account| account.available)
+        .map(|account| account.id.clone())
+        .collect::<Vec<_>>();
+    DashboardAccountPoolSummary {
+        scoped_account_count: scoped_accounts.len() as i64,
+        available_account_count: available_ids.len() as i64,
+        usage: crate::usage_aggregate::compute_usage_aggregate_summary_for_account_ids_list(
+            &available_ids,
+            &context.usage_snapshots,
+        ),
+    }
+}
+
+fn dashboard_source_option(
+    current: Option<&CurrentDashboardSource>,
+    source_kind: &str,
+    source_id: &str,
+    usage: Option<&TokenUsageRollup>,
+    include_unavailable_sources: bool,
+) -> Option<DashboardSourceOption> {
+    if !include_unavailable_sources && !current.is_some_and(|source| source.available) {
+        return None;
+    }
+    let (name, provider, status, availability, availability_reason) = match current {
+        Some(source) => (
+            Some(source.name.clone()),
+            source.provider.clone(),
+            Some(source.status.clone()),
+            if source.available {
+                "available".to_string()
+            } else {
+                "unavailable".to_string()
+            },
+            source.unavailable_reason.clone(),
+        ),
+        None => (
+            None,
+            None,
+            None,
+            "deleted".to_string(),
+            Some("source_deleted".to_string()),
+        ),
+    };
+    Some(DashboardSourceOption {
+        source_kind: source_kind.to_string(),
+        source_id: source_id.to_string(),
+        name,
+        provider,
+        status,
+        availability,
+        availability_reason,
+        range_usage: usage.map(dashboard_usage).unwrap_or_default(),
     })
 }
 

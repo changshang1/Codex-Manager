@@ -50,6 +50,7 @@ type RouteDraft = {
   sourceId: string;
   upstreamModel: string;
   enabled: boolean;
+  sortOrder: string;
   priority: string;
   weight: string;
 };
@@ -133,9 +134,55 @@ function routeDraft(route: ModelRouteV2, index: number): RouteDraft {
     sourceId: route.sourceId,
     upstreamModel: route.upstreamModel,
     enabled: route.enabled,
+    sortOrder: String(
+      Number.isSafeInteger(route.sortOrder) ? route.sortOrder : (index + 1) * 10,
+    ),
     priority: String(route.priority),
     weight: String(route.weight),
   };
+}
+
+function routeSourceSortName(
+  route: RouteDraft,
+  aggregateApis: AggregateApi[],
+): string {
+  if (route.sourceKind === "account_pool") return "default";
+  const api = aggregateApis.find((item) => item.id === route.sourceId.trim());
+  return api?.supplierName?.trim() || route.sourceId.trim();
+}
+
+function routeSortOrder(route: RouteDraft): number {
+  const parsed = Number(route.sortOrder.trim());
+  return Number.isSafeInteger(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function sortRouteDrafts(
+  routes: RouteDraft[],
+  aggregateApis: AggregateApi[],
+): RouteDraft[] {
+  return [...routes].sort((left, right) => {
+    const bySortOrder = routeSortOrder(left) - routeSortOrder(right);
+    if (bySortOrder !== 0) return bySortOrder;
+    const bySourceKind = left.sourceKind.localeCompare(right.sourceKind);
+    if (bySourceKind !== 0) return bySourceKind;
+    const bySourceName = routeSourceSortName(left, aggregateApis).localeCompare(
+      routeSourceSortName(right, aggregateApis),
+      "zh-CN",
+    );
+    if (bySourceName !== 0) return bySourceName;
+    const byRouteId = left.id.localeCompare(right.id);
+    return byRouteId !== 0 ? byRouteId : left.key.localeCompare(right.key);
+  });
+}
+
+function nextRouteSortOrder(routes: RouteDraft[]): number {
+  const largest = routes.reduce<number | null>((currentLargest, route) => {
+    const parsed = Number(route.sortOrder.trim());
+    if (!Number.isSafeInteger(parsed)) return currentLargest;
+    return currentLargest == null ? parsed : Math.max(currentLargest, parsed);
+  }, null);
+  const previous = largest ?? 0;
+  return Number.isSafeInteger(previous + 10) ? previous + 10 : previous;
 }
 
 function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: number): ModelDraft {
@@ -178,6 +225,7 @@ function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: num
             sourceId: "default",
             upstreamModel: "",
             enabled: true,
+            sortOrder: 10,
             priority: 0,
             weight: 1,
           },
@@ -311,20 +359,24 @@ export function ModelCatalogModal({
     () => (model ? t("编辑模型") : t("新增自定义模型")),
     [model, t],
   );
+  const orderedRoutes = useMemo(
+    () => sortRouteDrafts(draft.routes, aggregateApis),
+    [aggregateApis, draft.routes],
+  );
 
   const updateDraft = <K extends keyof ModelDraft>(key: K, value: ModelDraft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
   const updateRoute = <K extends keyof RouteDraft>(
-    index: number,
+    routeKey: string,
     key: K,
     value: RouteDraft[K],
   ) => {
     setDraft((current) => ({
       ...current,
-      routes: current.routes.map((route, routeIndex) =>
-        routeIndex === index ? { ...route, [key]: value } : route,
+      routes: current.routes.map((route) =>
+        route.key === routeKey ? { ...route, [key]: value } : route,
       ),
     }));
   };
@@ -343,6 +395,7 @@ export function ModelCatalogModal({
           sourceId,
           upstreamModel: current.slug.trim(),
           enabled: true,
+          sortOrder: String(nextRouteSortOrder(current.routes)),
           priority: "0",
           weight: "1",
         },
@@ -374,6 +427,7 @@ export function ModelCatalogModal({
           sourceId,
           upstreamModel: route.upstreamModel.trim(),
           enabled: route.enabled,
+          sortOrder: integer(route.sortOrder, "路由顺序号"),
           priority: integer(route.priority, "路由优先级"),
           weight: integer(route.weight, "路由权重", 1),
         };
@@ -681,13 +735,16 @@ export function ModelCatalogModal({
                   </Button>
                 </div>
               </div>
+              <p className="text-xs text-muted-foreground">
+                {t("优先级和权重只在同一来源类型内生效。优先级越大越先尝试，不同优先级是硬分层；同一优先级按权重平滑轮转，失败时先继续同级路由，再尝试低优先级。顺序号越小越靠前，只控制页面排序，不参与运行时选路。")}
+              </p>
 
               {draft.routes.length === 0 ? (
                 <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
                   {t("当前模型没有 route，启用后将显示 missing route。")}
                 </div>
               ) : (
-                draft.routes.map((route, index) => (
+                orderedRoutes.map((route, index) => (
                   <Card key={route.key} size="sm">
                     <CardContent className="space-y-3">
                       <div className="grid gap-3 md:grid-cols-[minmax(150px,0.8fr)_minmax(180px,1fr)_minmax(180px,1fr)]">
@@ -697,8 +754,8 @@ export function ModelCatalogModal({
                             value={route.sourceKind}
                             onValueChange={(value) => {
                               const sourceKind = (value || "account_pool") as ModelRouteSourceKindV2;
-                              updateRoute(index, "sourceKind", sourceKind);
-                              updateRoute(index, "sourceId", sourceKind === "account_pool" ? "default" : "");
+                              updateRoute(route.key, "sourceKind", sourceKind);
+                              updateRoute(route.key, "sourceId", sourceKind === "account_pool" ? "default" : "");
                             }}
                           >
                             <SelectTrigger id={`route-kind-${index}`} className="w-full min-w-0" aria-label={t("来源类型")}>
@@ -720,7 +777,7 @@ export function ModelCatalogModal({
                             <Select
                               value={route.sourceId}
                               onValueChange={(value) =>
-                                updateRoute(index, "sourceId", value || "")
+                                updateRoute(route.key, "sourceId", value || "")
                               }
                             >
                               <SelectTrigger
@@ -756,30 +813,34 @@ export function ModelCatalogModal({
                               }
                               disabled={route.sourceKind === "account_pool"}
                               onChange={(event) =>
-                                updateRoute(index, "sourceId", event.target.value)
+                                updateRoute(route.key, "sourceId", event.target.value)
                               }
                             />
                           )}
                         </div>
                         <div className="min-w-0 space-y-2">
                           <Label className="leading-5" htmlFor={`route-model-${index}`}>{t("上游模型")}</Label>
-                          <Input id={`route-model-${index}`} value={route.upstreamModel} onChange={(event) => updateRoute(index, "upstreamModel", event.target.value)} />
+                          <Input id={`route-model-${index}`} value={route.upstreamModel} onChange={(event) => updateRoute(route.key, "upstreamModel", event.target.value)} />
                         </div>
                       </div>
-                      <div className="grid items-end gap-3 md:grid-cols-[120px_120px_1fr_auto]">
+                      <div className="grid items-end gap-3 md:grid-cols-[110px_110px_110px_1fr_auto]">
+                        <div className="space-y-2">
+                          <Label htmlFor={`route-sort-order-${index}`}>{t("顺序号")}</Label>
+                          <Input id={`route-sort-order-${index}`} type="number" step="1" value={route.sortOrder} onChange={(event) => updateRoute(route.key, "sortOrder", event.target.value)} />
+                        </div>
                         <div className="space-y-2">
                           <Label htmlFor={`route-priority-${index}`}>{t("优先级")}</Label>
-                          <Input id={`route-priority-${index}`} type="number" value={route.priority} onChange={(event) => updateRoute(index, "priority", event.target.value)} />
+                          <Input id={`route-priority-${index}`} type="number" value={route.priority} onChange={(event) => updateRoute(route.key, "priority", event.target.value)} />
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor={`route-weight-${index}`}>{t("权重")}</Label>
-                          <Input id={`route-weight-${index}`} type="number" min="1" value={route.weight} onChange={(event) => updateRoute(index, "weight", event.target.value)} />
+                          <Input id={`route-weight-${index}`} type="number" min="1" value={route.weight} onChange={(event) => updateRoute(route.key, "weight", event.target.value)} />
                         </div>
                         <div className="flex h-9 items-center gap-2">
-                          <Switch id={`route-enabled-${index}`} aria-label={t("启用路由")} checked={route.enabled} onCheckedChange={(checked) => updateRoute(index, "enabled", checked)} />
+                          <Switch id={`route-enabled-${index}`} aria-label={t("启用路由")} checked={route.enabled} onCheckedChange={(checked) => updateRoute(route.key, "enabled", checked)} />
                           <Label htmlFor={`route-enabled-${index}`}>{t("启用路由")}</Label>
                         </div>
-                        <Button type="button" variant="ghost" size="icon" aria-label={t("删除路由")} onClick={() => updateDraft("routes", draft.routes.filter((_, routeIndex) => routeIndex !== index))}>
+                        <Button type="button" variant="ghost" size="icon" aria-label={t("删除路由")} onClick={() => updateDraft("routes", draft.routes.filter((item) => item.key !== route.key))}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>

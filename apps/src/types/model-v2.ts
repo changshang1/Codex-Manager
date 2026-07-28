@@ -27,6 +27,7 @@ export interface ModelRouteV2 {
   sourceId: string;
   upstreamModel: string;
   enabled: boolean;
+  sortOrder: number;
   priority: number;
   weight: number;
 }
@@ -34,6 +35,7 @@ export interface ModelRouteV2 {
 export interface ModelRouteBatchTemplateV2 {
   sourceKind: ModelRouteSourceKindV2;
   sourceId: string;
+  sortOrder: number;
   priority: number;
   weight: number;
 }

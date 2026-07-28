@@ -20,6 +20,7 @@ mod codex_skill_repositories;
 mod conversation_bindings;
 mod events;
 mod key_id_filters;
+mod marketplace;
 mod model_billing_v2;
 mod model_catalog_v2;
 mod model_groups;
@@ -38,6 +39,11 @@ mod settings;
 mod tokens;
 mod usage;
 
+pub use marketplace::{
+    MarketplaceAlertRule, MarketplaceAlertRuleInput, MarketplaceAlertState,
+    MarketplaceFavoriteMerchant, MarketplaceFavoriteMerchantInput, MarketplaceOffer,
+    MarketplaceOfferChange, MarketplaceOfferInput, MarketplaceSource, MarketplaceSourceInput,
+};
 pub use model_billing_v2::{
     ChargeComputationV2, ChargeSnapshotInputV2, ChargeSnapshotV2, ModelPriceTierV2,
 };
@@ -954,6 +960,22 @@ pub struct SourceTokenUsageRollup {
     pub source_kind: String,
     pub source_id: String,
     pub usage: TokenUsageRollup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TokenUsageSourceRef {
+    pub source_kind: String,
+    pub source_id: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsageSourceFilter {
+    /// Empty means both supported source kinds. `source_refs = None` then keeps
+    /// legacy/unattributed usage, preserving the existing global totals.
+    pub source_kinds: Vec<String>,
+    /// `None` means no concrete-source restriction; `Some([])` deliberately
+    /// means match nothing after availability filtering.
+    pub source_refs: Option<Vec<TokenUsageSourceRef>>,
 }
 
 #[derive(Debug, Clone)]
@@ -2251,6 +2273,35 @@ impl Storage {
         self.apply_sql_migration(
             "124_codex_skill_repositories",
             include_str!("../../migrations/124_codex_skill_repositories.sql"),
+        )?;
+        self.apply_sql_migration(
+            "125_marketplace",
+            include_str!("../../migrations/125_marketplace.sql"),
+        )?;
+        self.apply_sql_migration(
+            "126_marketplace_snapshots",
+            include_str!("../../migrations/126_marketplace_snapshots.sql"),
+        )?;
+        self.apply_sql_migration(
+            "127_marketplace_full_filters",
+            include_str!("../../migrations/127_marketplace_full_filters.sql"),
+        )?;
+        self.apply_sql_migration(
+            "128_marketplace_default_verified",
+            include_str!("../../migrations/128_marketplace_default_verified.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "129_model_route_sort_order",
+            include_str!("../../migrations/129_model_route_sort_order.sql"),
+            |s| s.ensure_model_route_sort_order(),
+        )?;
+        self.apply_sql_migration(
+            "130_marketplace_merchant_times",
+            include_str!("../../migrations/130_marketplace_merchant_times.sql"),
+        )?;
+        self.apply_sql_migration(
+            "131_marketplace_favorite_merchants",
+            include_str!("../../migrations/131_marketplace_favorite_merchants.sql"),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

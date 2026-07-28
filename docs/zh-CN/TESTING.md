@@ -11,7 +11,7 @@
 ## 1. 基础环境
 
 - Node.js 20
-- pnpm 9
+- pnpm 10（仓库当前固定为 `pnpm@10.30.3`）
 - Rust stable
 - PowerShell 7+（Windows 打包 / 脚本验证）
 
@@ -53,7 +53,7 @@ cargo test --workspace
 补充建议：
 
 ```powershell
-pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist
+pwsh -NoLogo -NoProfile -File scripts/rebuild.ps1 -Bundle nsis -CleanDist -Portable
 ```
 
 说明：
@@ -119,6 +119,18 @@ cargo build -p codexmanager-web --release
 cargo build -p codexmanager-start --release
 ```
 
+### 商品池专项
+
+涉及 `marketplace_*` migration/storage、PriceAI 抓取、二次验证、提醒或桌面通知时，除
+workspace 测试外至少覆盖：
+
+- 首次自动同步只建立提醒 baseline，不发送通知。
+- “立即同步全部”抓取完整 Plus 分页，不验证、不通知，并正确推进完整快照。
+- 自动同步按配置标签抓取，验证低价前 20 个和可能命中提醒规则的报价。
+- 持续满足条件不重复通知；离开条件后重新满足会通知。
+- 缺货变有货、验证状态变化、链接失效、产品/标签/商家范围和收藏商家持久化。
+- Tauri notification 权限/插件编译，以及 Web RPC 与 TypeScript wrapper 命令映射。
+
 ## 6. 协议适配 / 网关改动
 
 适用范围：
@@ -154,7 +166,7 @@ pwsh -NoLogo -NoProfile -File scripts/tests/chat_tools_hit_probe.ps1
 
 适用范围：
 
-- `apps/src/settings/`
+- `apps/src/app/settings/`
 - `crates/service/src/app_settings/`
 - `crates/core/src/storage/settings.rs`
 - 新增 `CODEXMANAGER_*` 配置项

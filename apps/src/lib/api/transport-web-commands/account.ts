@@ -97,6 +97,27 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
           includeSeries: source.include_series ?? source.includeSeries,
           seriesBucketSeconds:
             source.series_bucket_seconds ?? source.seriesBucketSeconds,
+          sourceKinds: source.source_kinds ?? source.sourceKinds,
+          selectedSources: source.selected_sources ?? source.selectedSources,
+          includeUnavailableSources:
+            source.include_unavailable_sources ?? source.includeUnavailableSources,
+        };
+      },
+    },
+    service_dashboard_source_options: {
+      rpcMethod: "dashboard/sourceOptions",
+      mapParams: (params) => {
+        const source = asRecord(params) ?? {};
+        return {
+          startTs: source.start_ts ?? source.startTs,
+          endTs: source.end_ts ?? source.endTs,
+          sourceKinds: source.source_kinds ?? source.sourceKinds,
+          search: source.search,
+          page: source.page,
+          pageSize: source.page_size ?? source.pageSize,
+          includeUnavailableSources:
+            source.include_unavailable_sources ?? source.includeUnavailableSources,
+          selectedSources: source.selected_sources ?? source.selectedSources,
         };
       },
     },
@@ -114,7 +135,17 @@ export function createAccountWebCommands(postWebRpc: WebRpcCaller): Record<strin
     },
     service_usage_read: { rpcMethod: "account/usage/read" },
     service_usage_list: { rpcMethod: "account/usage/list" },
-    service_usage_refresh: { rpcMethod: "account/usage/refresh" },
+    service_usage_refresh: {
+      rpcMethod: "account/usage/refresh",
+      mapParams: (params) => {
+        const source = asRecord(params) ?? {};
+        return {
+          accountId: source.account_id ?? source.accountId,
+          markUnavailableOnFailure:
+            source.mark_unavailable_on_failure ?? source.markUnavailableOnFailure,
+        };
+      },
+    },
     service_usage_reset_credits: { rpcMethod: "account/usage/resetCredits" },
     service_usage_reset_credit_consume: { rpcMethod: "account/usage/resetCredit/consume" },
     service_usage_aggregate: { rpcMethod: "account/usage/aggregate" },

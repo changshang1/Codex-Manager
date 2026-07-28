@@ -557,16 +557,16 @@ fn respond_error(request: Request, status: u16, message: &str, trace_id: Option<
 /// # 返回
 /// 返回函数执行结果
 fn normalize_candidate_order(mut candidates: Vec<AggregateApi>) -> Vec<AggregateApi> {
-    candidates.sort_by(|left, right| {
-        left.sort
-            .cmp(&right.sort)
-            .then(right.created_at.cmp(&left.created_at))
-            .then(left.id.cmp(&right.id))
-    });
+    // 连接顺序号只控制管理页展示；模型路由的优先级和权重决定运行时顺序。
+    // 未携带模型路由时使用稳定的 ID 顺序，避免展示排序意外改变流量。
+    candidates.sort_by(|left, right| left.id.cmp(&right.id));
     candidates
 }
 
-fn promote_preferred_aggregate_candidate(candidates: &mut Vec<AggregateApi>, preferred_id: &str) {
+pub(in super::super) fn promote_preferred_aggregate_candidate(
+    candidates: &mut Vec<AggregateApi>,
+    preferred_id: &str,
+) {
     let preferred_id = preferred_id.trim();
     if preferred_id.is_empty() {
         return;
@@ -593,69 +593,22 @@ fn promote_preferred_aggregate_candidate(candidates: &mut Vec<AggregateApi>, pre
 /// # 返回
 /// 无
 pub(crate) fn apply_gateway_route_strategy_to_aggregate_candidates(
-    candidates: &mut [AggregateApi],
-    key_id: &str,
-    model: Option<&str>,
-    preferred_aggregate_api_id: Option<&str>,
+    _candidates: &mut [AggregateApi],
+    _key_id: &str,
+    _model: Option<&str>,
+    _preferred_aggregate_api_id: Option<&str>,
 ) {
-    if candidates.len() <= 1 {
-        return;
-    }
-    if crate::gateway::current_route_strategy() != "balanced" {
-        return;
-    }
-
-    let preferred_id = preferred_aggregate_api_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let preserves_head = preferred_id
-        .zip(candidates.first())
-        .is_some_and(|(preferred_id, first)| first.id == preferred_id);
-
-    if preserves_head {
-        if candidates.len() > 1 {
-            super::super::super::route_hint::apply_balanced_round_robin(
-                &mut candidates[1..],
-                key_id,
-                model,
-            );
-        }
-    } else {
-        super::super::super::route_hint::apply_balanced_round_robin(candidates, key_id, model);
-    }
+    // 全局“顺序/均衡”仅控制账号池；聚合 API 已由模型路由独立调度。
 }
 
+#[cfg(test)]
 pub(crate) fn preview_gateway_route_strategy_to_aggregate_candidates(
-    candidates: &mut [AggregateApi],
-    key_id: &str,
-    model: Option<&str>,
-    preferred_aggregate_api_id: Option<&str>,
+    _candidates: &mut [AggregateApi],
+    _key_id: &str,
+    _model: Option<&str>,
+    _preferred_aggregate_api_id: Option<&str>,
 ) {
-    if candidates.len() <= 1 {
-        return;
-    }
-    if crate::gateway::current_route_strategy() != "balanced" {
-        return;
-    }
-
-    let preferred_id = preferred_aggregate_api_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let preserves_head = preferred_id
-        .zip(candidates.first())
-        .is_some_and(|(preferred_id, first)| first.id == preferred_id);
-
-    if preserves_head {
-        if candidates.len() > 1 {
-            super::super::super::route_hint::preview_balanced_round_robin(
-                &mut candidates[1..],
-                key_id,
-                model,
-            );
-        }
-    } else {
-        super::super::super::route_hint::preview_balanced_round_robin(candidates, key_id, model);
-    }
+    // 与实际兼容钩子保持一致，预览也不改写模型路由顺序。
 }
 
 pub(crate) fn prepare_first_aggregate_candidate_client(
@@ -1043,13 +996,22 @@ pub(in super::super) struct AggregateProxyRequest<'a> {
     pub effective_service_tier_for_log: Option<&'a str>,
     pub service_tier_source_for_log: Option<&'a str>,
     pub aggregate_api_candidates: Vec<AggregateApi>,
+    pub defer_exhaustion_response: bool,
     pub request_deadline: Option<Instant>,
     pub started_at: Instant,
 }
 
+pub(in super::super) enum AggregateProxyResult {
+    Handled,
+    Exhausted {
+        request: Box<Request>,
+        message: String,
+    },
+}
+
 pub(in super::super) fn proxy_aggregate_request(
     params: AggregateProxyRequest<'_>,
-) -> Result<(), String> {
+) -> Result<AggregateProxyResult, String> {
     let AggregateProxyRequest {
         request,
         storage,
@@ -1075,6 +1037,7 @@ pub(in super::super) fn proxy_aggregate_request(
         effective_service_tier_for_log,
         service_tier_source_for_log,
         aggregate_api_candidates,
+        defer_exhaustion_response,
         request_deadline,
         started_at,
     } = params;
@@ -1082,6 +1045,12 @@ pub(in super::super) fn proxy_aggregate_request(
         super::super::super::request_log::estimate_input_tokens_from_body(body.as_ref());
     if aggregate_api_candidates.is_empty() {
         let message = "aggregate api not found".to_string();
+        if defer_exhaustion_response {
+            return Ok(AggregateProxyResult::Exhausted {
+                request: Box::new(request),
+                message,
+            });
+        }
         super::super::super::record_gateway_request_outcome(path, 404, Some("aggregate_api"));
         super::super::super::trace_log::log_request_final(
             trace_id,
@@ -1093,7 +1062,7 @@ pub(in super::super) fn proxy_aggregate_request(
         );
         let request = request;
         respond_error(request, 404, message.as_str(), Some(trace_id));
-        return Ok(());
+        return Ok(AggregateProxyResult::Handled);
     }
 
     let mut request = Some(request);
@@ -1208,6 +1177,12 @@ pub(in super::super) fn proxy_aggregate_request(
                 let request = request.take().ok_or_else(|| {
                     "aggregate api request already consumed before timeout response".to_string()
                 })?;
+                if defer_exhaustion_response {
+                    return Ok(AggregateProxyResult::Exhausted {
+                        request: Box::new(request),
+                        message,
+                    });
+                }
                 super::super::super::record_gateway_request_outcome(
                     path,
                     504,
@@ -1262,7 +1237,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     Some(started_at.elapsed().as_millis()),
                 );
                 respond_error(request, 504, message.as_str(), Some(trace_id));
-                return Ok(());
+                return Ok(AggregateProxyResult::Handled);
             }
 
             let mut url = base_upstream_url.clone();
@@ -1378,6 +1353,24 @@ pub(in super::super) fn proxy_aggregate_request(
                 break;
             }
 
+            let upstream = if defer_exhaustion_response && !is_stream {
+                match GatewayUpstreamResponse::Blocking(upstream).into_buffered() {
+                    Ok((_, buffered)) => buffered,
+                    Err(err) => {
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(err);
+                        last_failure_status = 502;
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            } else {
+                GatewayUpstreamResponse::Blocking(upstream)
+            };
+
             let inflight_guard = super::super::super::acquire_account_inflight(key_id);
             let passthrough_sse_protocol =
                 resolve_passthrough_sse_protocol(path, response_adapter_for_candidate);
@@ -1386,7 +1379,7 @@ pub(in super::super) fn proxy_aggregate_request(
             })?;
             let bridge = super::super::super::respond_with_upstream(
                 request,
-                GatewayUpstreamResponse::Blocking(upstream),
+                upstream,
                 inflight_guard,
                 response_adapter_for_candidate,
                 passthrough_sse_protocol,
@@ -1510,7 +1503,7 @@ pub(in super::super) fn proxy_aggregate_request(
         }
 
         if succeeded {
-            return Ok(());
+            return Ok(AggregateProxyResult::Handled);
         }
 
         if candidate_idx + 1 < total_candidates {
@@ -1524,6 +1517,12 @@ pub(in super::super) fn proxy_aggregate_request(
     let request = request.take().ok_or_else(|| {
         "aggregate api request already consumed before failure response".to_string()
     })?;
+    if defer_exhaustion_response {
+        return Ok(AggregateProxyResult::Exhausted {
+            request: Box::new(request),
+            message,
+        });
+    }
     super::super::super::record_gateway_request_outcome(path, status_code, Some("aggregate_api"));
     super::super::super::trace_log::log_request_final(
         trace_id,
@@ -1574,7 +1573,7 @@ pub(in super::super) fn proxy_aggregate_request(
         Some(started_at.elapsed().as_millis()),
     );
     respond_error(request, status_code, message.as_str(), Some(trace_id));
-    Ok(())
+    Ok(AggregateProxyResult::Handled)
 }
 
 fn aggregate_api_secrets_by_candidate_id(
@@ -1728,6 +1727,14 @@ mod bridge_tests {
         items.iter().map(|item| item.id.clone()).collect()
     }
 
+    #[test]
+    fn connection_sort_does_not_control_runtime_candidate_order() {
+        let candidates =
+            normalize_candidate_order(vec![candidate("agg-z", -100), candidate("agg-a", 100)]);
+
+        assert_eq!(ids(&candidates), vec!["agg-a", "agg-z"]);
+    }
+
     /// 函数 `balanced_route_strategy_rotates_aggregate_candidates`
     ///
     /// 作者: gaohongshun
@@ -1740,7 +1747,7 @@ mod bridge_tests {
     /// # 返回
     /// 无
     #[test]
-    fn balanced_route_strategy_rotates_aggregate_candidates() {
+    fn balanced_account_strategy_does_not_rotate_aggregate_candidates() {
         let _guard = crate::test_env_guard();
         let previous = std::env::var("CODEXMANAGER_ROUTE_STRATEGY").ok();
         std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", "balanced");
@@ -1770,7 +1777,7 @@ mod bridge_tests {
             Some("gpt-5.4-mini"),
             None,
         );
-        assert_eq!(ids(&second), vec!["agg-b", "agg-c", "agg-a"]);
+        assert_eq!(ids(&second), vec!["agg-a", "agg-b", "agg-c"]);
 
         if let Some(value) = previous {
             std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", value);
@@ -1781,7 +1788,7 @@ mod bridge_tests {
     }
 
     #[test]
-    fn preview_route_strategy_does_not_advance_balanced_aggregate_order() {
+    fn aggregate_route_compatibility_hooks_are_both_noops() {
         let _guard = crate::test_env_guard();
         let previous = std::env::var("CODEXMANAGER_ROUTE_STRATEGY").ok();
         std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", "balanced");
@@ -1816,7 +1823,7 @@ mod bridge_tests {
             model,
             None,
         );
-        assert_eq!(ids(&second_apply), vec!["agg-b", "agg-c", "agg-a"]);
+        assert_eq!(ids(&second_apply), vec!["agg-a", "agg-b", "agg-c"]);
 
         if let Some(value) = previous {
             std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", value);
@@ -1884,7 +1891,7 @@ mod bridge_tests {
             Some("gpt-5.4-mini"),
             Some("agg-preferred"),
         );
-        assert_eq!(ids(&second), vec!["agg-preferred", "agg-c", "agg-b"]);
+        assert_eq!(ids(&second), vec!["agg-preferred", "agg-b", "agg-c"]);
 
         if let Some(value) = previous {
             std::env::set_var("CODEXMANAGER_ROUTE_STRATEGY", value);

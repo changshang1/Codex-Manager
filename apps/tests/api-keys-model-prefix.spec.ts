@@ -430,7 +430,7 @@ test("api key modal displays and submits hybrid rotation", async ({ page }) => {
   expect(params.accountGroupFilter).toBe("team-a");
 });
 
-test("api key modal can select hybrid rotation on create", async ({ page }) => {
+test("api key modal can select aggregate-first hybrid rotation on create", async ({ page }) => {
   const createPayloads: Record<string, unknown>[] = [];
   await mockRuntime(page);
   await mockApiKeyRpc(page, {
@@ -452,7 +452,7 @@ test("api key modal can select hybrid rotation on create", async ({ page }) => {
   await expect(dialog.getByLabel("自定义 API Key (可选)")).toBeVisible();
   await dialog.getByLabel("自定义 API Key (可选)").fill("sk-cm-custom-fixed");
   await dialog.getByText("账号轮转", { exact: true }).click();
-  await page.getByText("混合轮转（账号优先）", { exact: true }).click();
+  await page.getByText("混合轮转（聚合 API 优先）", { exact: true }).click();
   await expect(dialog.getByText("账号计划筛选", { exact: true })).toBeVisible();
   await expect(dialog.getByText("账号分组筛选", { exact: true })).toBeVisible();
   await dialog.getByRole("button", { name: "完成" }).click();
@@ -460,6 +460,6 @@ test("api key modal can select hybrid rotation on create", async ({ page }) => {
   await expect.poll(() => createPayloads.length).toBe(1);
   await expect(dialog).not.toBeVisible();
   const params = createPayloads[0]?.params as Record<string, unknown>;
-  expect(params.rotationStrategy).toBe("hybrid_rotation");
+  expect(params.rotationStrategy).toBe("hybrid_aggregate_first_rotation");
   expect(params.customKey).toBe("sk-cm-custom-fixed");
 });

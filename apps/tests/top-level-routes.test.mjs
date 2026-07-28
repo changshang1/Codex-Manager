@@ -53,7 +53,7 @@ test("accounts 模式管理员菜单按任务域分组并保留账号体系入�
     sections.map((section) => section.routes.map((route) => route.path)),
     [
       ["/"],
-      ["/accounts", "/aggregate-api"],
+      ["/accounts", "/aggregate-api", "/marketplace"],
       ["/platform-mode", "/apikeys"],
       ["/models", "/model-groups"],
       ["/account-manager"],
@@ -84,6 +84,7 @@ test("none/password 单人管理员模式隐藏账号体系入口但保留单人
         "/",
         "/accounts",
         "/aggregate-api",
+        "/marketplace",
         "/platform-mode",
         "/apikeys",
         "/models",

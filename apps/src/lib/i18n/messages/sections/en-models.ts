@@ -140,6 +140,7 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
     "Select models and configure at least one route",
   "请选择聚合 API": "Select an Aggregate API",
   "聚合 API ID": "Aggregate API ID",
+  "路由顺序号必须是整数": "Route display order must be an integer",
   "路由优先级必须是整数": "Route priority must be an integer",
   "路由权重必须是正整数": "Route weight must be a positive integer",
   "不能重复分配同一个路由来源": "The same route source cannot be assigned twice",

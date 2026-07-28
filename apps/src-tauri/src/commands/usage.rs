@@ -62,6 +62,7 @@ pub async fn service_usage_aggregate(addr: Option<String>) -> Result<serde_json:
 /// # 参数
 /// - addr: 参数 addr
 /// - account_id: 参数 account_id
+/// - mark_unavailable_on_failure: 快速开启校验失败时将账号健康状态标记为不可用
 ///
 /// # 返回
 /// 返回函数执行结果
@@ -69,8 +70,19 @@ pub async fn service_usage_aggregate(addr: Option<String>) -> Result<serde_json:
 pub async fn service_usage_refresh(
     addr: Option<String>,
     account_id: Option<String>,
+    mark_unavailable_on_failure: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    let params = account_id.map(|id| serde_json::json!({ "accountId": id }));
+    let mut params = serde_json::Map::new();
+    if let Some(id) = account_id {
+        params.insert("accountId".to_string(), serde_json::json!(id));
+    }
+    if let Some(mark_unavailable_on_failure) = mark_unavailable_on_failure {
+        params.insert(
+            "markUnavailableOnFailure".to_string(),
+            serde_json::json!(mark_unavailable_on_failure),
+        );
+    }
+    let params = (!params.is_empty()).then(|| serde_json::Value::Object(params));
     rpc_call_in_background("account/usage/refresh", addr, params).await
 }
 

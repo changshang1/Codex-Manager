@@ -6,7 +6,7 @@ use super::{
     now_ts, ApiKeyModelTokenUsageSummary, ApiKeyTokenUsageSummary, DailyTokenUsageRollup,
     MemberDashboardUsageBreakdownSnapshot, ModelTokenUsageRollup, RequestLogQuerySummary,
     RequestLogTodaySummary, RequestTokenStat, SourceTokenUsageRollup, Storage, TokenUsageRollup,
-    TokenUsageSummary, UserTokenUsageRollup,
+    TokenUsageSourceFilter, TokenUsageSourceRef, TokenUsageSummary, UserTokenUsageRollup,
 };
 
 const DEFAULT_REQUEST_TOKEN_STATS_RETAIN_DAYS: i64 = 14;
@@ -264,6 +264,129 @@ fn hourly_source_id_expr(source_kind: &str) -> Option<&'static str> {
         ),
         _ => None,
     }
+}
+
+const DASHBOARD_SOURCE_FILTER_TABLE: &str = "temp_dashboard_usage_source_filter";
+
+struct TempDashboardSourceFilter<'a> {
+    storage: &'a Storage,
+}
+
+impl<'a> TempDashboardSourceFilter<'a> {
+    fn create(storage: &'a Storage, refs: &[TokenUsageSourceRef]) -> Result<Self> {
+        storage.conn.execute_batch(&format!(
+            "CREATE TEMP TABLE IF NOT EXISTS {DASHBOARD_SOURCE_FILTER_TABLE} (
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                PRIMARY KEY(source_kind, source_id)
+             );
+             DELETE FROM {DASHBOARD_SOURCE_FILTER_TABLE};"
+        ))?;
+        let mut insert = storage.conn.prepare(&format!(
+            "INSERT OR IGNORE INTO {DASHBOARD_SOURCE_FILTER_TABLE} (source_kind, source_id)
+             VALUES (?1, ?2)"
+        ))?;
+        for source_ref in refs {
+            let source_kind = source_ref.source_kind.trim();
+            let source_id = source_ref.source_id.trim();
+            if matches!(source_kind, "openai_account" | "aggregate_api") && !source_id.is_empty() {
+                insert.execute((source_kind, source_id))?;
+            }
+        }
+        drop(insert);
+        Ok(Self { storage })
+    }
+}
+
+impl Drop for TempDashboardSourceFilter<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .storage
+            .conn
+            .execute(&format!("DELETE FROM {DASHBOARD_SOURCE_FILTER_TABLE}"), []);
+    }
+}
+
+fn normalized_dashboard_source_kinds(filter: &TokenUsageSourceFilter) -> Vec<&'static str> {
+    let mut kinds = filter
+        .source_kinds
+        .iter()
+        .filter_map(|kind| match kind.trim() {
+            "openai_account" => Some("openai_account"),
+            "aggregate_api" => Some("aggregate_api"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    kinds.sort_unstable();
+    kinds.dedup();
+    if filter.source_kinds.is_empty() {
+        vec!["aggregate_api", "openai_account"]
+    } else {
+        kinds
+    }
+}
+
+fn dashboard_source_filter_clause(filter: Option<&TokenUsageSourceFilter>, hourly: bool) -> String {
+    let Some(filter) = filter else {
+        return String::new();
+    };
+    let kinds = normalized_dashboard_source_kinds(filter);
+    if kinds.is_empty() {
+        return " AND 1 = 0".to_string();
+    }
+
+    let branches = kinds
+        .into_iter()
+        .filter_map(|kind| {
+            let id_expr = if hourly {
+                hourly_source_id_expr(kind)
+            } else {
+                source_id_expr(kind)
+            }?;
+            if filter.source_refs.is_some() {
+                Some(format!(
+                    "(f.source_kind = '{kind}' AND f.source_id = {id_expr})"
+                ))
+            } else {
+                Some(format!("({id_expr}) IS NOT NULL"))
+            }
+        })
+        .collect::<Vec<_>>();
+    if branches.is_empty() {
+        return " AND 1 = 0".to_string();
+    }
+    if filter.source_refs.is_some() {
+        format!(
+            " AND EXISTS (
+                SELECT 1 FROM {DASHBOARD_SOURCE_FILTER_TABLE} f
+                WHERE {}
+             )",
+            branches.join(" OR ")
+        )
+    } else {
+        format!(" AND ({})", branches.join(" OR "))
+    }
+}
+
+fn dashboard_source_filter_matches_nothing(filter: Option<&TokenUsageSourceFilter>) -> bool {
+    filter.is_some_and(|filter| {
+        (!filter.source_kinds.is_empty() && normalized_dashboard_source_kinds(filter).is_empty())
+            || filter
+                .source_refs
+                .as_ref()
+                .is_some_and(|refs| refs.is_empty())
+    })
+}
+
+fn prepare_dashboard_source_filter<'a>(
+    storage: &'a Storage,
+    filter: Option<&TokenUsageSourceFilter>,
+) -> Result<Option<TempDashboardSourceFilter<'a>>> {
+    filter
+        .and_then(|filter| filter.source_refs.as_deref())
+        .filter(|refs| !refs.is_empty())
+        .map(|refs| TempDashboardSourceFilter::create(storage, refs))
+        .transpose()
 }
 
 fn hourly_rollup_range_clause() -> &'static str {
@@ -1258,19 +1381,35 @@ impl Storage {
         end_ts: i64,
         bucket_seconds: i64,
     ) -> Result<Vec<DailyTokenUsageRollup>> {
+        self.summarize_request_token_stats_daily_filtered(start_ts, end_ts, bucket_seconds, None)
+    }
+
+    pub fn summarize_request_token_stats_daily_filtered(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+        bucket_seconds: i64,
+        source_filter: Option<&TokenUsageSourceFilter>,
+    ) -> Result<Vec<DailyTokenUsageRollup>> {
         if end_ts <= start_ts {
             return Ok(Vec::new());
         }
+        if dashboard_source_filter_matches_nothing(source_filter) {
+            return Ok(Vec::new());
+        }
+        let _source_filter_table = prepare_dashboard_source_filter(self, source_filter)?;
+        let raw_source_clause = dashboard_source_filter_clause(source_filter, false);
+        let hourly_source_clause = dashboard_source_filter_clause(source_filter, true);
         let bucket_seconds = bucket_seconds.max(1);
         let raw = raw_token_rollup_select(
             "?1 + CAST((t.created_at - ?1) / ?3 AS INTEGER) * ?3 AS bucket_start,",
-            "t.created_at >= ?1 AND t.created_at < ?2",
+            &format!("t.created_at >= ?1 AND t.created_at < ?2{raw_source_clause}"),
             "GROUP BY bucket_start",
             false,
         );
         let hourly = hourly_token_rollup_select(
             "?1 + CAST((h.bucket_start - ?1) / ?3 AS INTEGER) * ?3 AS bucket_start,",
-            hourly_rollup_range_clause(),
+            &format!("{}{hourly_source_clause}", hourly_rollup_range_clause()),
             "GROUP BY bucket_start",
         );
         let sql = request_token_stats_daily_rollup_sql(&raw, &hourly);
@@ -1294,21 +1433,42 @@ impl Storage {
         end_ts: i64,
         bucket_seconds: i64,
     ) -> Result<Vec<ModelTokenUsageRollup>> {
+        self.summarize_request_token_stats_by_model_timeline_filtered(
+            start_ts,
+            end_ts,
+            bucket_seconds,
+            None,
+        )
+    }
+
+    pub fn summarize_request_token_stats_by_model_timeline_filtered(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+        bucket_seconds: i64,
+        source_filter: Option<&TokenUsageSourceFilter>,
+    ) -> Result<Vec<ModelTokenUsageRollup>> {
         if end_ts <= start_ts {
             return Ok(Vec::new());
         }
+        if dashboard_source_filter_matches_nothing(source_filter) {
+            return Ok(Vec::new());
+        }
+        let _source_filter_table = prepare_dashboard_source_filter(self, source_filter)?;
+        let raw_source_clause = dashboard_source_filter_clause(source_filter, false);
+        let hourly_source_clause = dashboard_source_filter_clause(source_filter, true);
         let bucket_seconds = bucket_seconds.max(1);
         let raw = raw_token_rollup_select(
             "?1 + CAST((t.created_at - ?1) / ?3 AS INTEGER) * ?3 AS bucket_start,
              COALESCE(NULLIF(TRIM(t.model), ''), 'unknown') AS normalized_model,",
-            "t.created_at >= ?1 AND t.created_at < ?2",
+            &format!("t.created_at >= ?1 AND t.created_at < ?2{raw_source_clause}"),
             "GROUP BY bucket_start, normalized_model",
             false,
         );
         let hourly = hourly_token_rollup_select(
             "?1 + CAST((h.bucket_start - ?1) / ?3 AS INTEGER) * ?3 AS bucket_start,
              COALESCE(NULLIF(TRIM(h.model), ''), 'unknown') AS normalized_model,",
-            hourly_rollup_range_clause(),
+            &format!("{}{hourly_source_clause}", hourly_rollup_range_clause()),
             "GROUP BY bucket_start, normalized_model",
         );
         let sql = request_token_stats_model_timeline_sql(&raw, &hourly);
@@ -1341,24 +1501,44 @@ impl Storage {
         end_ts: i64,
         limit: Option<usize>,
     ) -> Result<Vec<UserTokenUsageRollup>> {
+        self.summarize_request_token_stats_by_user_between_limited_filtered(
+            start_ts, end_ts, limit, None,
+        )
+    }
+
+    pub fn summarize_request_token_stats_by_user_between_limited_filtered(
+        &self,
+        start_ts: i64,
+        end_ts: i64,
+        limit: Option<usize>,
+        source_filter: Option<&TokenUsageSourceFilter>,
+    ) -> Result<Vec<UserTokenUsageRollup>> {
         if end_ts <= start_ts {
             return Ok(Vec::new());
         }
         if limit == Some(0) {
             return Ok(Vec::new());
         }
+        if dashboard_source_filter_matches_nothing(source_filter) {
+            return Ok(Vec::new());
+        }
+        let _source_filter_table = prepare_dashboard_source_filter(self, source_filter)?;
+        let raw_source_clause = dashboard_source_filter_clause(source_filter, false);
+        let hourly_source_clause = dashboard_source_filter_clause(source_filter, true);
         let limit_clause = sql_limit_clause(limit);
         let raw = raw_token_rollup_select(
             &format!("{USER_OWNER_EXPR} AS user_id,"),
-            &format!("t.created_at >= ?1 AND t.created_at < ?2 AND {USER_OWNER_EXPR} IS NOT NULL"),
+            &format!(
+                "t.created_at >= ?1 AND t.created_at < ?2 AND {USER_OWNER_EXPR} IS NOT NULL{raw_source_clause}"
+            ),
             "GROUP BY user_id",
             true,
         );
         let hourly = hourly_token_rollup_select(
             "NULLIF(TRIM(h.owner_user_id), '') AS user_id,",
             &format!(
-                "{} AND NULLIF(TRIM(h.owner_user_id), '') IS NOT NULL",
-                hourly_rollup_range_clause()
+                "{} AND NULLIF(TRIM(h.owner_user_id), '') IS NOT NULL{hourly_source_clause}",
+                hourly_rollup_range_clause(),
             ),
             "GROUP BY user_id",
         );
@@ -1471,12 +1651,35 @@ impl Storage {
         end_ts: i64,
         limit_per_source_kind: Option<usize>,
     ) -> Result<Vec<SourceTokenUsageRollup>> {
+        self.summarize_request_token_stats_by_sources_between_limited_filtered(
+            source_kinds,
+            start_ts,
+            end_ts,
+            limit_per_source_kind,
+            None,
+        )
+    }
+
+    pub fn summarize_request_token_stats_by_sources_between_limited_filtered(
+        &self,
+        source_kinds: &[&str],
+        start_ts: i64,
+        end_ts: i64,
+        limit_per_source_kind: Option<usize>,
+        source_filter: Option<&TokenUsageSourceFilter>,
+    ) -> Result<Vec<SourceTokenUsageRollup>> {
         if end_ts <= start_ts {
             return Ok(Vec::new());
         }
         if limit_per_source_kind == Some(0) {
             return Ok(Vec::new());
         }
+        if dashboard_source_filter_matches_nothing(source_filter) {
+            return Ok(Vec::new());
+        }
+        let _source_filter_table = prepare_dashboard_source_filter(self, source_filter)?;
+        let raw_source_clause = dashboard_source_filter_clause(source_filter, false);
+        let hourly_source_clause = dashboard_source_filter_clause(source_filter, true);
         let mut normalized_source_kinds = source_kinds
             .iter()
             .map(|source_kind| source_kind.trim())
@@ -1499,7 +1702,7 @@ impl Storage {
             raw_parts.push(raw_token_rollup_select(
                 &format!("'{source_kind}' AS source_kind, {source_id_expr} AS source_id,"),
                 &format!(
-                    "t.created_at >= ?1 AND t.created_at < ?2 AND {source_id_expr} IS NOT NULL"
+                    "t.created_at >= ?1 AND t.created_at < ?2 AND {source_id_expr} IS NOT NULL{raw_source_clause}"
                 ),
                 "GROUP BY source_kind, source_id",
                 false,
@@ -1507,8 +1710,8 @@ impl Storage {
             hourly_parts.push(hourly_token_rollup_select(
                 &format!("'{source_kind}' AS source_kind, {hourly_source_id_expr} AS source_id,"),
                 &format!(
-                    "{} AND {hourly_source_id_expr} IS NOT NULL",
-                    hourly_rollup_range_clause()
+                    "{} AND {hourly_source_id_expr} IS NOT NULL{hourly_source_clause}",
+                    hourly_rollup_range_clause(),
                 ),
                 "GROUP BY source_kind, source_id",
             ));

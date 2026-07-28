@@ -875,6 +875,82 @@ fn sql_migration_can_fallback_to_compat_when_schema_already_exists() {
 }
 
 #[test]
+fn model_route_sort_order_migration_backfills_the_previous_page_order() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage
+        .conn
+        .execute_batch(
+            "CREATE TABLE model_routes (
+                id TEXT PRIMARY KEY,
+                model_id TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                upstream_model TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                weight INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             INSERT INTO model_routes
+               (id,model_id,source_kind,source_id,upstream_model,priority,created_at,updated_at)
+             VALUES
+               ('route-b','model-1','aggregate_api','b','b',5,1,1),
+               ('route-a','model-1','aggregate_api','a','a',5,1,1),
+               ('route-c','model-1','account_pool','default','c',0,1,1),
+               ('route-d','model-2','account_pool','default','d',0,1,1);",
+        )
+        .expect("create pre-sort-order model routes");
+    storage
+        .ensure_migrations_table()
+        .expect("ensure migration tracker");
+
+    storage
+        .apply_sql_or_compat_migration(
+            "129_model_route_sort_order",
+            include_str!("../../migrations/129_model_route_sort_order.sql"),
+            |s| s.ensure_model_route_sort_order(),
+        )
+        .expect("migrate model route sort order");
+
+    let mut stmt = storage
+        .conn
+        .prepare("SELECT id,sort_order FROM model_routes ORDER BY model_id,sort_order,id")
+        .unwrap();
+    let routes = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        routes,
+        vec![
+            ("route-a".to_string(), 10),
+            ("route-b".to_string(), 20),
+            ("route-c".to_string(), 30),
+            ("route-d".to_string(), 10),
+        ]
+    );
+    assert!(storage
+        .has_column("model_routes", "sort_order")
+        .expect("check sort_order column"));
+    let index_exists: bool = storage
+        .conn
+        .query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM sqlite_master
+               WHERE type='index' AND name='idx_model_routes_model_sort_order'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .expect("check model route sort index");
+    assert!(index_exists);
+}
+
+#[test]
 fn init_repairs_legacy_aggregate_api_balance_columns_before_indexes() {
     let storage = Storage::open_in_memory().expect("open in memory");
     storage

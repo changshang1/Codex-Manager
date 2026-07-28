@@ -15,7 +15,6 @@ import { useI18n } from "@/lib/i18n/provider";
 import {
   buildAccountsByMovedOrder,
   buildAccountsBySizeOrder,
-  buildAccountOrderUpdates,
   type AccountEditorState,
   type AccountMoveDirection,
   type AccountMovePlacement,
@@ -24,6 +23,11 @@ import {
   normalizeTagsDraft,
   type StatusFilter,
 } from "@/app/accounts/accounts-page-helpers";
+import {
+  buildAccountGroupOrderUpdates,
+  buildAccountOrderUpdates,
+  groupAccountsByAvailability,
+} from "@/lib/account-ordering";
 import { AccountsPageView } from "@/app/accounts/accounts-page-view";
 import { isBannedAccount, isLimitedAccount } from "@/lib/utils/usage";
 import type { Account, ProxyProfile } from "@/types";
@@ -158,7 +162,7 @@ export default function AccountsPage() {
       : "ZIP";
 
   const filteredAccounts = useMemo(() => {
-    return accounts.filter((account) => {
+    const matchedAccounts = accounts.filter((account) => {
       const matchSearch =
         !search ||
         account.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -174,6 +178,10 @@ export default function AccountsPage() {
         (statusFilter === "banned" && isBannedAccount(account));
       return matchSearch && matchPlan && matchStatus;
     });
+
+    // Availability grouping is presentation-only. The persisted sort values stay untouched,
+    // so gateway account routing continues to use the configured account order.
+    return groupAccountsByAvailability(matchedAccounts);
   }, [accounts, planFilter, search, statusFilter]);
 
   const statusFilterOptions = useMemo(
@@ -606,59 +614,67 @@ const toggleCleanupStatus = (rawStatus: string) => {
     );
   };
 
-  // 顶部/底部按全量列表定位，上移/下移仍按当前筛选结果取相邻账号。
-  const resolveAccountMovePlacement = (
-    account: Account,
-    direction: AccountMoveDirection,
-  ): AccountMovePlacement | null => {
-    if (direction === "top" || direction === "bottom") {
-      const boundaryAccount =
-        direction === "top" ? accounts[0] : accounts[accounts.length - 1];
-      if (boundaryAccount?.id === account.id) {
-        toast.info(
-          direction === "top"
-            ? t("当前账号已经在最前面")
-            : t("当前账号已经在最后面"),
-        );
-        return null;
-      }
-      return { type: direction };
-    }
-
-    const filteredIndex = filteredAccountIndexMap.get(account.id);
-    if (filteredIndex == null) {
-      toast.error(t("未找到当前账号，请刷新后重试"));
-      return null;
-    }
-
-    const targetFilteredIndex =
-      direction === "up" ? filteredIndex - 1 : filteredIndex + 1;
-    if (targetFilteredIndex < 0) {
-      toast.info(t("当前账号已经在最前面"));
-      return null;
-    }
-    if (targetFilteredIndex >= filteredAccounts.length) {
-      toast.info(t("当前账号已经在最后面"));
-      return null;
-    }
-
-    return {
-      type: direction === "up" ? "before" : "after",
-      anchorAccountId: filteredAccounts[targetFilteredIndex].id,
-    };
-  };
-
   const handleMoveAccount = async (
     account: Account,
     direction: AccountMoveDirection,
   ) => {
-    const placement = resolveAccountMovePlacement(account, direction);
-    if (!placement) {
-      return;
+    const originalGroup = accounts.filter(
+      (item) => item.isAvailable === account.isAvailable,
+    );
+    let placement: AccountMovePlacement;
+
+    if (direction === "top" || direction === "bottom") {
+      const boundaryAccount =
+        direction === "top"
+          ? originalGroup[0]
+          : originalGroup[originalGroup.length - 1];
+      if (boundaryAccount?.id === account.id) {
+        toast.info(
+          direction === "top"
+            ? t("当前账号已经在分组最前面")
+            : t("当前账号已经在分组最后面"),
+        );
+        return;
+      }
+      placement = { type: direction };
+    } else {
+      const filteredIndex = filteredAccountIndexMap.get(account.id);
+      if (filteredIndex == null) {
+        toast.error(t("未找到当前账号，请刷新后重试"));
+        return;
+      }
+
+      const targetFilteredIndex =
+        direction === "up" ? filteredIndex - 1 : filteredIndex + 1;
+      if (
+        targetFilteredIndex < 0 ||
+        targetFilteredIndex >= filteredAccounts.length
+      ) {
+        toast.info(
+          direction === "up"
+            ? t("当前账号已经在分组最前面")
+            : t("当前账号已经在分组最后面"),
+        );
+        return;
+      }
+
+      const targetAccount = filteredAccounts[targetFilteredIndex];
+      if (targetAccount.isAvailable !== account.isAvailable) {
+        toast.info(
+          direction === "up"
+            ? t("当前账号已经在分组最前面")
+            : t("当前账号已经在分组最后面"),
+        );
+        return;
+      }
+      placement = {
+        type: direction === "up" ? "before" : "after",
+        anchorAccountId: targetAccount.id,
+      };
     }
 
     const reorderedAccounts = buildAccountsByMovedOrder(
-      accounts,
+      originalGroup,
       account,
       placement,
     );
@@ -667,7 +683,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       return;
     }
 
-    const updates = buildAccountOrderUpdates(reorderedAccounts);
+    const updates = buildAccountGroupOrderUpdates(originalGroup, reorderedAccounts);
     if (!updates.length) {
       toast.info(t("账号顺序未变化"));
       return;

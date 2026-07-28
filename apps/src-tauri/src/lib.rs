@@ -87,6 +87,7 @@ pub fn run() {
                 .app_name("CodexManager")
                 .build(),
         )
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             log::info!(
                 "secondary instance intercepted; focusing main window (args: {:?}, cwd: {})",
@@ -135,6 +136,20 @@ pub fn run() {
                     usage_refresh_event_app.emit(USAGE_REFRESH_COMPLETED_EVENT, payload)
                 {
                     log::warn!("emit usage refresh completed event failed: {}", err);
+                }
+            });
+            let marketplace_notification_app = app.handle().clone();
+            codexmanager_service::set_marketplace_notification_handler(move |summary| {
+                use tauri_plugin_notification::NotificationExt;
+
+                if let Err(err) = marketplace_notification_app
+                    .notification()
+                    .builder()
+                    .title("CodexManager 商品池")
+                    .body(summary)
+                    .show()
+                {
+                    log::warn!("marketplace desktop notification failed: {}", err);
                 }
             });
             if let Err(err) = setup_tray(app.handle()) {

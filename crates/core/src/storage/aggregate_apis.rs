@@ -455,6 +455,31 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_aggregate_api_sorts(
+        &self,
+        updates: &[(String, i64)],
+        updated_at: i64,
+    ) -> Result<usize> {
+        if updates.is_empty() {
+            return Ok(0);
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut updated = 0usize;
+        for (api_id, sort) in updates {
+            let changed =
+                tx.execute(update_aggregate_api_sort_sql(), (sort, updated_at, api_id))?;
+            if changed == 0 {
+                return Err(rusqlite::Error::InvalidParameterName(format!(
+                    "aggregate api not found: {api_id}"
+                )));
+            }
+            updated = updated.saturating_add(changed);
+        }
+        tx.commit()?;
+        Ok(updated)
+    }
+
     pub fn update_aggregate_api_status(&self, api_id: &str, status: &str) -> Result<()> {
         self.conn.execute(
             update_aggregate_api_status_sql(),

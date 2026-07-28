@@ -17,6 +17,7 @@ import {
   Settings,
   UserRound,
   Globe,
+  ShoppingBag,
   ChevronLeft,
   ChevronRight,
   type LucideIcon,
@@ -44,6 +45,7 @@ import {
 const NAV_ITEM_BY_PATH = new Map<TopLevelRoutePath, { icon: LucideIcon }>([
   ["/", { icon: House }],
   ["/accounts", { icon: Users }],
+  ["/marketplace", { icon: ShoppingBag }],
   ["/account-manager", { icon: UserCog }],
   ["/aggregate-api", { icon: Database }],
   ["/apikeys", { icon: Key }],

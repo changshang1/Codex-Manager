@@ -94,6 +94,7 @@ pub(in super::super) struct CandidateExecutorParams<'a> {
     pub(in super::super) request_shape: Option<&'a str>,
     pub(in super::super) trace_id: &'a str,
     pub(in super::super) model_for_log: Option<&'a str>,
+    pub(in super::super) account_model_routes: &'a [String],
     pub(in super::super) response_adapter: super::super::super::ResponseAdapter,
     pub(in super::super) gemini_stream_output_mode:
         Option<super::super::super::GeminiStreamOutputMode>,
@@ -232,6 +233,7 @@ pub(in super::super) fn execute_candidate_sequence(
         request_shape,
         trace_id,
         model_for_log,
+        account_model_routes,
         response_adapter,
         gemini_stream_output_mode,
         tool_name_restore_map,
@@ -253,26 +255,30 @@ pub(in super::super) fn execute_candidate_sequence(
     let mut last_attempt_url = None;
     let mut last_attempt_error = None;
     let mut force_strip_session_affinity_after_challenge = false;
-    let account_model_override = model_for_log
-        .and_then(|model| storage.get_enabled_model_v2(model).ok().flatten())
-        .and_then(|model| {
-            model
-                .routes
-                .into_iter()
-                .filter(|route| {
-                    route.enabled
-                        && route.source_kind == "account_pool"
-                        && route.source_id == "default"
-                })
-                .max_by_key(|route| route.priority)
-                .map(|route| route.upstream_model)
-        });
     let usage_snapshots = usage_snapshots_for_candidate_plans(storage, &candidates);
-    let ordered_account_ids = candidates
+    let routed_candidates = if account_model_routes.is_empty() {
+        candidates
+            .into_iter()
+            .map(|(account, token)| (account, token, None))
+            .collect::<Vec<_>>()
+    } else {
+        account_model_routes
+            .iter()
+            .flat_map(|upstream_model| {
+                candidates
+                    .iter()
+                    .cloned()
+                    .map(move |(account, token)| (account, token, Some(upstream_model.as_str())))
+            })
+            .collect::<Vec<_>>()
+    };
+    let ordered_account_ids = routed_candidates
         .iter()
-        .map(|(account, _)| account.id.clone())
+        .map(|(account, _, _)| account.id.clone())
         .collect::<Vec<_>>();
-    for (idx, (account, mut token)) in candidates.into_iter().enumerate() {
+    for (idx, (account, mut token, attempt_model_override)) in
+        routed_candidates.into_iter().enumerate()
+    {
         if deadline::is_expired(request_deadline) {
             let request = request
                 .take()
@@ -303,7 +309,6 @@ pub(in super::super) fn execute_candidate_sequence(
                 )
             })
             .unwrap_or_else(|| incoming_headers.clone());
-        let attempt_model_override = account_model_override.as_deref();
         let attempt_allow_openai_fallback = allow_openai_fallback
             && allow_openai_fallback_for_account_with_snapshot(
                 &token,

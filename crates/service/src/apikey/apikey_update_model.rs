@@ -61,6 +61,9 @@ pub(crate) fn update_api_key_model(
     let normalized_routing_config = if update_routing_config {
         let normalized_rotation_strategy = normalize_rotation_strategy(rotation_strategy)?;
         let normalized_aggregate_api_id = if normalized_rotation_strategy == ROTATION_AGGREGATE_API
+            || normalized_rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+            || normalized_rotation_strategy
+                == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
         {
             aggregate_api_id
                 .as_deref()
@@ -73,6 +76,8 @@ pub(crate) fn update_api_key_model(
         let normalized_account_plan_filter = if normalized_rotation_strategy
             == crate::apikey_profile::ROTATION_ACCOUNT
             || normalized_rotation_strategy == crate::apikey_profile::ROTATION_HYBRID
+            || normalized_rotation_strategy
+                == crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST
         {
             crate::account_plan::normalize_account_plan_filter(account_plan_filter)?
         } else {
@@ -105,6 +110,7 @@ pub(crate) fn update_api_key_model(
         Some(ROTATION_AGGREGATE_API) => Some(None),
         Some(crate::apikey_profile::ROTATION_ACCOUNT)
         | Some(crate::apikey_profile::ROTATION_HYBRID)
+        | Some(crate::apikey_profile::ROTATION_HYBRID_AGGREGATE_FIRST)
             if update_account_group_filter =>
         {
             Some(crate::account_group::normalize_account_group_filter(
