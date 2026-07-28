@@ -8,6 +8,7 @@ pub mod codex_profile;
 pub mod codex_projects;
 pub mod codex_skills;
 pub mod dashboard;
+pub mod diagnostics;
 pub mod login;
 pub mod marketplace;
 pub mod plugin;

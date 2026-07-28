@@ -67,6 +67,11 @@ test("Codex 接入方式页面展示当前状态和切换影响", async () => {
   assert.match(source, /清理历史备份/);
   assert.match(source, /pruneHistoryBackups/);
   assert.match(source, /href=\{buildStaticRouteUrl\(href\)\}/);
+  assert.match(
+    source,
+    /min-h-12 w-full whitespace-normal py-2 data-\[size=default\]:h-auto/,
+  );
+  assert.match(source, /<SelectGroup className="pb-0">/);
 });
 
 test("模型目录不再暴露 Codex models_cache 覆盖入口", async () => {

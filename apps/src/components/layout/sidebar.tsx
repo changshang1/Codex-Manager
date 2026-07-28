@@ -86,7 +86,7 @@ const NavItem = memo(({
     aria-label={itemName}
     title={itemName}
     className={cn(
-      "group/nav relative flex min-h-11 items-center gap-3.5 overflow-hidden rounded-xl px-4 py-2 text-sm transition-[background-color,color,box-shadow] duration-300 ease-out hover:bg-primary/6 hover:text-primary xl:min-h-[58px] xl:gap-5 xl:rounded-2xl xl:px-5 xl:py-3 xl:text-base [@media(max-height:800px)]:min-h-10 [@media(max-height:800px)]:gap-3 [@media(max-height:800px)]:rounded-xl [@media(max-height:800px)]:px-4 [@media(max-height:800px)]:py-1.5 [@media(max-height:800px)]:text-sm",
+      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-xl px-3.5 py-1.5 text-dense font-medium transition-[background-color,color,box-shadow] duration-300 ease-out hover:bg-primary/6 hover:text-primary xl:min-h-11 xl:gap-3.5 xl:rounded-xl xl:px-4 xl:py-2 [@media(max-height:800px)]:min-h-9 [@media(max-height:800px)]:gap-2.5 [@media(max-height:800px)]:px-3.5 [@media(max-height:800px)]:py-1",
       !isSidebarOpen && "justify-center px-0",
       isActive
         ? "bg-primary/10 text-primary shadow-[inset_0_1px_0_rgb(255_255_255/0.5),0_14px_28px_-24px_rgb(var(--primary-rgb)/0.55)]"
@@ -100,7 +100,7 @@ const NavItem = memo(({
     ) : null}
     <item.icon className="h-[18px] w-[18px] shrink-0 xl:h-[22px] xl:w-[22px]" />
     {isSidebarOpen && (
-      <span className="truncate font-medium">{itemName}</span>
+      <span className="truncate">{itemName}</span>
     )}
   </a>
 ));
@@ -172,7 +172,7 @@ export function Sidebar() {
     );
 
     return (
-      <div className="grid gap-1.5">
+      <div className="grid gap-1">
         {items.map((item) => {
           const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
           return (
@@ -241,8 +241,8 @@ export function Sidebar() {
           </div>
           {isSidebarOpen && (
             <div className="flex flex-col overflow-hidden animate-in fade-in slide-in-from-left-1 duration-200 motion-reduce:animate-none">
-              <span className="truncate text-sm font-semibold tracking-[-0.02em] text-foreground xl:text-[17px]">CodexManager</span>
-              <span className="truncate text-xs text-muted-foreground xl:mt-0.5 xl:text-sm">
+              <span className="truncate text-lg font-semibold tracking-[-0.02em] text-foreground">CodexManager</span>
+              <span className="truncate text-compact text-muted-foreground xl:mt-0.5">
                 {t("账号池 · 路由管理")}
               </span>
             </div>
@@ -250,17 +250,27 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-3.5 no-scrollbar xl:py-5 [@media(max-height:800px)]:py-3">
+      <div className="flex-1 overflow-y-auto py-3 no-scrollbar xl:py-4 [@media(max-height:800px)]:py-2.5">
         <nav className="px-2.5 xl:px-3.5">
           {renderedItems}
         </nav>
       </div>
 
-      <div className="border-t border-border/55 p-2.5 shrink-0">
+      <div
+        className={cn(
+          "shrink-0 border-t border-border/55 p-2.5",
+          !isSidebarOpen && "flex justify-center",
+        )}
+      >
         <Button
           variant="ghost"
           size="icon"
-          className="h-9 w-full justify-start gap-3 rounded-md border border-transparent px-3 text-muted-foreground hover:border-primary/20 hover:text-primary"
+          className={cn(
+            "h-9 rounded-md border border-transparent text-muted-foreground hover:border-primary/20 hover:text-primary",
+            isSidebarOpen
+              ? "w-full justify-start gap-3 px-3"
+              : "w-9 justify-center px-0",
+          )}
           title={toggleTitle}
           aria-label={toggleTitle}
           onClick={toggleSidebar}

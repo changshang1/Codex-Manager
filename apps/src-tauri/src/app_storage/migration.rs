@@ -127,6 +127,40 @@ fn copy_db_snapshot(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn create_pre_migration_backup(
+    current_db: &Path,
+    app_version: &str,
+) -> Result<Option<PathBuf>, String> {
+    if !current_db.is_file() {
+        return Ok(None);
+    }
+
+    let version = app_version
+        .chars()
+        .map(|value| {
+            if value.is_ascii_alphanumeric() || matches!(value, '.' | '-' | '_') {
+                value
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let file_name = current_db
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| format!("database file name is not valid UTF-8: {}", current_db.display()))?;
+    let backup_path = current_db.with_file_name(format!("{file_name}.pre-{version}.bak"));
+    if backup_path.is_file() {
+        return Ok(Some(backup_path));
+    }
+
+    if let Err(err) = copy_db_snapshot(current_db, &backup_path) {
+        let _ = fs::remove_file(&backup_path);
+        return Err(err);
+    }
+    Ok(Some(backup_path))
+}
+
 /// 函数 `remove_db_sidecars`
 ///
 /// 作者: gaohongshun
@@ -306,7 +340,8 @@ fn dedup_candidates(current_db: &Path, candidates: Vec<PathBuf>) -> Vec<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::{
-        maybe_migrate_legacy_db, profile_db_candidates, PRIMARY_APP_IDENTIFIER, QA_APP_IDENTIFIER,
+        create_pre_migration_backup, maybe_migrate_legacy_db, profile_db_candidates,
+        PRIMARY_APP_IDENTIFIER, QA_APP_IDENTIFIER,
     };
     use codexmanager_core::storage::{now_ts, Account, Storage};
     use std::path::{Path, PathBuf};
@@ -425,6 +460,44 @@ mod tests {
         migrated.init().expect("init migrated qa storage");
         assert_eq!(migrated.account_count().expect("count accounts"), 1);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pre_migration_backup_is_versioned_and_never_overwritten() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(&root).expect("create test dir");
+        let db_path = root.join("codexmanager.db");
+        let storage = create_populated_db(&db_path);
+        drop(storage);
+
+        let backup_path = create_pre_migration_backup(&db_path, "0.5.1")
+            .expect("create backup")
+            .expect("existing database should be backed up");
+        assert_eq!(
+            backup_path.file_name().and_then(|value| value.to_str()),
+            Some("codexmanager.db.pre-0.5.1.bak")
+        );
+
+        let backup_modified = std::fs::metadata(&backup_path)
+            .expect("backup metadata")
+            .modified()
+            .expect("backup modified time");
+        std::fs::write(&db_path, b"replaced after backup").expect("replace source db");
+        let second_path = create_pre_migration_backup(&db_path, "0.5.1")
+            .expect("reuse backup")
+            .expect("backup path");
+        assert_eq!(second_path, backup_path);
+        assert_eq!(
+            std::fs::metadata(&backup_path)
+                .expect("backup metadata")
+                .modified()
+                .expect("backup modified time"),
+            backup_modified
+        );
+
+        let backup_storage = Storage::open(&backup_path).expect("open backup");
+        assert_eq!(backup_storage.account_count().expect("count accounts"), 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

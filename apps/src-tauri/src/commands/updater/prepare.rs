@@ -2,7 +2,6 @@ use reqwest::blocking::Client;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 
 #[cfg(unix)]
@@ -39,23 +38,7 @@ pub(super) struct ResolvedUpdateContext {
 /// # 返回
 /// 无
 fn append_prepare_log(log_path: &Path, message: &str) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_secs())
-        .unwrap_or(0);
-    let line = format!("[{timestamp}] {message}\n");
-
-    if let Some(parent) = log_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
-    }
+    super::append_update_runtime_log(log_path, message);
 }
 
 /// 函数 `portable_asset_names_for_platform`

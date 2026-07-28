@@ -128,3 +128,7 @@ export async function unsupportedOpenInFileManager(): Promise<unknown> {
 export async function unsupportedOpenUpdateLogsDir(): Promise<unknown> {
   throw new Error("当前环境不支持打开更新日志目录");
 }
+
+export async function unsupportedDesktopDiagnostics(): Promise<unknown> {
+  throw new Error("当前 Web / Docker 版不支持桌面诊断设置");
+}

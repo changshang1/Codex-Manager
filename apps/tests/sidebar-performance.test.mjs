@@ -157,9 +157,9 @@ test("wide but short windows keep the complete sidebar discoverable", async () =
     "utf8",
   );
 
-  assert.match(source, /\[@media\(max-height:800px\)\]:min-h-10/);
+  assert.match(source, /\[@media\(max-height:800px\)\]:min-h-9/);
   assert.match(source, /\[@media\(max-height:800px\)\]:h-\[68px\]/);
-  assert.match(source, /\[@media\(max-height:800px\)\]:py-3/);
+  assert.match(source, /\[@media\(max-height:800px\)\]:py-2\.5/);
 });
 
 test("page fallback stays aligned with both sidebar widths", async () => {

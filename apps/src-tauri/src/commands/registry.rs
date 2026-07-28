@@ -119,6 +119,10 @@ macro_rules! invoke_handler {
             crate::commands::settings::ui::app_settings_set,
             crate::commands::settings::ui::app_close_to_tray_on_close_get,
             crate::commands::settings::ui::app_close_to_tray_on_close_set,
+            // desktop diagnostics
+            crate::commands::diagnostics::app_diagnostics_settings_get,
+            crate::commands::diagnostics::app_diagnostics_settings_set,
+            crate::commands::diagnostics::app_diagnostics_open_logs_dir,
             // login
             crate::commands::login::service_login_start,
             crate::commands::login::service_login_status,

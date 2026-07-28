@@ -1,5 +1,5 @@
 import type { WebCommandDescriptor } from "./shared";
-import { openExternalUrlDirect, openInBrowserDirect, showMainWindowDirect, unsupportedOpenInFileManager, unsupportedOpenUpdateLogsDir } from "./browser-direct";
+import { openExternalUrlDirect, openInBrowserDirect, showMainWindowDirect, unsupportedDesktopDiagnostics, unsupportedOpenInFileManager, unsupportedOpenUpdateLogsDir } from "./browser-direct";
 
 export function createMiscWebCommands(): Record<string, WebCommandDescriptor> {
   return {
@@ -31,5 +31,8 @@ export function createMiscWebCommands(): Record<string, WebCommandDescriptor> {
     open_in_file_manager: { direct: unsupportedOpenInFileManager },
     app_show_main_window: { direct: showMainWindowDirect },
     app_update_open_logs_dir: { direct: unsupportedOpenUpdateLogsDir },
+    app_diagnostics_settings_get: { direct: unsupportedDesktopDiagnostics },
+    app_diagnostics_settings_set: { direct: unsupportedDesktopDiagnostics },
+    app_diagnostics_open_logs_dir: { direct: unsupportedDesktopDiagnostics },
   };
 }

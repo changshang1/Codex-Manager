@@ -22,6 +22,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const UPDATE_LOG_MAX_FILE_SIZE: u64 = 512 * 1024;
+
 /// 函数 `append_update_runtime_log`
 ///
 /// 作者: gaohongshun
@@ -34,7 +36,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///
 /// # 返回
 /// 无
-fn append_update_runtime_log(log_path: &std::path::Path, message: &str) {
+pub(super) fn append_update_runtime_log(log_path: &std::path::Path, message: &str) {
+    if !crate::desktop_diagnostics::file_logging_enabled() {
+        return;
+    }
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_secs())
@@ -44,11 +50,17 @@ fn append_update_runtime_log(log_path: &std::path::Path, message: &str) {
     if let Some(parent) = log_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
+    let should_truncate = fs::metadata(log_path)
+        .map(|metadata| metadata.len().saturating_add(line.len() as u64) > UPDATE_LOG_MAX_FILE_SIZE)
+        .unwrap_or(false);
+    let mut options = fs::OpenOptions::new();
+    options.create(true).write(true);
+    if should_truncate {
+        options.truncate(true);
+    } else {
+        options.append(true);
+    }
+    if let Ok(mut file) = options.open(log_path) {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
     }

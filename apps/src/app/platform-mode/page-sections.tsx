@@ -505,7 +505,7 @@ export function GatewayModeCard({
               onValueChange={onSelectApiKey}
               disabled={!isServiceReady || isMutating || candidates.length === 0}
             >
-              <SelectTrigger className="h-auto min-h-8 w-full whitespace-normal py-1.5 *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:min-w-0">
+              <SelectTrigger className="h-auto min-h-12 w-full whitespace-normal py-2 data-[size=default]:h-auto *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:min-w-0">
                 <SelectValue placeholder={t("选择平台密钥")}>
                   {(value) => {
                     const key = candidates.find((item) => item.id === value);
@@ -525,7 +525,7 @@ export function GatewayModeCard({
                 align="start"
                 className="w-[min(28rem,calc(100vw-2rem))] min-w-[min(28rem,calc(100vw-2rem))]"
               >
-                <SelectGroup>
+                <SelectGroup className="pb-0">
                   {candidates.map((key) => {
                     const label = keyLabel(key);
                     return (

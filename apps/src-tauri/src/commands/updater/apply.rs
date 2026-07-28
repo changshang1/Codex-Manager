@@ -1,8 +1,7 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -32,23 +31,7 @@ use super::state::{
 /// # 返回
 /// 无
 fn append_apply_log(log_path: &Path, message: &str) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_secs())
-        .unwrap_or(0);
-    let line = format!("[{timestamp}] {message}\n");
-
-    if let Some(parent) = log_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
-        let _ = file.write_all(line.as_bytes());
-        let _ = file.flush();
-    }
+    super::append_update_runtime_log(log_path, message);
 }
 
 /// 函数 `log_path_for_script_dir`

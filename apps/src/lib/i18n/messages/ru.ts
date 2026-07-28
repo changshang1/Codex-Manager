@@ -7,6 +7,7 @@ import { RU_ACCOUNTS_MESSAGES } from "./sections/ru-accounts";
 import { RU_API_KEYS_MESSAGES } from "./sections/ru-api-keys";
 import { RU_AGGREGATE_API_MESSAGES } from "./sections/ru-aggregate-api";
 import { RU_DASHBOARD_MESSAGES } from "./sections/ru-dashboard";
+import { RU_DESKTOP_DIAGNOSTICS_MESSAGES } from "./sections/ru-desktop-diagnostics";
 import { RU_DYNAMIC_UI_MESSAGES } from "./sections/ru-dynamic-ui";
 import { RU_MODEL_CATALOG_MESSAGES } from "./sections/ru-model-catalog";
 import { RU_MODEL_GROUPS_MESSAGES } from "./sections/ru-model-groups";
@@ -21,6 +22,7 @@ export const RU_MESSAGES: MessageCatalog = {
   ...RU_PROJECTS_MESSAGES,
   ...RU_SKILLS_MESSAGES,
   ...RU_MARKETPLACE_MESSAGES,
+  ...RU_DESKTOP_DIAGNOSTICS_MESSAGES,
   "延迟测试设置": "Настройки теста задержки",
   "速度测试设置": "Настройки теста скорости",
   "下载预设": "Пресет для скачивания",

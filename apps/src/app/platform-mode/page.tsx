@@ -7,6 +7,7 @@ import {
   AlertDescription,
   AlertTitle,
 } from "@/components/ui/alert";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   AdvancedRecoveryPanel,
   CurrentModeCard,
@@ -62,20 +63,22 @@ export default function PlatformModePage() {
     : undefined;
 
   return (
-    <main className="flex w-full flex-col gap-5 px-4 py-4 md:px-6">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <TerminalSquare className="size-5" />
+    <main className="flex w-full flex-col gap-5">
+      <Card className="routing-command-card glass-card overflow-hidden py-0 shadow-sm">
+        <CardContent className="flex min-h-[80px] items-center gap-3 px-4 py-3 xl:min-h-[92px] xl:gap-4 xl:px-5 xl:py-4">
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary xl:size-10">
+            <TerminalSquare className="size-[18px] xl:size-5" />
           </div>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{t("Codex 接入方式")}</h1>
-            <p className="text-sm text-muted-foreground">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold leading-tight tracking-[-0.02em] text-foreground">
+              {t("Codex 接入方式")}
+            </h1>
+            <p className="mt-1 text-sm leading-5 text-muted-foreground xl:leading-6">
               {t("选择 Codex 直接连接 OpenAI，或通过 CodexManager 进行转发与管理。")}
             </p>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <Alert className="border-amber-500/30 bg-amber-500/10">
         <AlertTriangle className="size-4" />
