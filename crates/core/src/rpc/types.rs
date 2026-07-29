@@ -851,6 +851,14 @@ pub struct AggregateApiSummary {
     pub action: Option<String>,
     pub model_override: Option<String>,
     pub status: String,
+    #[serde(default)]
+    pub auto_toggle_enabled: bool,
+    #[serde(default)]
+    pub consecutive_failures: i64,
+    #[serde(default)]
+    pub auto_disabled: bool,
+    pub auto_disabled_at: Option<i64>,
+    pub auto_disabled_reason: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_test_at: Option<i64>,

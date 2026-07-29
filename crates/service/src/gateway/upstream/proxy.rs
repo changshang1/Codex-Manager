@@ -344,6 +344,9 @@ fn resolve_aggregate_candidates_for_route(
     key_id: &str,
     model_for_log: Option<&str>,
 ) -> Result<Vec<codexmanager_core::storage::AggregateApi>, String> {
+    if let Err(err) = storage.recover_aggregate_apis_auto_disabled_before_today() {
+        log::warn!("event=gateway_aggregate_auto_recovery_failed err={err}");
+    }
     let explicit_candidate =
         resolve_active_explicit_aggregate_candidate(storage, aggregate_api_id)?;
     let mut candidates =
@@ -377,7 +380,8 @@ fn resolve_active_explicit_aggregate_candidate(
     let candidate = storage
         .find_aggregate_api_by_id(api_id)
         .map_err(|err| format!("find explicit aggregate api failed: {err}"))?;
-    Ok(candidate.filter(|api| api.status.trim().eq_ignore_ascii_case("active")))
+    Ok(candidate
+        .filter(|api| api.status.trim().eq_ignore_ascii_case("active") && !api.auto_disabled))
 }
 
 fn apply_aggregate_model_filter(

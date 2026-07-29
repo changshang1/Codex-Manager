@@ -45,6 +45,7 @@ pub async fn service_aggregate_api_create(
     provider_type: Option<String>,
     supplier_name: Option<String>,
     sort: Option<i64>,
+    auto_toggle_enabled: Option<bool>,
     url: Option<String>,
     key: Option<String>,
     auth_type: Option<String>,
@@ -66,6 +67,7 @@ pub async fn service_aggregate_api_create(
         "providerType": provider_type,
         "supplierName": supplier_name,
         "sort": sort,
+        "autoToggleEnabled": auto_toggle_enabled,
         "url": url,
         "key": key,
         "authType": auth_type,
@@ -111,6 +113,7 @@ pub async fn service_aggregate_api_update(
     supplier_name: Option<String>,
     sort: Option<i64>,
     status: Option<String>,
+    auto_toggle_enabled: Option<bool>,
     url: Option<String>,
     key: Option<String>,
     auth_type: Option<String>,
@@ -134,6 +137,7 @@ pub async fn service_aggregate_api_update(
         "supplierName": supplier_name,
         "sort": sort,
         "status": status,
+        "autoToggleEnabled": auto_toggle_enabled,
         "url": url,
         "key": key,
         "authType": auth_type,
@@ -152,6 +156,15 @@ pub async fn service_aggregate_api_update(
         "balanceQueryConfigJson": balance_query_config_json,
     });
     rpc_call_in_background("aggregateApi/update", addr, Some(params)).await
+}
+
+#[tauri::command]
+pub async fn service_aggregate_api_recover(
+    addr: Option<String>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "id": id });
+    rpc_call_in_background("aggregateApi/recover", addr, Some(params)).await
 }
 
 #[tauri::command]

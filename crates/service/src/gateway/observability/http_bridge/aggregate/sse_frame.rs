@@ -77,6 +77,7 @@ pub enum PassthroughSseProtocol {
     #[default]
     Generic,
     AnthropicNative,
+    GeminiNative,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -171,6 +172,26 @@ fn is_chat_completion_terminal_chunk(value: &Value) -> bool {
         })
 }
 
+fn is_gemini_native_terminal_chunk(value: &Value) -> bool {
+    value
+        .get("candidates")
+        .or_else(|| value.pointer("/response/candidates"))
+        .and_then(Value::as_array)
+        .is_some_and(|candidates| {
+            candidates.iter().any(|candidate| {
+                candidate
+                    .get("finishReason")
+                    .or_else(|| candidate.get("finish_reason"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .is_some_and(|reason| {
+                        !reason.is_empty()
+                            && !reason.eq_ignore_ascii_case("FINISH_REASON_UNSPECIFIED")
+                    })
+            })
+        })
+}
+
 /// 函数 `inspect_sse_frame`
 ///
 /// 作者: gaohongshun
@@ -238,7 +259,12 @@ pub(in super::super) fn inspect_sse_frame_for_protocol(
             if let Some(terminal) = classify_terminal_event_name(kind, protocol) {
                 inspection.terminal = Some(terminal);
             }
-        } else if is_chat_completion_terminal_chunk(&value) {
+        }
+        if inspection.terminal.is_none()
+            && (is_chat_completion_terminal_chunk(&value)
+                || (protocol == PassthroughSseProtocol::GeminiNative
+                    && is_gemini_native_terminal_chunk(&value)))
+        {
             inspection.terminal = Some(SseTerminal::Ok);
         }
 

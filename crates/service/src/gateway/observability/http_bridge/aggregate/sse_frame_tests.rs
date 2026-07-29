@@ -78,6 +78,17 @@ fn inspect_sse_frame_anthropic_native_treats_message_stop_as_terminal() {
 }
 
 #[test]
+fn inspect_sse_frame_gemini_native_treats_finish_reason_as_terminal() {
+    let lines = vec![
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n"
+            .to_string(),
+        "\n".to_string(),
+    ];
+    let inspection = inspect_sse_frame_for_protocol(&lines, PassthroughSseProtocol::GeminiNative);
+    assert!(matches!(inspection.terminal, Some(SseTerminal::Ok)));
+}
+
+#[test]
 fn inspect_openai_responses_sse_frame_collects_output_item_text() {
     let lines = vec![
         "event: response.output_item.done\n".to_string(),

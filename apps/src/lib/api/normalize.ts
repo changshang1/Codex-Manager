@@ -829,6 +829,24 @@ export function normalizeAggregateApi(item: unknown): AggregateApi | null {
         ? source.action
         : asString(source.action) || null,
     status: asString(source.status) || "active",
+    autoToggleEnabled: asBoolean(
+      source.autoToggleEnabled ?? source.auto_toggle_enabled,
+      false
+    ),
+    consecutiveFailures: asInteger(
+      source.consecutiveFailures ?? source.consecutive_failures,
+      0,
+      0
+    ),
+    autoDisabled: asBoolean(
+      source.autoDisabled ?? source.auto_disabled,
+      false
+    ),
+    autoDisabledAt: toNullableNumber(
+      source.autoDisabledAt ?? source.auto_disabled_at
+    ),
+    autoDisabledReason:
+      asString(source.autoDisabledReason ?? source.auto_disabled_reason) || null,
     createdAt: toNullableNumber(source.createdAt ?? source.created_at),
     updatedAt: toNullableNumber(source.updatedAt ?? source.updated_at),
     lastTestAt: toNullableNumber(source.lastTestAt ?? source.last_test_at),

@@ -52,8 +52,8 @@ pub(crate) use account::update as account_update;
 pub(crate) use account::warmup as account_warmup;
 pub(crate) use aggregate_api::{
     create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
-    refresh_aggregate_api_balance, test_aggregate_api_connection, update_aggregate_api,
-    update_aggregate_api_sorts,
+    recover_aggregate_api, refresh_aggregate_api_balance, test_aggregate_api_connection,
+    update_aggregate_api, update_aggregate_api_sorts,
 };
 pub(crate) use apikey::create as apikey_create;
 pub(crate) use apikey::delete as apikey_delete;

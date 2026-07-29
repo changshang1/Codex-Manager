@@ -3,11 +3,13 @@ use codexmanager_core::storage::{AggregateApi, Storage};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tiny_http::Request;
 
+use super::super::response::GatewayStreamPrefetchTerminal;
 use super::super::GatewayUpstreamResponse;
 use crate::aggregate_api::{
+    classify_aggregate_api_daily_limit_failure, classify_aggregate_api_daily_limit_hint,
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_AUTH_USERPASS, AGGREGATE_API_PROVIDER_CLAUDE,
     AGGREGATE_API_PROVIDER_CODEX, AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
 };
@@ -16,6 +18,35 @@ use crate::gateway::request_log::RequestLogUsage;
 use serde_json::Value;
 
 const AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL: usize = 3;
+const AGGREGATE_API_NON_STREAM_PREFLIGHT_MAX_BYTES: usize = 256 * 1024;
+const AGGREGATE_API_STREAM_PREFLIGHT_MAX_BYTES: usize = 64 * 1024;
+const AGGREGATE_API_STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug, PartialEq, Eq)]
+enum AggregateApiStreamPrefixDecision {
+    NeedMore,
+    Deliver,
+    UpstreamError(String),
+    DailyLimit {
+        reason: &'static str,
+        message: String,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum AggregateApiStreamInspectionMode {
+    CommitOnContent,
+    CompleteBeforeDelivery,
+}
+
+enum AggregateApiStreamPreflightOutcome {
+    Ready(GatewayUpstreamResponse),
+    DailyLimit {
+        reason: &'static str,
+        message: String,
+    },
+    TransportFailure(String),
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -468,6 +499,13 @@ fn resolve_passthrough_sse_protocol(
     if path == "/v1/messages" || path.starts_with("/v1/messages?") {
         return Some(super::super::super::PassthroughSseProtocol::AnthropicNative);
     }
+    if path
+        .split('?')
+        .next()
+        .is_some_and(|path| path.contains(":streamGenerateContent"))
+    {
+        return Some(super::super::super::PassthroughSseProtocol::GeminiNative);
+    }
     None
 }
 
@@ -753,6 +791,667 @@ fn aggregate_api_failure_message(
     } else {
         format!("{} [{}]", parts.remove(0), parts.join(", "))
     }
+}
+
+fn record_aggregate_api_daily_limit_failure(
+    storage: &Storage,
+    candidate_id: &str,
+    trace_id: &str,
+    reason: &str,
+) {
+    match storage.record_aggregate_api_daily_quota_failure(candidate_id) {
+        Ok(Some(update)) if update.counted => {
+            log::warn!(
+                "event=gateway_aggregate_daily_limit_failure trace_id={} aggregate_api_id={} reason={} consecutive_failures={} auto_disabled={}",
+                trace_id,
+                candidate_id,
+                reason,
+                update.consecutive_failures,
+                update.auto_disabled,
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            log::warn!(
+                "event=gateway_aggregate_daily_limit_state_write_failed trace_id={} aggregate_api_id={} err={}",
+                trace_id,
+                candidate_id,
+                err,
+            );
+        }
+    }
+}
+
+fn reset_aggregate_api_consecutive_failures(storage: &Storage, candidate_id: &str, trace_id: &str) {
+    if let Err(err) = storage.reset_aggregate_api_consecutive_failures(candidate_id) {
+        log::warn!(
+            "event=gateway_aggregate_daily_limit_reset_failed trace_id={} aggregate_api_id={} err={}",
+            trace_id,
+            candidate_id,
+            err,
+        );
+    }
+}
+
+// A model can route to the same aggregate API more than once. Keep daily-limit
+// failures request-local until routing finishes so a later success from that API
+// cancels the pending failure instead of leaving it auto-disabled. A later
+// transient failure does not erase an explicit daily-limit signal.
+struct AggregateApiDailyLimitTracker<'a> {
+    storage: &'a Storage,
+    trace_id: &'a str,
+    pending: HashMap<String, &'static str>,
+}
+
+impl<'a> AggregateApiDailyLimitTracker<'a> {
+    fn new(storage: &'a Storage, trace_id: &'a str) -> Self {
+        Self {
+            storage,
+            trace_id,
+            pending: HashMap::new(),
+        }
+    }
+
+    fn mark_failure(&mut self, candidate_id: &str, reason: &'static str) {
+        self.pending
+            .entry(candidate_id.to_string())
+            .or_insert(reason);
+    }
+
+    fn has_pending_failure(&self, candidate_id: &str) -> bool {
+        self.pending.contains_key(candidate_id)
+    }
+
+    fn mark_success(&mut self, candidate_id: &str) {
+        self.pending.remove(candidate_id);
+        reset_aggregate_api_consecutive_failures(self.storage, candidate_id, self.trace_id);
+    }
+
+    fn flush(&mut self) {
+        for (candidate_id, reason) in std::mem::take(&mut self.pending) {
+            record_aggregate_api_daily_limit_failure(
+                self.storage,
+                candidate_id.as_str(),
+                self.trace_id,
+                reason,
+            );
+        }
+    }
+}
+
+impl Drop for AggregateApiDailyLimitTracker<'_> {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
+fn aggregate_api_sse_frames(prefix: &[u8], include_incomplete: bool) -> Vec<String> {
+    let normalized = String::from_utf8_lossy(prefix).replace("\r\n", "\n");
+    let mut frames = normalized.split("\n\n").collect::<Vec<_>>();
+    if !include_incomplete && !normalized.ends_with("\n\n") {
+        let _ = frames.pop();
+    }
+    frames.into_iter().map(str::to_string).collect()
+}
+
+fn aggregate_api_sse_event_and_data(frame: &str) -> (Option<String>, Option<String>) {
+    let mut event_type = None;
+    let mut data = String::new();
+    for line in frame.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(value) = line.strip_prefix("event:") {
+            event_type = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(value.trim_start());
+        }
+    }
+    (event_type, (!data.is_empty()).then_some(data))
+}
+
+fn aggregate_api_metadata_only_event(event_type: &str) -> bool {
+    matches!(
+        event_type.trim().to_ascii_lowercase().as_str(),
+        "response.created"
+            | "response.in_progress"
+            | "response.queued"
+            | "response.output_item.added"
+            | "response.content_part.added"
+            | "response.reasoning_summary_part.added"
+            | "message_start"
+            | "content_block_start"
+            | "ping"
+    )
+}
+
+fn aggregate_api_chat_chunk_is_metadata_only(value: &Value) -> bool {
+    let Some(choices) = value.get("choices").and_then(Value::as_array) else {
+        return false;
+    };
+    if choices.is_empty() {
+        return true;
+    }
+    choices.iter().all(|choice| {
+        if choice
+            .get("finish_reason")
+            .is_some_and(|value| !value.is_null())
+        {
+            return false;
+        }
+        let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
+            return false;
+        };
+        let has_text = ["content", "refusal"]
+            .into_iter()
+            .filter_map(|key| delta.get(key).and_then(Value::as_str))
+            .any(|text| !text.is_empty());
+        let has_call = ["tool_calls", "function_call"]
+            .into_iter()
+            .any(|key| delta.get(key).is_some_and(|value| !value.is_null()));
+        !has_text && !has_call
+    })
+}
+
+fn aggregate_api_sse_event_is_error(
+    declared_event_type: Option<&str>,
+    parsed: Option<&Value>,
+) -> bool {
+    let payload_event_type = parsed
+        .and_then(|value| value.get("type"))
+        .and_then(Value::as_str);
+    declared_event_type
+        .into_iter()
+        .chain(payload_event_type)
+        .any(|event_type| {
+            let normalized = event_type.trim().to_ascii_lowercase().replace('-', "_");
+            matches!(
+                normalized.as_str(),
+                "error" | "response.failed" | "message.error" | "message.failed"
+            ) || normalized.ends_with("_error")
+                || normalized.ends_with(".error")
+        })
+        || parsed.is_some_and(|value| {
+            value
+                .get("error")
+                .is_some_and(aggregate_api_error_value_is_present)
+                || value
+                    .pointer("/response/error")
+                    .is_some_and(aggregate_api_error_value_is_present)
+                || value
+                    .pointer("/response/status_details/error")
+                    .is_some_and(aggregate_api_error_value_is_present)
+                || value
+                    .get("code")
+                    .is_some_and(aggregate_api_failure_code_is_present)
+                || aggregate_api_explicit_daily_limit_code_is_present(value)
+        })
+}
+
+fn aggregate_api_error_value_is_present(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn aggregate_api_failure_code_is_present(value: &Value) -> bool {
+    match value {
+        Value::Number(value) => value
+            .as_i64()
+            .is_some_and(|value| value < 0 || value >= 400),
+        Value::String(value) => {
+            let normalized = value
+                .trim()
+                .to_ascii_lowercase()
+                .replace(['-', '.', ' '], "_");
+            if normalized.is_empty() {
+                return false;
+            }
+            if let Ok(value) = normalized.parse::<i64>() {
+                return value < 0 || value >= 400;
+            }
+            if matches!(
+                normalized.as_str(),
+                "ok" | "success"
+                    | "succeeded"
+                    | "complete"
+                    | "completed"
+                    | "no_error"
+                    | "no_errors"
+                    | "noerror"
+                    | "error_free"
+                    | "none"
+            ) {
+                return false;
+            }
+            [
+                "error",
+                "fail",
+                "exceeded",
+                "denied",
+                "unauthorized",
+                "forbidden",
+                "invalid",
+                "insufficient",
+                "unavailable",
+                "overload",
+                "timeout",
+                "timed_out",
+                "not_found",
+                "exhausted",
+            ]
+            .into_iter()
+            .any(|marker| normalized.contains(marker))
+        }
+        _ => false,
+    }
+}
+
+fn aggregate_api_explicit_daily_limit_code_is_present(value: &Value) -> bool {
+    ["type", "status", "reason"]
+        .into_iter()
+        .filter_map(|key| value.get(key).and_then(Value::as_str))
+        .any(|value| {
+            value
+                .trim()
+                .replace(['-', ' '], "_")
+                .eq_ignore_ascii_case("DAILY_LIMIT_EXCEEDED")
+        })
+}
+
+fn classify_aggregate_api_stream_prefix(
+    prefix: &[u8],
+    include_incomplete: bool,
+    mode: AggregateApiStreamInspectionMode,
+) -> AggregateApiStreamPrefixDecision {
+    let frames = aggregate_api_sse_frames(prefix, include_incomplete);
+    if frames.is_empty() {
+        return AggregateApiStreamPrefixDecision::NeedMore;
+    }
+    let frame_count = frames.len();
+    let mut saw_deliverable_content = false;
+    for (index, frame) in frames.into_iter().enumerate() {
+        let (declared_event_type, data) = aggregate_api_sse_event_and_data(frame.as_str());
+        let Some(data) = data else {
+            continue;
+        };
+        if data.trim() == "[DONE]" {
+            saw_deliverable_content = true;
+            if matches!(mode, AggregateApiStreamInspectionMode::CommitOnContent) {
+                return AggregateApiStreamPrefixDecision::Deliver;
+            }
+            continue;
+        }
+        let parsed = serde_json::from_str::<Value>(data.as_str()).ok();
+        let is_incomplete_trailing_frame =
+            include_incomplete && index + 1 == frame_count && !data.ends_with('}');
+        if is_incomplete_trailing_frame
+            && parsed.is_none()
+            && data
+                .trim_start()
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| matches!(*byte, b'{' | b'['))
+        {
+            return AggregateApiStreamPrefixDecision::NeedMore;
+        }
+        let payload_event_type = parsed
+            .as_ref()
+            .and_then(|value| value.get("type"))
+            .and_then(Value::as_str);
+        let event_type = payload_event_type.or(declared_event_type.as_deref());
+        if aggregate_api_sse_event_is_error(declared_event_type.as_deref(), parsed.as_ref()) {
+            if let Some(reason) = classify_aggregate_api_daily_limit_failure(200, data.as_bytes())
+                .or_else(|| classify_aggregate_api_daily_limit_hint(data.as_str()))
+            {
+                return AggregateApiStreamPrefixDecision::DailyLimit {
+                    reason,
+                    message: aggregate_api_failure_message(
+                        429,
+                        data.as_bytes(),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                };
+            }
+            return AggregateApiStreamPrefixDecision::UpstreamError(aggregate_api_failure_message(
+                502,
+                data.as_bytes(),
+                None,
+                None,
+                None,
+                None,
+            ));
+        }
+        if event_type.is_some_and(aggregate_api_metadata_only_event) {
+            continue;
+        }
+        if parsed
+            .as_ref()
+            .is_some_and(aggregate_api_chat_chunk_is_metadata_only)
+        {
+            continue;
+        }
+        saw_deliverable_content = true;
+        if matches!(mode, AggregateApiStreamInspectionMode::CommitOnContent) {
+            return AggregateApiStreamPrefixDecision::Deliver;
+        }
+    }
+    if saw_deliverable_content {
+        AggregateApiStreamPrefixDecision::Deliver
+    } else {
+        AggregateApiStreamPrefixDecision::NeedMore
+    }
+}
+
+fn is_aggregate_api_sse_response(response: &GatewayUpstreamResponse) -> bool {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"))
+}
+
+fn aggregate_api_prefix_looks_like_sse(prefix: &[u8]) -> bool {
+    prefix.split(|byte| *byte == b'\n').any(|line| {
+        let line = line
+            .iter()
+            .position(|byte| !matches!(*byte, b' ' | b'\t' | b'\r'))
+            .map(|start| &line[start..])
+            .unwrap_or_default();
+        line.starts_with(b"data:")
+            || line.starts_with(b"event:")
+            || line.starts_with(b"id:")
+            || line.starts_with(b"retry:")
+            || line.starts_with(b":")
+    })
+}
+
+fn aggregate_api_json_has_error_context(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .is_some_and(|value| aggregate_api_sse_event_is_error(None, Some(&value)))
+}
+
+fn classify_complete_aggregate_api_non_stream_body(
+    body: &[u8],
+    response: GatewayUpstreamResponse,
+) -> AggregateApiStreamPreflightOutcome {
+    if let Some(reason) = classify_aggregate_api_daily_limit_failure(200, body) {
+        return AggregateApiStreamPreflightOutcome::DailyLimit {
+            reason,
+            message: aggregate_api_failure_message(429, body, None, None, None, None),
+        };
+    }
+    if aggregate_api_json_has_error_context(body) {
+        return AggregateApiStreamPreflightOutcome::TransportFailure(
+            aggregate_api_failure_message(502, body, None, None, None, None),
+        );
+    }
+    AggregateApiStreamPreflightOutcome::Ready(response)
+}
+
+fn classify_prefetched_aggregate_api_sse(
+    prefix: &[u8],
+    response: GatewayUpstreamResponse,
+    terminal: GatewayStreamPrefetchTerminal,
+    mode: AggregateApiStreamInspectionMode,
+) -> AggregateApiStreamPreflightOutcome {
+    let include_incomplete = matches!(
+        terminal,
+        GatewayStreamPrefetchTerminal::Eof
+            | GatewayStreamPrefetchTerminal::Error(_)
+            | GatewayStreamPrefetchTerminal::Disconnected
+    );
+    match classify_aggregate_api_stream_prefix(prefix, include_incomplete, mode) {
+        AggregateApiStreamPrefixDecision::DailyLimit { reason, message } => {
+            AggregateApiStreamPreflightOutcome::DailyLimit { reason, message }
+        }
+        AggregateApiStreamPrefixDecision::UpstreamError(message) => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(message)
+        }
+        AggregateApiStreamPrefixDecision::Deliver
+            if matches!(
+                mode,
+                AggregateApiStreamInspectionMode::CompleteBeforeDelivery
+            ) =>
+        {
+            match terminal {
+                GatewayStreamPrefetchTerminal::IdleTimeout => {
+                    AggregateApiStreamPreflightOutcome::TransportFailure(
+                        "aggregate api response body idle timeout before delivery".to_string(),
+                    )
+                }
+                GatewayStreamPrefetchTerminal::Error(err) => {
+                    AggregateApiStreamPreflightOutcome::TransportFailure(format!(
+                        "aggregate api response body failed before delivery: {err}"
+                    ))
+                }
+                GatewayStreamPrefetchTerminal::Disconnected => {
+                    AggregateApiStreamPreflightOutcome::TransportFailure(
+                        "aggregate api response body disconnected before delivery".to_string(),
+                    )
+                }
+                _ => AggregateApiStreamPreflightOutcome::Ready(response),
+            }
+        }
+        AggregateApiStreamPrefixDecision::Deliver => {
+            AggregateApiStreamPreflightOutcome::Ready(response)
+        }
+        AggregateApiStreamPrefixDecision::NeedMore => match terminal {
+            GatewayStreamPrefetchTerminal::IdleTimeout => {
+                AggregateApiStreamPreflightOutcome::TransportFailure(
+                    "aggregate api stream idle timeout before producing content".to_string(),
+                )
+            }
+            GatewayStreamPrefetchTerminal::Eof
+                if serde_json::from_slice::<Value>(prefix).is_ok() =>
+            {
+                classify_complete_aggregate_api_non_stream_body(prefix, response)
+            }
+            GatewayStreamPrefetchTerminal::Eof => {
+                AggregateApiStreamPreflightOutcome::TransportFailure(
+                    "aggregate api stream ended before producing content".to_string(),
+                )
+            }
+            GatewayStreamPrefetchTerminal::Error(err) => {
+                AggregateApiStreamPreflightOutcome::TransportFailure(format!(
+                    "aggregate api stream failed before producing content: {err}"
+                ))
+            }
+            GatewayStreamPrefetchTerminal::Disconnected => {
+                AggregateApiStreamPreflightOutcome::TransportFailure(
+                    "aggregate api stream disconnected before producing content".to_string(),
+                )
+            }
+            GatewayStreamPrefetchTerminal::Open
+            | GatewayStreamPrefetchTerminal::PrefixLimit
+            | GatewayStreamPrefetchTerminal::WallClockTimeout => {
+                AggregateApiStreamPreflightOutcome::Ready(response)
+            }
+        },
+    }
+}
+
+fn classify_complete_aggregate_api_response(
+    body: &[u8],
+    response: GatewayUpstreamResponse,
+) -> AggregateApiStreamPreflightOutcome {
+    if is_aggregate_api_sse_response(&response) || aggregate_api_prefix_looks_like_sse(body) {
+        classify_prefetched_aggregate_api_sse(
+            body,
+            response,
+            GatewayStreamPrefetchTerminal::Eof,
+            AggregateApiStreamInspectionMode::CompleteBeforeDelivery,
+        )
+    } else {
+        classify_complete_aggregate_api_non_stream_body(body, response)
+    }
+}
+
+fn preflight_aggregate_api_stream(
+    response: GatewayUpstreamResponse,
+) -> AggregateApiStreamPreflightOutcome {
+    let declared_sse = is_aggregate_api_sse_response(&response);
+    let content_length = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if !declared_sse
+        && content_length
+            .is_some_and(|length| length > AGGREGATE_API_NON_STREAM_PREFLIGHT_MAX_BYTES)
+    {
+        return AggregateApiStreamPreflightOutcome::Ready(response);
+    }
+    let max_bytes = if declared_sse {
+        AGGREGATE_API_STREAM_PREFLIGHT_MAX_BYTES
+    } else {
+        AGGREGATE_API_NON_STREAM_PREFLIGHT_MAX_BYTES
+    };
+    let (prefix, response, terminal) = response.prefetch_stream_prefix(
+        max_bytes,
+        crate::gateway::upstream_stream_timeout(),
+        Some(AGGREGATE_API_STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT),
+        |prefix| {
+            (declared_sse || aggregate_api_prefix_looks_like_sse(prefix))
+                && !matches!(
+                    classify_aggregate_api_stream_prefix(
+                        prefix,
+                        false,
+                        AggregateApiStreamInspectionMode::CommitOnContent,
+                    ),
+                    AggregateApiStreamPrefixDecision::NeedMore
+                )
+        },
+    );
+    if declared_sse || aggregate_api_prefix_looks_like_sse(prefix.as_ref()) {
+        return classify_prefetched_aggregate_api_sse(
+            prefix.as_ref(),
+            response,
+            terminal,
+            AggregateApiStreamInspectionMode::CommitOnContent,
+        );
+    }
+
+    match terminal {
+        GatewayStreamPrefetchTerminal::Eof => {
+            classify_complete_aggregate_api_non_stream_body(prefix.as_ref(), response)
+        }
+        GatewayStreamPrefetchTerminal::IdleTimeout => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(
+                "aggregate api response body idle timeout before delivery".to_string(),
+            )
+        }
+        GatewayStreamPrefetchTerminal::Error(err) => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(format!(
+                "aggregate api response body failed before delivery: {err}"
+            ))
+        }
+        GatewayStreamPrefetchTerminal::Disconnected => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(
+                "aggregate api response body disconnected before delivery".to_string(),
+            )
+        }
+        GatewayStreamPrefetchTerminal::Open
+        | GatewayStreamPrefetchTerminal::PrefixLimit
+        | GatewayStreamPrefetchTerminal::WallClockTimeout => {
+            AggregateApiStreamPreflightOutcome::Ready(response)
+        }
+    }
+}
+
+fn classify_prefetched_aggregate_api_non_stream(
+    body: &[u8],
+    response: GatewayUpstreamResponse,
+    terminal: GatewayStreamPrefetchTerminal,
+) -> AggregateApiStreamPreflightOutcome {
+    if is_aggregate_api_sse_response(&response) || aggregate_api_prefix_looks_like_sse(body) {
+        return classify_prefetched_aggregate_api_sse(
+            body,
+            response,
+            terminal,
+            AggregateApiStreamInspectionMode::CompleteBeforeDelivery,
+        );
+    }
+
+    match terminal {
+        GatewayStreamPrefetchTerminal::Eof => {
+            classify_complete_aggregate_api_response(body, response)
+        }
+        GatewayStreamPrefetchTerminal::IdleTimeout => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(
+                "aggregate api response body idle timeout before delivery".to_string(),
+            )
+        }
+        GatewayStreamPrefetchTerminal::Error(err) => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(format!(
+                "aggregate api response body failed before delivery: {err}"
+            ))
+        }
+        GatewayStreamPrefetchTerminal::Disconnected => {
+            AggregateApiStreamPreflightOutcome::TransportFailure(
+                "aggregate api response body disconnected before delivery".to_string(),
+            )
+        }
+        GatewayStreamPrefetchTerminal::Open
+        | GatewayStreamPrefetchTerminal::PrefixLimit
+        | GatewayStreamPrefetchTerminal::WallClockTimeout => {
+            AggregateApiStreamPreflightOutcome::Ready(response)
+        }
+    }
+}
+
+fn preflight_aggregate_api_non_stream(
+    response: GatewayUpstreamResponse,
+) -> AggregateApiStreamPreflightOutcome {
+    let declared_sse = is_aggregate_api_sse_response(&response);
+    let content_length = response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
+    if !declared_sse
+        && content_length
+            .is_some_and(|length| length > AGGREGATE_API_NON_STREAM_PREFLIGHT_MAX_BYTES)
+    {
+        return AggregateApiStreamPreflightOutcome::Ready(response);
+    }
+
+    let max_bytes = if declared_sse {
+        AGGREGATE_API_STREAM_PREFLIGHT_MAX_BYTES
+    } else {
+        AGGREGATE_API_NON_STREAM_PREFLIGHT_MAX_BYTES
+    };
+    let (body, response, terminal) = response.prefetch_stream_prefix(
+        max_bytes,
+        crate::gateway::upstream_stream_timeout(),
+        Some(AGGREGATE_API_STREAM_PREFLIGHT_WALL_CLOCK_TIMEOUT),
+        |prefix| {
+            if !declared_sse && !aggregate_api_prefix_looks_like_sse(prefix) {
+                return false;
+            }
+            matches!(
+                classify_aggregate_api_stream_prefix(
+                    prefix,
+                    false,
+                    AggregateApiStreamInspectionMode::CompleteBeforeDelivery,
+                ),
+                AggregateApiStreamPrefixDecision::DailyLimit { .. }
+                    | AggregateApiStreamPrefixDecision::UpstreamError(_)
+            )
+        },
+    );
+    classify_prefetched_aggregate_api_non_stream(body.as_ref(), response, terminal)
 }
 
 /// 函数 `build_aggregate_api_request`
@@ -1067,6 +1766,7 @@ pub(in super::super) fn proxy_aggregate_request(
 
     let mut request = Some(request);
     let mut attempted_aggregate_api_ids = Vec::new();
+    let mut daily_limit_tracker = AggregateApiDailyLimitTracker::new(storage, trace_id);
     let mut last_attempt_url: Option<String> = None;
     let mut last_attempt_id: Option<String> = None;
     let mut last_attempt_upstream_model: Option<String> = None;
@@ -1082,6 +1782,14 @@ pub(in super::super) fn proxy_aggregate_request(
         .map(|candidate| (candidate.id.clone(), candidate.url.clone()))
         .collect::<Vec<_>>();
     for (candidate_idx, candidate) in aggregate_api_candidates.into_iter().enumerate() {
+        if daily_limit_tracker.has_pending_failure(candidate.id.as_str()) {
+            log::warn!(
+                "event=gateway_aggregate_daily_limit_duplicate_skipped trace_id={} aggregate_api_id={}",
+                trace_id,
+                candidate.id,
+            );
+            continue;
+        }
         prepare_next_aggregate_candidate_client(
             ordered_candidates.as_slice(),
             candidate_idx,
@@ -1250,8 +1958,16 @@ pub(in super::super) fn proxy_aggregate_request(
                     username_name,
                     password_name,
                 } => {
-                    let parsed: UserPassSecret = serde_json::from_str(secret.trim())
-                        .map_err(|_| "invalid aggregate api secret".to_string())?;
+                    let parsed: UserPassSecret = match serde_json::from_str(secret.trim()) {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            last_attempt_url = Some(url.as_str().to_string());
+                            last_attempt_supplier_name = candidate_supplier_name.clone();
+                            last_attempt_error = Some("invalid aggregate api secret".to_string());
+                            last_failure_status = 502;
+                            break;
+                        }
+                    };
                     url =
                         replace_query_param(url, username_name.as_str(), parsed.username.as_str());
                     url =
@@ -1275,7 +1991,7 @@ pub(in super::super) fn proxy_aggregate_request(
                     &injected_headers,
                     request_deadline,
                     is_stream,
-                )?
+                )
             } else {
                 build_aggregate_api_request(
                     &client,
@@ -1288,7 +2004,17 @@ pub(in super::super) fn proxy_aggregate_request(
                     &injected_headers,
                     request_deadline,
                     is_stream,
-                )?
+                )
+            };
+            let builder = match builder {
+                Ok(builder) => builder,
+                Err(err) => {
+                    last_attempt_url = Some(url.as_str().to_string());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some(err);
+                    last_failure_status = 502;
+                    break;
+                }
             };
 
             let attempt_started_at = Instant::now();
@@ -1332,9 +2058,28 @@ pub(in super::super) fn proxy_aggregate_request(
                     first_upstream_header(upstream.headers(), &["x-openai-authorization-error"]);
                 let upstream_identity_error_code =
                     crate::gateway::extract_identity_error_code_from_headers(upstream.headers());
-                let upstream_body = upstream
-                    .bytes()
-                    .map_err(|err| format!("read upstream body failed: {err}"))?;
+                let upstream_body = match upstream.bytes() {
+                    Ok(body) => body,
+                    Err(err) => {
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error =
+                            Some(format!("read aggregate api upstream body failed: {err}"));
+                        last_failure_status = 502;
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                };
+                if candidate.auto_toggle_enabled {
+                    if let Some(reason) = classify_aggregate_api_daily_limit_failure(
+                        status_code,
+                        upstream_body.as_ref(),
+                    ) {
+                        daily_limit_tracker.mark_failure(&candidate_id, reason);
+                    }
+                }
                 let message = aggregate_api_failure_message(
                     status_code,
                     upstream_body.as_ref(),
@@ -1353,9 +2098,45 @@ pub(in super::super) fn proxy_aggregate_request(
                 break;
             }
 
-            let upstream = if defer_exhaustion_response && !is_stream {
-                match GatewayUpstreamResponse::Blocking(upstream).into_buffered() {
-                    Ok((_, buffered)) => buffered,
+            let upstream = GatewayUpstreamResponse::Blocking(upstream);
+            let upstream = if !is_stream && defer_exhaustion_response {
+                match upstream.into_buffered() {
+                    Ok((buffered_body, buffered)) => {
+                        if candidate.auto_toggle_enabled {
+                            match classify_complete_aggregate_api_response(
+                                buffered_body.as_ref(),
+                                buffered,
+                            ) {
+                                AggregateApiStreamPreflightOutcome::Ready(buffered) => buffered,
+                                AggregateApiStreamPreflightOutcome::DailyLimit {
+                                    reason,
+                                    message,
+                                } => {
+                                    daily_limit_tracker.mark_failure(&candidate_id, reason);
+                                    last_attempt_url = Some(url.as_str().to_string());
+                                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                                    last_attempt_error = Some(message);
+                                    last_failure_status = 502;
+                                    if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                                        continue;
+                                    }
+                                    break;
+                                }
+                                AggregateApiStreamPreflightOutcome::TransportFailure(message) => {
+                                    last_attempt_url = Some(url.as_str().to_string());
+                                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                                    last_attempt_error = Some(message);
+                                    last_failure_status = 502;
+                                    if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                                        continue;
+                                    }
+                                    break;
+                                }
+                            }
+                        } else {
+                            buffered
+                        }
+                    }
                     Err(err) => {
                         last_attempt_url = Some(url.as_str().to_string());
                         last_attempt_supplier_name = candidate_supplier_name.clone();
@@ -1367,8 +2148,62 @@ pub(in super::super) fn proxy_aggregate_request(
                         break;
                     }
                 }
+            } else if !is_stream && candidate.auto_toggle_enabled {
+                match preflight_aggregate_api_non_stream(upstream) {
+                    AggregateApiStreamPreflightOutcome::Ready(upstream) => upstream,
+                    AggregateApiStreamPreflightOutcome::DailyLimit { reason, message } => {
+                        daily_limit_tracker.mark_failure(&candidate_id, reason);
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                    AggregateApiStreamPreflightOutcome::TransportFailure(message) => {
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                }
             } else {
-                GatewayUpstreamResponse::Blocking(upstream)
+                upstream
+            };
+
+            let upstream = if is_stream && candidate.auto_toggle_enabled {
+                match preflight_aggregate_api_stream(upstream) {
+                    AggregateApiStreamPreflightOutcome::Ready(upstream) => upstream,
+                    AggregateApiStreamPreflightOutcome::DailyLimit { reason, message } => {
+                        daily_limit_tracker.mark_failure(&candidate_id, reason);
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                    AggregateApiStreamPreflightOutcome::TransportFailure(message) => {
+                        last_attempt_url = Some(url.as_str().to_string());
+                        last_attempt_supplier_name = candidate_supplier_name.clone();
+                        last_attempt_error = Some(message);
+                        last_failure_status = 502;
+                        if attempt_idx < AGGREGATE_API_RETRY_ATTEMPTS_PER_CHANNEL {
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            } else {
+                upstream
             };
 
             let inflight_guard = super::super::super::acquire_account_inflight(key_id);
@@ -1439,6 +2274,17 @@ pub(in super::super) fn proxy_aggregate_request(
                 status_code
             };
             let usage = bridge.usage;
+
+            let daily_limit_reason = final_error
+                .as_deref()
+                .and_then(classify_aggregate_api_daily_limit_hint);
+            if bridge_ok && final_error.is_none() {
+                daily_limit_tracker.mark_success(&candidate_id);
+            } else if candidate.auto_toggle_enabled {
+                if let Some(reason) = daily_limit_reason {
+                    daily_limit_tracker.mark_failure(&candidate_id, reason);
+                }
+            }
 
             super::super::super::record_gateway_request_outcome(
                 path,
@@ -1592,6 +2438,23 @@ fn aggregate_api_secrets_by_candidate_id(
 #[cfg(test)]
 mod bridge_tests {
     use super::*;
+    use crate::gateway::upstream::response::{GatewayByteStream, GatewayStreamResponse};
+
+    fn buffered_upstream_response(
+        body: &'static [u8],
+        content_type: &'static str,
+    ) -> GatewayUpstreamResponse {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static(content_type),
+        );
+        GatewayUpstreamResponse::Stream(GatewayStreamResponse::new(
+            reqwest::StatusCode::OK,
+            headers,
+            GatewayByteStream::from_bytes(Bytes::from_static(body)),
+        ))
+    }
 
     /// 函数 `candidate`
     ///
@@ -1617,6 +2480,11 @@ mod bridge_tests {
             action: None,
             model_override: None,
             status: "active".to_string(),
+            auto_toggle_enabled: false,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
             created_at: sort,
             updated_at: sort,
             last_test_at: None,
@@ -1632,6 +2500,356 @@ mod bridge_tests {
             last_balance_error: None,
             last_balance_json: None,
         }
+    }
+
+    #[test]
+    fn daily_limit_failure_is_counted_once_per_api_id_within_one_request() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let mut api = candidate("agg-deduplicated", 0);
+        api.auto_toggle_enabled = true;
+        storage.insert_aggregate_api(&api).expect("insert API");
+        {
+            let mut tracker = AggregateApiDailyLimitTracker::new(&storage, "trace-deduplicated");
+            for _ in 0..2 {
+                tracker.mark_failure(&api.id, "daily_quota_exceeded");
+            }
+        }
+
+        let stored = storage
+            .find_aggregate_api_by_id(&api.id)
+            .expect("read API")
+            .expect("API exists");
+        assert_eq!(stored.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn later_success_for_same_api_cancels_pending_daily_limit_failure() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let mut api = candidate("agg-eventual-success", 0);
+        api.auto_toggle_enabled = true;
+        storage.insert_aggregate_api(&api).expect("insert API");
+
+        {
+            let mut tracker =
+                AggregateApiDailyLimitTracker::new(&storage, "trace-eventual-success");
+            tracker.mark_failure(&api.id, "daily_quota_exceeded");
+            tracker.mark_success(&api.id);
+        }
+
+        let stored = storage
+            .find_aggregate_api_by_id(&api.id)
+            .expect("read API")
+            .expect("API exists");
+        assert_eq!(stored.consecutive_failures, 0);
+        assert!(!stored.auto_disabled);
+    }
+
+    #[test]
+    fn stream_preflight_detects_daily_limit_before_content() {
+        let prefix = br#"event: response.created
+data: {"type":"response.created","response":{"id":"resp_1"}}
+
+event: response.failed
+data: {"type":"response.failed","response":{"error":{"code":"DAILY_LIMIT_EXCEEDED","message":"daily usage limit exceeded"}}}
+
+"#;
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                prefix,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::DailyLimit { .. }
+        ));
+    }
+
+    #[test]
+    fn stream_preflight_commits_when_bounded_inspection_stops() {
+        let metadata = b"event: response.created\ndata: {\"type\":\"response.created\"}\n\n";
+        for terminal in [
+            GatewayStreamPrefetchTerminal::PrefixLimit,
+            GatewayStreamPrefetchTerminal::WallClockTimeout,
+        ] {
+            assert!(matches!(
+                classify_prefetched_aggregate_api_sse(
+                    metadata,
+                    buffered_upstream_response(metadata, "text/event-stream"),
+                    terminal,
+                    AggregateApiStreamInspectionMode::CommitOnContent,
+                ),
+                AggregateApiStreamPreflightOutcome::Ready(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn non_stream_preflight_commits_when_bounded_inspection_stops() {
+        let partial_json = br#"{"id":"response-1""#;
+        for terminal in [
+            GatewayStreamPrefetchTerminal::PrefixLimit,
+            GatewayStreamPrefetchTerminal::WallClockTimeout,
+        ] {
+            assert!(matches!(
+                classify_prefetched_aggregate_api_non_stream(
+                    partial_json,
+                    buffered_upstream_response(partial_json, "application/json"),
+                    terminal,
+                ),
+                AggregateApiStreamPreflightOutcome::Ready(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn stream_preflight_commits_after_content_and_fails_over_transient_errors() {
+        let content_then_error = br#"event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"hello"}
+
+event: response.failed
+data: {"type":"response.failed","response":{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}}
+
+"#;
+        assert_eq!(
+            classify_aggregate_api_stream_prefix(
+                content_then_error,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::Deliver
+        );
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                content_then_error,
+                false,
+                AggregateApiStreamInspectionMode::CompleteBeforeDelivery,
+            ),
+            AggregateApiStreamPrefixDecision::DailyLimit { .. }
+        ));
+
+        let concurrency_limit = br#"event: error
+data: {"type":"error","error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded"}}
+
+"#;
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                concurrency_limit,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::UpstreamError(_)
+        ));
+
+        let root_code_concurrency_limit =
+            br#"data: {"code":"rate_limit_exceeded","message":"Concurrency limit exceeded"}
+
+"#;
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                root_code_concurrency_limit,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::UpstreamError(_)
+        ));
+    }
+
+    #[test]
+    fn chat_stream_role_metadata_does_not_hide_a_daily_limit_error() {
+        let prefix = br#"data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}
+
+data: {"error":{"type":"billing_error","message":"daily usage limit exceeded"}}
+
+"#;
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                prefix,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::DailyLimit { .. }
+        ));
+    }
+
+    #[test]
+    fn stream_preflight_requires_error_context_for_daily_limit_text() {
+        let ordinary_message = br#"data: {"message":"daily usage limit exceeded"}
+
+"#;
+        assert_eq!(
+            classify_aggregate_api_stream_prefix(
+                ordinary_message,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::Deliver
+        );
+
+        let plain_error = b"event: error\ndata: daily usage limit exceeded\n\n";
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                plain_error,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::DailyLimit { .. }
+        ));
+
+        let billing_error =
+            b"data: {\"type\":\"billing_error\",\"message\":\"daily usage limit exceeded\"}\n\n";
+        assert!(matches!(
+            classify_aggregate_api_stream_prefix(
+                billing_error,
+                false,
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPrefixDecision::DailyLimit { .. }
+        ));
+
+        for explicit_code in [
+            b"data: {\"type\":\"DAILY_LIMIT_EXCEEDED\"}\n\n".as_slice(),
+            b"data: {\"status\":\"daily-limit-exceeded\"}\n\n".as_slice(),
+            b"data: {\"reason\":\"daily limit exceeded\"}\n\n".as_slice(),
+        ] {
+            assert!(matches!(
+                classify_aggregate_api_stream_prefix(
+                    explicit_code,
+                    false,
+                    AggregateApiStreamInspectionMode::CommitOnContent,
+                ),
+                AggregateApiStreamPrefixDecision::DailyLimit { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn complete_before_delivery_rejects_failed_stream_after_content() {
+        let content = b"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n";
+        for terminal in [
+            GatewayStreamPrefetchTerminal::IdleTimeout,
+            GatewayStreamPrefetchTerminal::Error("upstream reset".to_string()),
+            GatewayStreamPrefetchTerminal::Disconnected,
+        ] {
+            assert!(matches!(
+                classify_prefetched_aggregate_api_sse(
+                    content,
+                    buffered_upstream_response(content, "text/event-stream"),
+                    terminal,
+                    AggregateApiStreamInspectionMode::CompleteBeforeDelivery,
+                ),
+                AggregateApiStreamPreflightOutcome::TransportFailure(_)
+            ));
+        }
+
+        assert!(matches!(
+            classify_prefetched_aggregate_api_sse(
+                content,
+                buffered_upstream_response(content, "text/event-stream"),
+                GatewayStreamPrefetchTerminal::Error("upstream reset".to_string()),
+                AggregateApiStreamInspectionMode::CommitOnContent,
+            ),
+            AggregateApiStreamPreflightOutcome::Ready(_)
+        ));
+    }
+
+    #[test]
+    fn non_stream_preflight_detects_daily_limit_and_replays_normal_body() {
+        let daily_limit = buffered_upstream_response(
+            br#"{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}"#,
+            "application/json",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_non_stream(daily_limit),
+            AggregateApiStreamPreflightOutcome::DailyLimit { .. }
+        ));
+
+        let other_error = buffered_upstream_response(
+            br#"{"error":{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded"}}"#,
+            "application/json",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_non_stream(other_error),
+            AggregateApiStreamPreflightOutcome::TransportFailure(_)
+        ));
+
+        let root_code_error = buffered_upstream_response(
+            br#"{"code":"rate_limit_exceeded","message":"Concurrency limit exceeded"}"#,
+            "application/json",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_non_stream(root_code_error),
+            AggregateApiStreamPreflightOutcome::TransportFailure(_)
+        ));
+
+        let sse_daily_limit = buffered_upstream_response(
+            b"event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"DAILY_LIMIT_EXCEEDED\"}}}\n\n",
+            "text/event-stream",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_non_stream(sse_daily_limit),
+            AggregateApiStreamPreflightOutcome::DailyLimit { .. }
+        ));
+
+        let success_wrappers: &[&[u8]] = &[
+            br#"{"code":0,"message":"ok","data":{"id":"response-1"}}"#,
+            br#"{"code":1,"message":"ok","data":{"id":"response-1"}}"#,
+            br#"{"code":200,"message":"ok","data":{"id":"response-1"}}"#,
+            br#"{"code":"success","message":"ok","data":{"id":"response-1"}}"#,
+            br#"{"code":"NO_ERROR","message":"ok","data":{"id":"response-1"}}"#,
+            br#"{"code":"NO_ERRORS","message":"ok","data":{"id":"response-1"}}"#,
+            br#"{"error":false,"data":{"id":"response-1"}}"#,
+            br#"{"error":{},"data":{"id":"response-1"}}"#,
+        ];
+        for body in success_wrappers {
+            assert!(matches!(
+                preflight_aggregate_api_non_stream(buffered_upstream_response(
+                    body,
+                    "application/json"
+                )),
+                AggregateApiStreamPreflightOutcome::Ready(_)
+            ));
+        }
+
+        let normal_body = br#"{"id":"response-1","output_text":"ok"}"#;
+        let normal = buffered_upstream_response(normal_body, "application/json");
+        let AggregateApiStreamPreflightOutcome::Ready(normal) =
+            preflight_aggregate_api_non_stream(normal)
+        else {
+            panic!("normal JSON should be delivered");
+        };
+        let (replayed, _) = normal.into_buffered().expect("read replayed response");
+        assert_eq!(replayed.as_ref(), normal_body);
+    }
+
+    #[test]
+    fn stream_preflight_inspects_json_error_responses_and_sse_prefixes() {
+        let json_error = buffered_upstream_response(
+            br#"{"error":{"type":"billing_error","message":"daily usage limit exceeded"}}"#,
+            "application/json",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_stream(json_error),
+            AggregateApiStreamPreflightOutcome::DailyLimit { .. }
+        ));
+
+        let sse_error = buffered_upstream_response(
+            b"event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"DAILY_LIMIT_EXCEEDED\"}}}\n\n",
+            "text/event-stream",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_stream(sse_error),
+            AggregateApiStreamPreflightOutcome::DailyLimit { .. }
+        ));
+
+        let mislabeled_sse_error = buffered_upstream_response(
+            b"event: error\ndata: daily usage limit exceeded\n\n",
+            "application/json",
+        );
+        assert!(matches!(
+            preflight_aggregate_api_stream(mislabeled_sse_error),
+            AggregateApiStreamPreflightOutcome::DailyLimit { .. }
+        ));
     }
 
     #[test]

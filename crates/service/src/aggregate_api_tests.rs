@@ -1,4 +1,6 @@
-use codexmanager_core::storage::{AggregateApi, ManagedModelV2Upsert, ModelRouteV2, Storage};
+use codexmanager_core::storage::{
+    now_ts, AggregateApi, ManagedModelV2Upsert, ModelRouteV2, Storage,
+};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,16 +10,89 @@ use std::time::Duration;
 use tiny_http::{Response, Server};
 
 use super::{
-    action_path_or_default, extract_custom_balance, extract_generic_balance,
-    extract_new_api_balance, list_aggregate_apis, normalize_action_override,
-    normalize_custom_balance_query_config, normalize_provider_type, normalize_provider_type_value,
-    probe_claude_endpoint, probe_codex_endpoint, provider_default_url, read_aggregate_api_secret,
+    action_path_or_default, classify_aggregate_api_daily_limit_failure,
+    classify_aggregate_api_daily_limit_hint, create_aggregate_api, extract_custom_balance,
+    extract_generic_balance, extract_new_api_balance, list_aggregate_apis,
+    normalize_action_override, normalize_custom_balance_query_config, normalize_provider_type,
+    normalize_provider_type_value, probe_claude_endpoint, probe_codex_endpoint,
+    provider_default_url, read_aggregate_api_secret, recover_aggregate_api, update_aggregate_api,
     update_aggregate_api_sorts, AggregateApiSortUpdate, CustomBalanceQueryConfig,
-    AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_COMPATIBLE,
-    AGGREGATE_API_PROVIDER_GEMINI,
+    AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT, AGGREGATE_API_PROVIDER_CLAUDE,
+    AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
 };
 
 static AGGREGATE_API_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn daily_limit_classifier_requires_a_structured_explicit_signal() {
+    let bodies: &[&[u8]] = &[
+        br#"{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}"#,
+        br#"{"response":{"error":{"type":"daily-limit-exceeded"}}}"#,
+        br#"{"error":{"message":"Daily usage limit exceeded. Try again tomorrow."}}"#,
+        br#"{"code":"USAGE_LIMIT_EXCEEDED","message":"error: code=429 reason=\"DAILY_LIMIT_EXCEEDED\" message=\"daily usage limit exceeded\" metadata=map[]"}"#,
+        br#"{"code":"USAGE_LIMIT_EXCEEDED","message":"error: code=429 reason=\"DAILY_LIMIT_EXCEEDED\""}"#,
+        br#"{"error":{"type":"billing_error","message":"daily usage limit exceeded"}}"#,
+    ];
+    for body in bodies {
+        assert_eq!(
+            classify_aggregate_api_daily_limit_failure(429, body),
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+        );
+    }
+    assert_eq!(
+        classify_aggregate_api_daily_limit_failure(
+            200,
+            br#"{"type":"response.failed","response":{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}}"#,
+        ),
+        Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    );
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint("DAILY_LIMIT_EXCEEDED"),
+        Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    );
+    for hint in [
+        r#"{"code":"DAILY_LIMIT_EXCEEDED"}"#,
+        "code=DAILY_LIMIT_EXCEEDED upstream quota rejected",
+    ] {
+        assert_eq!(
+            classify_aggregate_api_daily_limit_hint(hint),
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+        );
+    }
+}
+
+#[test]
+fn daily_limit_classifier_rejects_transient_and_unstructured_failures() {
+    let failures: &[(u16, &[u8])] = &[
+        (429, br#"{"error":{"code":"rate_limit_exceeded"}}"#),
+        (
+            429,
+            br#"{"error":{"message":"Too many concurrent requests"}}"#,
+        ),
+        (429, b"DAILY_LIMIT_EXCEEDED"),
+        (429, br#""DAILY_LIMIT_EXCEEDED""#),
+        (408, br#"{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}"#),
+        (502, br#"{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}"#),
+        (
+            503,
+            br#"{"error":{"message":"daily usage limit exceeded"}}"#,
+        ),
+    ];
+    for &(status, body) in failures {
+        assert_eq!(
+            classify_aggregate_api_daily_limit_failure(status, body),
+            None
+        );
+    }
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint("rate_limit_exceeded"),
+        None
+    );
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint("upstream mentioned DAILY_LIMIT_EXCEEDED"),
+        None
+    );
+}
 
 fn new_test_dir(prefix: &str) -> PathBuf {
     let seq = AGGREGATE_API_TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -140,6 +215,11 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         action: action.map(str::to_string),
         model_override: None,
         status: "active".to_string(),
+        auto_toggle_enabled: false,
+        consecutive_failures: 0,
+        auto_disabled: false,
+        auto_disabled_at: None,
+        auto_disabled_reason: None,
         created_at: 0,
         updated_at: 0,
         last_test_at: None,
@@ -157,6 +237,195 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
     }
 }
 
+fn create_test_aggregate_api(suffix: &str, auto_toggle_enabled: Option<bool>) -> String {
+    create_aggregate_api(
+        Some(format!("https://{suffix}.example.test/v1")),
+        Some(format!("test-key-{suffix}")),
+        Some(AGGREGATE_API_PROVIDER_COMPATIBLE.to_string()),
+        Some(format!("supplier-{suffix}")),
+        None,
+        auto_toggle_enabled,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("create aggregate API")
+    .id
+}
+
+fn update_test_aggregate_api_auto_toggle(api_id: &str, supplier_name: &str, enabled: bool) {
+    update_aggregate_api(
+        api_id,
+        None,
+        None,
+        None,
+        Some(supplier_name.to_string()),
+        None,
+        None,
+        Some(enabled),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("update aggregate API auto toggle");
+}
+
+#[test]
+fn create_aggregate_api_defaults_auto_toggle_off_and_accepts_explicit_enable() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-create-auto-toggle");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+
+    let default_id = create_test_aggregate_api("auto-default", None);
+    let enabled_id = create_test_aggregate_api("auto-enabled", Some(true));
+
+    let default_api = storage
+        .find_aggregate_api_by_id(&default_id)
+        .expect("read default API")
+        .expect("default API exists");
+    assert!(!default_api.auto_toggle_enabled);
+    assert_eq!(default_api.consecutive_failures, 0);
+    assert!(!default_api.auto_disabled);
+
+    let enabled_api = storage
+        .find_aggregate_api_by_id(&enabled_id)
+        .expect("read enabled API")
+        .expect("enabled API exists");
+    assert!(enabled_api.auto_toggle_enabled);
+    assert_eq!(enabled_api.consecutive_failures, 0);
+    assert!(!enabled_api.auto_disabled);
+}
+
+#[test]
+fn update_disabling_auto_toggle_clears_current_breaker_but_preserves_history() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-update-auto-toggle");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let disabled_at = now_ts().saturating_sub(60);
+    let mut api = aggregate_api_with_action(None);
+    api.id = "agg-update-auto-toggle".to_string();
+    api.supplier_name = Some("update-auto-toggle".to_string());
+    api.auto_toggle_enabled = true;
+    api.consecutive_failures = 3;
+    api.auto_disabled = true;
+    api.auto_disabled_at = Some(disabled_at);
+    api.auto_disabled_reason = Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT.to_string());
+    storage.insert_aggregate_api(&api).expect("insert API");
+
+    update_aggregate_api(
+        &api.id,
+        Some("not-a-valid-url".to_string()),
+        None,
+        None,
+        Some("update-auto-toggle".to_string()),
+        None,
+        Some("disabled".to_string()),
+        Some(false),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect_err("invalid config should fail before changing toggle state");
+    let unchanged = storage
+        .find_aggregate_api_by_id(&api.id)
+        .expect("read unchanged API")
+        .expect("unchanged API exists");
+    assert_eq!(unchanged.status, "active");
+    assert!(unchanged.auto_toggle_enabled);
+    assert_eq!(unchanged.consecutive_failures, 3);
+    assert!(unchanged.auto_disabled);
+
+    update_test_aggregate_api_auto_toggle(&api.id, "update-auto-toggle", false);
+
+    let updated = storage
+        .find_aggregate_api_by_id(&api.id)
+        .expect("read updated API")
+        .expect("updated API exists");
+    assert!(!updated.auto_toggle_enabled);
+    assert_eq!(updated.consecutive_failures, 0);
+    assert!(!updated.auto_disabled);
+    assert_eq!(updated.auto_disabled_at, Some(disabled_at));
+    assert_eq!(
+        updated.auto_disabled_reason.as_deref(),
+        Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    );
+}
+
+#[test]
+fn recover_aggregate_api_does_not_change_manual_status_or_history() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-manual-recover");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let disabled_at = now_ts().saturating_sub(60);
+    let mut api = aggregate_api_with_action(None);
+    api.id = "agg-manual-recover".to_string();
+    api.status = "disabled".to_string();
+    api.auto_toggle_enabled = true;
+    api.consecutive_failures = 3;
+    api.auto_disabled = true;
+    api.auto_disabled_at = Some(disabled_at);
+    api.auto_disabled_reason = Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT.to_string());
+    storage.insert_aggregate_api(&api).expect("insert API");
+
+    recover_aggregate_api(&api.id).expect("recover automatic breaker");
+
+    let recovered = storage
+        .find_aggregate_api_by_id(&api.id)
+        .expect("read recovered API")
+        .expect("recovered API exists");
+    assert_eq!(recovered.status, "disabled");
+    assert!(recovered.auto_toggle_enabled);
+    assert_eq!(recovered.consecutive_failures, 0);
+    assert!(!recovered.auto_disabled);
+    assert_eq!(recovered.auto_disabled_at, Some(disabled_at));
+    assert_eq!(
+        recovered.auto_disabled_reason.as_deref(),
+        Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    );
+}
+
 #[test]
 fn list_aggregate_apis_reads_model_assignments_from_v2_routes_only() {
     let _lock = crate::test_env_guard();
@@ -168,6 +437,12 @@ fn list_aggregate_apis_reads_model_assignments_from_v2_routes_only() {
     storage.init().expect("init db");
     let mut api = aggregate_api_with_action(None);
     api.id = "agg-listed".to_string();
+    api.status = "disabled".to_string();
+    api.auto_toggle_enabled = true;
+    api.consecutive_failures = 3;
+    api.auto_disabled = true;
+    api.auto_disabled_at = Some(123_456);
+    api.auto_disabled_reason = Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT.to_string());
     storage.insert_aggregate_api(&api).expect("insert api");
     let mut model = storage
         .get_managed_model_v2("gpt-5.4")
@@ -203,6 +478,14 @@ fn list_aggregate_apis_reads_model_assignments_from_v2_routes_only() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, "agg-listed");
     assert_eq!(items[0].model_slugs, vec!["gpt-5.4".to_string()]);
+    assert!(items[0].auto_toggle_enabled);
+    assert_eq!(items[0].consecutive_failures, 3);
+    assert!(items[0].auto_disabled);
+    assert_eq!(items[0].auto_disabled_at, Some(123_456));
+    assert_eq!(
+        items[0].auto_disabled_reason.as_deref(),
+        Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    );
 }
 
 #[test]

@@ -1,13 +1,14 @@
-use rusqlite::{params, params_from_iter, types::Value, Result, Row};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, Result, Row};
 use std::collections::HashMap;
 
 use super::aggregate_apis_sql::*;
 use super::key_id_filters::{normalize_text_ids, text_id_in_clause, SQLITE_IN_CLAUSE_BATCH_SIZE};
 use super::{
-    now_ts, AggregateApi, AggregateApiDashboardSourceMetadata, AggregateApiListSnapshot,
-    AggregateApiListSummary, AggregateApiOverviewStats, AggregateApiQuotaSourceSummary,
-    AggregateApiSecretConfig, AggregateApiSupplierIdentity, AggregateApiSupplierModel,
-    AggregateApiUpdateConfig, AggregateApiWithSecrets, Storage,
+    now_ts, AggregateApi, AggregateApiAutoToggleUpdate, AggregateApiDashboardSourceMetadata,
+    AggregateApiListSnapshot, AggregateApiListSummary, AggregateApiOverviewStats,
+    AggregateApiQuotaSourceSummary, AggregateApiSecretConfig, AggregateApiSupplierIdentity,
+    AggregateApiSupplierModel, AggregateApiUpdateConfig, AggregateApiWithSecrets, Storage,
+    AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD, AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA,
 };
 
 impl Storage {
@@ -25,7 +26,7 @@ impl Storage {
     /// 返回函数执行结果
     pub fn insert_aggregate_api(&self, api: &AggregateApi) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO aggregate_apis (
+            "INSERT INTO aggregate_apis (
                 id,
                 provider_type,
                 supplier_name,
@@ -49,8 +50,37 @@ impl Storage {
                 last_balance_at,
                 last_balance_status,
                 last_balance_error,
-                last_balance_json
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                last_balance_json,
+                auto_toggle_enabled,
+                consecutive_failures,
+                auto_disabled,
+                auto_disabled_at,
+                auto_disabled_reason
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
+            ON CONFLICT(id) DO UPDATE SET
+                provider_type = excluded.provider_type,
+                supplier_name = excluded.supplier_name,
+                sort = excluded.sort,
+                url = excluded.url,
+                auth_type = excluded.auth_type,
+                auth_params_json = excluded.auth_params_json,
+                action = excluded.action,
+                model_override = excluded.model_override,
+                status = excluded.status,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                last_test_at = excluded.last_test_at,
+                last_test_status = excluded.last_test_status,
+                last_test_error = excluded.last_test_error,
+                balance_query_enabled = excluded.balance_query_enabled,
+                balance_query_template = excluded.balance_query_template,
+                balance_query_base_url = excluded.balance_query_base_url,
+                balance_query_user_id = excluded.balance_query_user_id,
+                balance_query_config_json = excluded.balance_query_config_json,
+                last_balance_at = excluded.last_balance_at,
+                last_balance_status = excluded.last_balance_status,
+                last_balance_error = excluded.last_balance_error,
+                last_balance_json = excluded.last_balance_json",
             params![
                 &api.id,
                 &api.provider_type,
@@ -76,6 +106,11 @@ impl Storage {
                 &api.last_balance_status,
                 &api.last_balance_error,
                 &api.last_balance_json,
+                api.auto_toggle_enabled,
+                api.consecutive_failures,
+                api.auto_disabled,
+                api.auto_disabled_at,
+                &api.auto_disabled_reason,
             ],
         )?;
         Ok(())
@@ -488,6 +523,121 @@ impl Storage {
         Ok(())
     }
 
+    pub fn record_aggregate_api_daily_quota_failure(
+        &self,
+        api_id: &str,
+    ) -> Result<Option<AggregateApiAutoToggleUpdate>> {
+        self.record_aggregate_api_daily_quota_failure_at(api_id, now_ts())
+    }
+
+    fn record_aggregate_api_daily_quota_failure_at(
+        &self,
+        api_id: &str,
+        failed_at: i64,
+    ) -> Result<Option<AggregateApiAutoToggleUpdate>> {
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = tx.execute(
+            record_aggregate_api_daily_quota_failure_sql(),
+            params![
+                api_id,
+                AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD,
+                failed_at,
+                AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA,
+            ],
+        )?;
+        let state = tx
+            .query_row(
+                aggregate_api_auto_toggle_state_by_id_sql(),
+                [api_id],
+                |row| {
+                    let auto_disabled: bool = row.get(2)?;
+                    Ok(AggregateApiAutoToggleUpdate {
+                        counted: changed > 0,
+                        auto_disabled_now: changed > 0 && auto_disabled,
+                        auto_toggle_enabled: row.get(0)?,
+                        consecutive_failures: row.get(1)?,
+                        auto_disabled,
+                        auto_disabled_at: row.get(3)?,
+                        auto_disabled_reason: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+        tx.commit()?;
+        Ok(state)
+    }
+
+    pub fn reset_aggregate_api_consecutive_failures(&self, api_id: &str) -> Result<bool> {
+        let changed = self
+            .conn
+            .execute(reset_aggregate_api_consecutive_failures_sql(), [api_id])?;
+        Ok(changed > 0)
+    }
+
+    pub fn set_aggregate_api_auto_toggle_enabled(
+        &self,
+        api_id: &str,
+        enabled: bool,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            set_aggregate_api_auto_toggle_enabled_sql(),
+            params![enabled, api_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn update_aggregate_api_controls(
+        &self,
+        api_id: &str,
+        status: Option<&str>,
+        auto_toggle_enabled: Option<bool>,
+    ) -> Result<bool> {
+        if status.is_none() && auto_toggle_enabled.is_none() {
+            return Ok(false);
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut changed = 0usize;
+        if let Some(status) = status {
+            changed = changed.saturating_add(tx.execute(
+                update_aggregate_api_status_sql(),
+                (status, now_ts(), api_id),
+            )?);
+        }
+        if let Some(enabled) = auto_toggle_enabled {
+            changed = changed.saturating_add(tx.execute(
+                set_aggregate_api_auto_toggle_enabled_sql(),
+                params![enabled, api_id],
+            )?);
+        }
+        tx.commit()?;
+        Ok(changed > 0)
+    }
+
+    pub fn recover_aggregate_api_auto_disable(&self, api_id: &str) -> Result<bool> {
+        let changed = self
+            .conn
+            .execute(recover_aggregate_api_auto_disable_sql(), [api_id])?;
+        Ok(changed > 0)
+    }
+
+    pub fn recover_aggregate_apis_auto_disabled_before_today(&self) -> Result<usize> {
+        self.recover_aggregate_apis_auto_disabled_before_local_day_at(now_ts())
+    }
+
+    fn recover_aggregate_apis_auto_disabled_before_local_day_at(&self, now: i64) -> Result<usize> {
+        let has_recoverable = self.conn.query_row(
+            has_recoverable_aggregate_apis_before_local_day_sql(),
+            [now],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if !has_recoverable {
+            return Ok(0);
+        }
+        self.conn
+            .execute(recover_aggregate_apis_before_local_day_sql(), [now])
+    }
+
     /// 函数 `update_aggregate_api_type`
     ///
     /// 作者: gaohongshun
@@ -779,6 +929,11 @@ impl Storage {
                 action TEXT,
                 model_override TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
+                auto_toggle_enabled INTEGER NOT NULL DEFAULT 0,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                auto_disabled INTEGER NOT NULL DEFAULT 0,
+                auto_disabled_at INTEGER,
+                auto_disabled_reason TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 last_test_at INTEGER,
@@ -825,6 +980,7 @@ impl Storage {
         self.ensure_column("aggregate_apis", "last_balance_status", "TEXT")?;
         self.ensure_column("aggregate_apis", "last_balance_error", "TEXT")?;
         self.ensure_column("aggregate_apis", "last_balance_json", "TEXT")?;
+        self.ensure_aggregate_api_auto_toggle_columns()?;
         self.ensure_aggregate_api_balance_query_lookup_index()?;
         self.ensure_aggregate_api_status_order_index()?;
         self.ensure_aggregate_api_provider_status_order_index()?;
@@ -846,6 +1002,27 @@ impl Storage {
              WHERE sort IS NULL",
             [],
         )?;
+        Ok(())
+    }
+
+    pub(super) fn ensure_aggregate_api_auto_toggle_columns(&self) -> Result<()> {
+        self.ensure_column(
+            "aggregate_apis",
+            "auto_toggle_enabled",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column(
+            "aggregate_apis",
+            "consecutive_failures",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column(
+            "aggregate_apis",
+            "auto_disabled",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column("aggregate_apis", "auto_disabled_at", "INTEGER")?;
+        self.ensure_column("aggregate_apis", "auto_disabled_reason", "TEXT")?;
         Ok(())
     }
 
@@ -1063,14 +1240,19 @@ fn map_aggregate_api_row(row: &Row<'_>) -> Result<AggregateApi> {
         last_balance_status: row.get(21)?,
         last_balance_error: row.get(22)?,
         last_balance_json: row.get(23)?,
+        auto_toggle_enabled: row.get(24)?,
+        consecutive_failures: row.get(25)?,
+        auto_disabled: row.get(26)?,
+        auto_disabled_at: row.get(27)?,
+        auto_disabled_reason: row.get(28)?,
     })
 }
 
 fn map_aggregate_api_with_secrets_row(row: &Row<'_>) -> Result<AggregateApiWithSecrets> {
     Ok(AggregateApiWithSecrets {
         api: map_aggregate_api_row(row)?,
-        secret_value: row.get(24)?,
-        balance_access_token: row.get(25)?,
+        secret_value: row.get(29)?,
+        balance_access_token: row.get(30)?,
     })
 }
 
@@ -1100,6 +1282,11 @@ fn map_aggregate_api_list_summary_row(row: &Row<'_>) -> Result<AggregateApiListS
         last_balance_status: row.get(21)?,
         last_balance_error: row.get(22)?,
         last_balance_json: row.get(23)?,
+        auto_toggle_enabled: row.get(24)?,
+        consecutive_failures: row.get(25)?,
+        auto_disabled: row.get(26)?,
+        auto_disabled_at: row.get(27)?,
+        auto_disabled_reason: row.get(28)?,
     })
 }
 
@@ -1112,11 +1299,12 @@ fn map_aggregate_api_quota_source_summary_row(
         supplier_name: row.get(2)?,
         url: row.get(3)?,
         status: row.get(4)?,
-        balance_query_enabled: row.get(5)?,
-        last_balance_at: row.get(6)?,
-        last_balance_status: row.get(7)?,
-        last_balance_error: row.get(8)?,
-        last_balance_json: row.get(9)?,
+        auto_disabled: row.get(5)?,
+        balance_query_enabled: row.get(6)?,
+        last_balance_at: row.get(7)?,
+        last_balance_status: row.get(8)?,
+        last_balance_error: row.get(9)?,
+        last_balance_json: row.get(10)?,
     })
 }
 
@@ -1258,6 +1446,7 @@ fn aggregate_api_quota_source_summaries_list_sql() -> &'static str {
         supplier_name,
         url,
         status,
+        auto_disabled,
         balance_query_enabled,
         last_balance_at,
         last_balance_status,
@@ -1294,6 +1483,7 @@ fn active_aggregate_api_ids_sql() -> &'static str {
     "SELECT id
      FROM aggregate_apis
      WHERE LOWER(TRIM(COALESCE(status, ''))) = 'active'
+       AND COALESCE(auto_disabled, 0) = 0
      ORDER BY sort ASC, created_at DESC, id ASC"
 }
 
@@ -1408,6 +1598,11 @@ mod supplier_model_tests {
             action: None,
             model_override: None,
             status: "active".to_string(),
+            auto_toggle_enabled: false,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
             created_at: now,
             updated_at: now,
             last_test_at: None,
@@ -1423,6 +1618,214 @@ mod supplier_model_tests {
             last_balance_error: None,
             last_balance_json: None,
         }
+    }
+
+    #[test]
+    fn aggregate_api_daily_quota_failures_trip_only_enabled_active_api_and_preserve_manual_status()
+    {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        let api = sample_aggregate_api("agg-auto-toggle", now);
+        storage.insert_aggregate_api(&api).expect("insert api");
+
+        let ignored = storage
+            .record_aggregate_api_daily_quota_failure_at(&api.id, now + 1)
+            .expect("record disabled feature")
+            .expect("api state");
+        assert!(!ignored.counted);
+        assert_eq!(ignored.consecutive_failures, 0);
+
+        assert!(storage
+            .set_aggregate_api_auto_toggle_enabled(&api.id, true)
+            .expect("enable auto toggle"));
+        for expected_failures in 1..=AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD {
+            let update = storage
+                .record_aggregate_api_daily_quota_failure_at(&api.id, now + expected_failures)
+                .expect("record quota failure")
+                .expect("api state");
+            assert!(update.counted);
+            assert_eq!(update.consecutive_failures, expected_failures);
+            assert_eq!(
+                update.auto_disabled_now,
+                expected_failures == AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD
+            );
+        }
+
+        let tripped = storage
+            .find_aggregate_api_by_id(&api.id)
+            .expect("find api")
+            .expect("api exists");
+        assert_eq!(
+            tripped.status, "active",
+            "automatic state must not alter status"
+        );
+        assert!(tripped.auto_disabled);
+        assert_eq!(
+            tripped.auto_disabled_reason.as_deref(),
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA)
+        );
+        assert_eq!(
+            tripped.updated_at, now,
+            "runtime counters must not reorder APIs"
+        );
+        assert!(storage
+            .list_active_aggregate_api_ids()
+            .expect("list active APIs")
+            .is_empty());
+
+        let mut config_update = api.clone();
+        config_update.status = "disabled".to_string();
+        config_update.supplier_name = Some("updated supplier".to_string());
+        storage
+            .insert_aggregate_api(&config_update)
+            .expect("upsert config");
+        let after_upsert = storage
+            .find_aggregate_api_by_id(&api.id)
+            .expect("find updated api")
+            .expect("api exists");
+        assert_eq!(after_upsert.status, "disabled");
+        assert!(after_upsert.auto_disabled);
+        assert_eq!(
+            after_upsert.consecutive_failures,
+            AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD
+        );
+
+        assert!(storage
+            .recover_aggregate_api_auto_disable(&api.id)
+            .expect("manual auto recovery"));
+        let recovered = storage
+            .find_aggregate_api_by_id(&api.id)
+            .expect("find recovered api")
+            .expect("api exists");
+        assert_eq!(recovered.status, "disabled");
+        assert!(!recovered.auto_disabled);
+        assert_eq!(recovered.consecutive_failures, 0);
+        assert_eq!(
+            recovered.auto_disabled_reason.as_deref(),
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA)
+        );
+        assert!(recovered.auto_disabled_at.is_some());
+    }
+
+    #[test]
+    fn aggregate_api_success_and_control_update_clear_current_failure_state() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        let api = sample_aggregate_api("agg-auto-reset", now);
+        storage.insert_aggregate_api(&api).expect("insert api");
+        storage
+            .set_aggregate_api_auto_toggle_enabled(&api.id, true)
+            .expect("enable auto toggle");
+
+        for offset in 1..=2 {
+            storage
+                .record_aggregate_api_daily_quota_failure_at(&api.id, now + offset)
+                .expect("record quota failure");
+        }
+        assert!(storage
+            .reset_aggregate_api_consecutive_failures(&api.id)
+            .expect("clear after success"));
+        assert_eq!(
+            storage
+                .find_aggregate_api_by_id(&api.id)
+                .expect("find api")
+                .expect("api exists")
+                .consecutive_failures,
+            0
+        );
+
+        for offset in 3..=5 {
+            storage
+                .record_aggregate_api_daily_quota_failure_at(&api.id, now + offset)
+                .expect("record quota failure");
+        }
+        assert!(storage
+            .update_aggregate_api_controls(&api.id, Some("disabled"), Some(false))
+            .expect("update manual and automatic controls"));
+        let disabled_feature = storage
+            .find_aggregate_api_by_id(&api.id)
+            .expect("find api")
+            .expect("api exists");
+        assert_eq!(disabled_feature.status, "disabled");
+        assert!(!disabled_feature.auto_toggle_enabled);
+        assert!(!disabled_feature.auto_disabled);
+        assert_eq!(disabled_feature.consecutive_failures, 0);
+        assert_eq!(
+            disabled_feature.auto_disabled_reason.as_deref(),
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA)
+        );
+        assert!(disabled_feature.auto_disabled_at.is_some());
+    }
+
+    #[test]
+    fn aggregate_api_lazy_recovery_only_restores_prior_local_day_active_auto_disables() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+        let prior_day = now.saturating_sub(2 * 24 * 60 * 60);
+
+        let mut prior_active = sample_aggregate_api("agg-prior-active", now);
+        prior_active.auto_toggle_enabled = true;
+        prior_active.consecutive_failures = AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD;
+        prior_active.auto_disabled = true;
+        prior_active.auto_disabled_at = Some(prior_day);
+        prior_active.auto_disabled_reason =
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA.to_string());
+
+        let mut prior_manual_disabled = sample_aggregate_api("agg-prior-manual", now);
+        prior_manual_disabled.status = "disabled".to_string();
+        prior_manual_disabled.auto_toggle_enabled = true;
+        prior_manual_disabled.consecutive_failures = AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD;
+        prior_manual_disabled.auto_disabled = true;
+        prior_manual_disabled.auto_disabled_at = Some(prior_day);
+        prior_manual_disabled.auto_disabled_reason =
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA.to_string());
+
+        let mut current_active = sample_aggregate_api("agg-current-active", now);
+        current_active.auto_toggle_enabled = true;
+        current_active.consecutive_failures = AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD;
+        current_active.auto_disabled = true;
+        current_active.auto_disabled_at = Some(now);
+        current_active.auto_disabled_reason =
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA.to_string());
+
+        for api in [&prior_active, &prior_manual_disabled, &current_active] {
+            storage.insert_aggregate_api(api).expect("insert api");
+        }
+
+        assert_eq!(
+            storage
+                .recover_aggregate_apis_auto_disabled_before_local_day_at(now)
+                .expect("recover prior local day"),
+            1
+        );
+
+        let recovered = storage
+            .find_aggregate_api_by_id(&prior_active.id)
+            .expect("find recovered api")
+            .expect("api exists");
+        assert!(!recovered.auto_disabled);
+        assert_eq!(recovered.consecutive_failures, 0);
+        assert_eq!(recovered.auto_disabled_at, Some(prior_day));
+        assert_eq!(
+            recovered.auto_disabled_reason.as_deref(),
+            Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA)
+        );
+
+        let manual_disabled = storage
+            .find_aggregate_api_by_id(&prior_manual_disabled.id)
+            .expect("find manual api")
+            .expect("api exists");
+        assert_eq!(manual_disabled.status, "disabled");
+        assert!(manual_disabled.auto_disabled);
+
+        let current = storage
+            .find_aggregate_api_by_id(&current_active.id)
+            .expect("find current api")
+            .expect("api exists");
+        assert!(current.auto_disabled);
     }
 
     fn collect_query_plan_details(storage: &Storage, sql: &str) -> Vec<String> {
@@ -2111,6 +2514,7 @@ mod supplier_model_tests {
         first.last_balance_at = Some(now);
         first.last_balance_status = Some("success".to_string());
         first.last_balance_json = Some(r#"{"remaining":1.25,"unit":"USD"}"#.to_string());
+        first.auto_disabled = true;
         let mut second = sample_aggregate_api("api-second-quota-source", now);
         second.sort = 0;
         second.url = "https://second.example.test/v1".to_string();
@@ -2143,6 +2547,7 @@ mod supplier_model_tests {
             Some("First Supplier")
         );
         assert_eq!(summaries[1].last_balance_status.as_deref(), Some("success"));
+        assert!(summaries[1].auto_disabled);
         assert_eq!(
             summaries[1].last_balance_json.as_deref(),
             Some(r#"{"remaining":1.25,"unit":"USD"}"#)

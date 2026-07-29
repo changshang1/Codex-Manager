@@ -26,6 +26,56 @@ pub(crate) struct GatewayByteStream {
     tee_consumers: Option<Arc<AtomicUsize>>,
 }
 
+pub(crate) struct GatewayByteStreamReader {
+    stream: GatewayByteStream,
+    pending: Bytes,
+    pending_offset: usize,
+    finished: bool,
+}
+
+impl GatewayByteStreamReader {
+    fn new(stream: GatewayByteStream) -> Self {
+        Self {
+            stream,
+            pending: Bytes::new(),
+            pending_offset: 0,
+            finished: false,
+        }
+    }
+}
+
+impl Read for GatewayByteStreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() || self.finished {
+            return Ok(0);
+        }
+        loop {
+            if self.pending_offset < self.pending.len() {
+                let available = &self.pending[self.pending_offset..];
+                let copied = available.len().min(buf.len());
+                buf[..copied].copy_from_slice(&available[..copied]);
+                self.pending_offset += copied;
+                return Ok(copied);
+            }
+            match self.stream.recv() {
+                Ok(GatewayByteStreamItem::Chunk(bytes)) if !bytes.is_empty() => {
+                    self.pending = bytes;
+                    self.pending_offset = 0;
+                }
+                Ok(GatewayByteStreamItem::Chunk(_)) => continue,
+                Ok(GatewayByteStreamItem::Eof) | Err(_) => {
+                    self.finished = true;
+                    return Ok(0);
+                }
+                Ok(GatewayByteStreamItem::Error(err)) => {
+                    self.finished = true;
+                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GatewayStreamPrefetchTerminal {
     Open,
@@ -288,6 +338,10 @@ impl GatewayStreamResponse {
 
     pub(crate) fn into_body(self) -> GatewayByteStream {
         self.body
+    }
+
+    pub(crate) fn into_reader(self) -> GatewayByteStreamReader {
+        GatewayByteStreamReader::new(self.body)
     }
 
     fn prefetch_until<F>(

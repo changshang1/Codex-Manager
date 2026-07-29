@@ -36,6 +36,11 @@ export interface AggregateApi {
   authParams: Record<string, unknown> | null;
   action: string | null;
   status: string;
+  autoToggleEnabled: boolean;
+  consecutiveFailures: number;
+  autoDisabled: boolean;
+  autoDisabledAt: number | null;
+  autoDisabledReason: string | null;
   createdAt: number | null;
   updatedAt: number | null;
   lastTestAt: number | null;

@@ -703,6 +703,29 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(!storage
         .has_column("request_logs", "reasoning_output_tokens")
         .expect("check request_logs.reasoning_output_tokens"));
+    let applied_132: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '132_aggregate_api_auto_toggle'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 132 migration");
+    assert_eq!(applied_132, 1);
+    for column in [
+        "auto_toggle_enabled",
+        "consecutive_failures",
+        "auto_disabled",
+        "auto_disabled_at",
+        "auto_disabled_reason",
+    ] {
+        assert!(
+            storage
+                .has_column("aggregate_apis", column)
+                .expect("check aggregate API auto toggle column"),
+            "aggregate_apis.{column} should exist"
+        );
+    }
 }
 
 /// 函数 `file_open_enables_wal_and_normal_synchronous`
@@ -968,7 +991,12 @@ fn init_repairs_legacy_aggregate_api_balance_columns_before_indexes() {
                 last_test_at INTEGER,
                 last_test_status TEXT,
                 last_test_error TEXT
-            );",
+            );
+            INSERT INTO aggregate_apis (
+                id, provider_type, url, status, created_at, updated_at
+            ) VALUES
+                ('legacy-active', 'codex', 'https://active.example.test', 'active', 1, 1),
+                ('legacy-disabled', 'codex', 'https://disabled.example.test', 'disabled', 1, 1);",
         )
         .expect("create legacy aggregate_apis table");
     storage
@@ -993,6 +1021,40 @@ fn init_repairs_legacy_aggregate_api_balance_columns_before_indexes() {
     assert!(storage
         .has_table("aggregate_api_balance_secrets")
         .expect("check balance secrets table"));
+
+    for (api_id, expected_status) in [("legacy-active", "active"), ("legacy-disabled", "disabled")]
+    {
+        let upgraded: (String, i64, i64, i64, Option<i64>, Option<String>) = storage
+            .conn
+            .query_row(
+                "SELECT status,
+                        auto_toggle_enabled,
+                        consecutive_failures,
+                        auto_disabled,
+                        auto_disabled_at,
+                        auto_disabled_reason
+                 FROM aggregate_apis
+                 WHERE id = ?1",
+                [api_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("read upgraded legacy aggregate API");
+        assert_eq!(upgraded.0, expected_status);
+        assert_eq!(upgraded.1, 0);
+        assert_eq!(upgraded.2, 0);
+        assert_eq!(upgraded.3, 0);
+        assert_eq!(upgraded.4, None);
+        assert_eq!(upgraded.5, None);
+    }
 
     for index in [
         "idx_aggregate_apis_balance_query_lookup",

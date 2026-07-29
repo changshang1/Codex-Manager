@@ -2,8 +2,8 @@ use codexmanager_core::rpc::types::{AggregateApiListResult, JsonRpcRequest, Json
 
 use crate::{
     create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
-    refresh_aggregate_api_balance, test_aggregate_api_connection, update_aggregate_api,
-    update_aggregate_api_sorts,
+    recover_aggregate_api, refresh_aggregate_api_balance, test_aggregate_api_connection,
+    update_aggregate_api, update_aggregate_api_sorts,
 };
 
 /// 函数 `api_id_param`
@@ -41,6 +41,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let provider_type = super::string_param(req, "providerType");
             let supplier_name = super::string_param(req, "supplierName");
             let sort = super::i64_param(req, "sort");
+            let auto_toggle_enabled = super::bool_param(req, "autoToggleEnabled");
             let url = super::string_param(req, "url");
             let key = super::string_param(req, "key");
             let auth_type = super::string_param(req, "authType");
@@ -67,6 +68,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 provider_type,
                 supplier_name,
                 sort,
+                auto_toggle_enabled,
                 auth_type,
                 auth_custom_enabled,
                 auth_params,
@@ -89,6 +91,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let supplier_name = super::string_param(req, "supplierName");
             let sort = super::i64_param(req, "sort");
             let status = super::string_param(req, "status");
+            let auto_toggle_enabled = super::bool_param(req, "autoToggleEnabled");
             let url = super::string_param(req, "url");
             let key = super::string_param(req, "key");
             let auth_type = super::string_param(req, "authType");
@@ -117,6 +120,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 supplier_name,
                 sort,
                 status,
+                auto_toggle_enabled,
                 auth_type,
                 auth_custom_enabled,
                 auth_params,
@@ -132,6 +136,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 balance_query_user_id,
                 balance_query_config_json,
             ))
+        }
+        "aggregateApi/recover" => {
+            let api_id = api_id_param(req).unwrap_or("");
+            super::ok_or_error(recover_aggregate_api(api_id))
         }
         "aggregateApi/updateSorts" => super::value_or_error(
             aggregate_api_sort_updates_param(req).and_then(update_aggregate_api_sorts),

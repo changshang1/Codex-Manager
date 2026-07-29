@@ -632,7 +632,13 @@ pub(super) fn start_mock_upstream_sequence_lenient_with_content_types(
                 .to_string();
         let fallback_ct = "application/json".to_string();
         loop {
-            let Some((mut stream, captured)) = accept_http_request(&listener, idle_timeout) else {
+            let accept_timeout = if idx == 0 {
+                idle_timeout.max(Duration::from_secs(3))
+            } else {
+                idle_timeout
+            };
+            let Some((mut stream, captured)) = accept_http_request(&listener, accept_timeout)
+            else {
                 break;
             };
             let _ = tx.send(captured);

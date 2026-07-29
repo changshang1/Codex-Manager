@@ -25,6 +25,11 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         action: action.map(str::to_string),
         model_override: None,
         status: "active".to_string(),
+        auto_toggle_enabled: false,
+        consecutive_failures: 0,
+        auto_disabled: false,
+        auto_disabled_at: None,
+        auto_disabled_reason: None,
         created_at: 0,
         updated_at: 0,
         last_test_at: None,
@@ -63,6 +68,15 @@ fn messages_passthrough_protocol_still_requires_passthrough_adapter() {
         ResponseAdapter::AnthropicMessagesFromResponses,
     );
     assert_eq!(protocol, None);
+}
+
+#[test]
+fn gemini_stream_passthrough_uses_native_terminal_rules() {
+    let protocol = resolve_passthrough_sse_protocol(
+        "/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+        ResponseAdapter::Passthrough,
+    );
+    assert_eq!(protocol, Some(PassthroughSseProtocol::GeminiNative));
 }
 
 #[test]
@@ -229,6 +243,11 @@ fn gemini_native_candidates_resolve_to_gemini_provider_only() {
                 action: None,
                 model_override: None,
                 status: "active".to_string(),
+                auto_toggle_enabled: false,
+                consecutive_failures: 0,
+                auto_disabled: false,
+                auto_disabled_at: None,
+                auto_disabled_reason: None,
                 created_at: now,
                 updated_at: now,
                 last_test_at: None,
@@ -311,6 +330,11 @@ fn explicit_aggregate_api_id_promotes_matching_active_provider_candidate_only() 
                 action: None,
                 model_override: None,
                 status: "active".to_string(),
+                auto_toggle_enabled: false,
+                consecutive_failures: 0,
+                auto_disabled: false,
+                auto_disabled_at: None,
+                auto_disabled_reason: None,
                 created_at: now,
                 updated_at: now,
                 last_test_at: None,

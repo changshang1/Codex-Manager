@@ -136,6 +136,7 @@ export function AggregateApiModal({
   const [password, setPassword] = useState("");
   const [actionCustomEnabled, setActionCustomEnabled] = useState(false);
   const [action, setAction] = useState("");
+  const [autoToggleEnabled, setAutoToggleEnabled] = useState(false);
   const [balanceQueryEnabled, setBalanceQueryEnabled] = useState(false);
   const [balanceQueryTemplate, setBalanceQueryTemplate] =
     useState<BalanceQueryTemplate>("generic");
@@ -228,6 +229,7 @@ export function AggregateApiModal({
     const nextAction = aggregateApi?.action ?? "";
     setAction(nextAction);
     setActionCustomEnabled(aggregateApi?.action !== null && aggregateApi?.action !== undefined);
+    setAutoToggleEnabled(Boolean(aggregateApi?.autoToggleEnabled));
     setBalanceQueryEnabled(Boolean(aggregateApi?.balanceQueryEnabled));
     const nextBalanceQueryTemplate =
       aggregateApi?.balanceQueryTemplate === "new_api"
@@ -427,6 +429,7 @@ export function AggregateApiModal({
             !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
           username: authType === "userpass" ? username.trim() || null : null,
           password: authType === "userpass" ? password.trim() || null : null,
+          autoToggleEnabled,
           balanceQueryEnabled,
           balanceQueryTemplate,
           balanceQueryBaseUrl: balanceQueryBaseUrl.trim(),
@@ -458,6 +461,7 @@ export function AggregateApiModal({
         action: !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
         username: authType === "userpass" ? username.trim() : null,
         password: authType === "userpass" ? password.trim() : null,
+        autoToggleEnabled,
         balanceQueryEnabled,
         balanceQueryTemplate,
         balanceQueryBaseUrl: balanceQueryBaseUrl.trim(),
@@ -895,6 +899,34 @@ export function AggregateApiModal({
                   </CardContent>
                 </Card>
               </div>
+
+              <Card size="sm">
+                <CardContent className="grid gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <Label className="text-sm">{t("自动启停")}</Label>
+                      <p className="text-[11px] leading-4 text-muted-foreground">
+                        {t(
+                          "按日额度异常连续达到阈值后自动停用，并在下一自然日恢复；不会改变人工启停状态。",
+                        )}
+                      </p>
+                    </div>
+                    <Switch
+                      checked={autoToggleEnabled}
+                      disabled={!isServiceReady}
+                      aria-label={t("自动启停")}
+                      onCheckedChange={(checked) =>
+                        setAutoToggleEnabled(Boolean(checked))
+                      }
+                    />
+                  </div>
+                  {aggregateApi?.autoDisabled && !autoToggleEnabled ? (
+                    <p className="text-[11px] leading-4 text-amber-600 dark:text-amber-400">
+                      {t("保存关闭后将立即解除当前自动停用状态。")}
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
 
               <Card size="sm">
                 <CardContent className="grid gap-3">

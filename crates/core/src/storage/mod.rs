@@ -1278,6 +1278,9 @@ pub struct ApiKeyCodexProfileCandidate {
     pub status: String,
 }
 
+pub const AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD: i64 = 3;
+pub const AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA: &str = "daily_quota_exceeded";
+
 #[derive(Debug, Clone)]
 pub struct AggregateApi {
     pub id: String,
@@ -1290,6 +1293,11 @@ pub struct AggregateApi {
     pub action: Option<String>,
     pub model_override: Option<String>,
     pub status: String,
+    pub auto_toggle_enabled: bool,
+    pub consecutive_failures: i64,
+    pub auto_disabled: bool,
+    pub auto_disabled_at: Option<i64>,
+    pub auto_disabled_reason: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_test_at: Option<i64>,
@@ -1325,6 +1333,11 @@ pub struct AggregateApiListSummary {
     pub action: Option<String>,
     pub model_override: Option<String>,
     pub status: String,
+    pub auto_toggle_enabled: bool,
+    pub consecutive_failures: i64,
+    pub auto_disabled: bool,
+    pub auto_disabled_at: Option<i64>,
+    pub auto_disabled_reason: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_test_at: Option<i64>,
@@ -1345,6 +1358,17 @@ pub struct AggregateApiListSummary {
 pub struct AggregateApiListSnapshot {
     pub items: Vec<AggregateApiListSummary>,
     pub model_assignments: Vec<QuotaSourceModelAssignment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AggregateApiAutoToggleUpdate {
+    pub counted: bool,
+    pub auto_disabled_now: bool,
+    pub auto_toggle_enabled: bool,
+    pub consecutive_failures: i64,
+    pub auto_disabled: bool,
+    pub auto_disabled_at: Option<i64>,
+    pub auto_disabled_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1370,6 +1394,7 @@ pub struct AggregateApiQuotaSourceSummary {
     pub supplier_name: Option<String>,
     pub url: String,
     pub status: String,
+    pub auto_disabled: bool,
     pub balance_query_enabled: bool,
     pub last_balance_at: Option<i64>,
     pub last_balance_status: Option<String>,
@@ -2302,6 +2327,11 @@ impl Storage {
         self.apply_sql_migration(
             "131_marketplace_favorite_merchants",
             include_str!("../../migrations/131_marketplace_favorite_merchants.sql"),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "132_aggregate_api_auto_toggle",
+            include_str!("../../migrations/132_aggregate_api_auto_toggle.sql"),
+            |s| s.ensure_aggregate_api_auto_toggle_columns(),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

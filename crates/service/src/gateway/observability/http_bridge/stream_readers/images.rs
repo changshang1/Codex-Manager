@@ -21,14 +21,17 @@ pub(crate) struct ImagesFromResponsesSseReader {
 }
 
 impl ImagesFromResponsesSseReader {
-    pub(crate) fn new(
-        upstream: reqwest::blocking::Response,
+    pub(crate) fn from_reader<R>(
+        upstream: R,
         usage_collector: Arc<Mutex<PassthroughSseCollector>>,
         request_started_at: Instant,
         response_format: ImagesResponseFormat,
-    ) -> Self {
+    ) -> Self
+    where
+        R: Read + Send + 'static,
+    {
         Self {
-            upstream: UpstreamSseFramePump::new(upstream),
+            upstream: UpstreamSseFramePump::from_reader(upstream),
             out_cursor: Cursor::new(Vec::new()),
             usage_collector,
             request_started_at,
@@ -36,6 +39,20 @@ impl ImagesFromResponsesSseReader {
             response_format,
             finished: false,
         }
+    }
+
+    pub(crate) fn new(
+        upstream: reqwest::blocking::Response,
+        usage_collector: Arc<Mutex<PassthroughSseCollector>>,
+        request_started_at: Instant,
+        response_format: ImagesResponseFormat,
+    ) -> Self {
+        Self::from_reader(
+            upstream,
+            usage_collector,
+            request_started_at,
+            response_format,
+        )
     }
 
     fn data_json(lines: &[String]) -> Option<Value> {

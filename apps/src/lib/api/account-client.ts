@@ -188,6 +188,7 @@ interface AggregateApiPayload {
   supplierName?: string | null;
   sort?: number | null;
   status?: string | null;
+  autoToggleEnabled?: boolean | null;
   url?: string | null;
   key?: string | null;
   authType?: string | null;
@@ -800,6 +801,10 @@ export const accountClient = {
         supplierName: params.supplierName || null,
         sort: typeof params.sort === "number" ? params.sort : null,
         status: params.status || null,
+        autoToggleEnabled:
+          typeof params.autoToggleEnabled === "boolean"
+            ? params.autoToggleEnabled
+            : null,
         url: params.url || null,
         key: params.key || null,
         authType: params.authType || null,
@@ -846,6 +851,10 @@ export const accountClient = {
         supplierName: params.supplierName || null,
         sort: typeof params.sort === "number" ? params.sort : null,
         status: params.status || null,
+        autoToggleEnabled:
+          typeof params.autoToggleEnabled === "boolean"
+            ? params.autoToggleEnabled
+            : null,
         url: params.url || null,
         key: params.key || null,
         authType: params.authType || null,
@@ -881,6 +890,8 @@ export const accountClient = {
             : null,
       })
     ),
+  recoverAggregateApi: (apiId: string) =>
+    invoke("service_aggregate_api_recover", withAddr({ id: apiId })),
   updateAggregateApiSorts: (updates: AggregateApiSortUpdatePayload[]) =>
     invoke(
       "service_aggregate_api_update_sorts",

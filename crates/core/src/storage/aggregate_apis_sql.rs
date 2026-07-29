@@ -23,11 +23,16 @@ pub(super) const AGGREGATE_API_SELECT_SQL: &str = "SELECT
     last_balance_at,
     last_balance_status,
     last_balance_error,
-    last_balance_json
+    last_balance_json,
+    auto_toggle_enabled,
+    consecutive_failures,
+    auto_disabled,
+    auto_disabled_at,
+    auto_disabled_reason
  FROM aggregate_apis";
 pub(super) const AGGREGATE_API_MODEL_SOURCE_KIND: &str = "aggregate_api";
 pub(super) const AGGREGATE_API_ACTIVE_STATUS_CONDITION: &str =
-    "LOWER(TRIM(COALESCE(status, ''))) = 'active'";
+    "LOWER(TRIM(COALESCE(status, ''))) = 'active' AND COALESCE(auto_disabled, 0) = 0";
 pub(super) const AGGREGATE_API_NORMALIZED_PROVIDER_SQL: &str =
     "REPLACE(LOWER(TRIM(COALESCE(provider_type, ''))), '-', '_')";
 
@@ -65,6 +70,11 @@ pub(super) fn aggregate_api_with_secrets_by_id_sql() -> &'static str {
         a.last_balance_status,
         a.last_balance_error,
         a.last_balance_json,
+        a.auto_toggle_enabled,
+        a.consecutive_failures,
+        a.auto_disabled,
+        a.auto_disabled_at,
+        a.auto_disabled_reason,
         s.secret_value,
         bs.access_token
      FROM aggregate_apis a
@@ -123,6 +133,88 @@ pub(super) fn update_aggregate_api_sort_sql() -> &'static str {
 
 pub(super) fn update_aggregate_api_status_sql() -> &'static str {
     "UPDATE aggregate_apis SET status = ?1, updated_at = ?2 WHERE id = ?3"
+}
+
+pub(super) fn aggregate_api_auto_toggle_state_by_id_sql() -> &'static str {
+    "SELECT
+        auto_toggle_enabled,
+        consecutive_failures,
+        auto_disabled,
+        auto_disabled_at,
+        auto_disabled_reason
+     FROM aggregate_apis
+     WHERE id = ?1
+     LIMIT 1"
+}
+
+pub(super) fn record_aggregate_api_daily_quota_failure_sql() -> &'static str {
+    "UPDATE aggregate_apis
+     SET consecutive_failures = COALESCE(consecutive_failures, 0) + 1,
+         auto_disabled = CASE
+             WHEN COALESCE(consecutive_failures, 0) + 1 >= ?2 THEN 1
+             ELSE auto_disabled
+         END,
+         auto_disabled_at = CASE
+             WHEN COALESCE(consecutive_failures, 0) + 1 >= ?2 THEN ?3
+             ELSE auto_disabled_at
+         END,
+         auto_disabled_reason = CASE
+             WHEN COALESCE(consecutive_failures, 0) + 1 >= ?2 THEN ?4
+             ELSE auto_disabled_reason
+         END
+     WHERE id = ?1
+       AND auto_toggle_enabled = 1
+       AND LOWER(TRIM(COALESCE(status, ''))) = 'active'
+       AND COALESCE(auto_disabled, 0) = 0"
+}
+
+pub(super) fn reset_aggregate_api_consecutive_failures_sql() -> &'static str {
+    "UPDATE aggregate_apis
+     SET consecutive_failures = 0
+     WHERE id = ?1
+       AND COALESCE(consecutive_failures, 0) <> 0"
+}
+
+pub(super) fn set_aggregate_api_auto_toggle_enabled_sql() -> &'static str {
+    "UPDATE aggregate_apis
+     SET auto_toggle_enabled = ?1,
+         consecutive_failures = CASE WHEN ?1 = 0 THEN 0 ELSE consecutive_failures END,
+         auto_disabled = CASE WHEN ?1 = 0 THEN 0 ELSE auto_disabled END
+     WHERE id = ?2"
+}
+
+pub(super) fn recover_aggregate_api_auto_disable_sql() -> &'static str {
+    "UPDATE aggregate_apis
+     SET consecutive_failures = 0,
+         auto_disabled = 0
+     WHERE id = ?1
+       AND (
+           COALESCE(consecutive_failures, 0) <> 0
+           OR COALESCE(auto_disabled, 0) <> 0
+       )"
+}
+
+pub(super) fn recover_aggregate_apis_before_local_day_sql() -> &'static str {
+    "UPDATE aggregate_apis
+     SET consecutive_failures = 0,
+         auto_disabled = 0
+     WHERE COALESCE(auto_disabled, 0) = 1
+       AND LOWER(TRIM(COALESCE(status, ''))) = 'active'
+       AND auto_disabled_at IS NOT NULL
+       AND date(auto_disabled_at, 'unixepoch', 'localtime')
+           < date(?1, 'unixepoch', 'localtime')"
+}
+
+pub(super) fn has_recoverable_aggregate_apis_before_local_day_sql() -> &'static str {
+    "SELECT EXISTS(
+         SELECT 1
+         FROM aggregate_apis
+         WHERE COALESCE(auto_disabled, 0) = 1
+           AND LOWER(TRIM(COALESCE(status, ''))) = 'active'
+           AND auto_disabled_at IS NOT NULL
+           AND date(auto_disabled_at, 'unixepoch', 'localtime')
+               < date(?1, 'unixepoch', 'localtime')
+     )"
 }
 
 pub(super) fn update_aggregate_api_provider_type_sql() -> &'static str {

@@ -2,7 +2,9 @@ use codexmanager_core::rpc::types::{
     AggregateApiBalanceRefreshResult, AggregateApiBalanceSnapshot, AggregateApiCreateResult,
     AggregateApiSecretResult, AggregateApiSummary, AggregateApiTestResult,
 };
-use codexmanager_core::storage::{now_ts, AggregateApi};
+use codexmanager_core::storage::{
+    now_ts, AggregateApi, AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA,
+};
 use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -26,6 +28,113 @@ const AGGREGATE_API_BALANCE_TEMPLATE_CUSTOM: &str = "custom";
 const CUSTOM_BALANCE_AUTH_PROVIDER_BEARER: &str = "provider_bearer";
 const CUSTOM_BALANCE_AUTH_BALANCE_BEARER: &str = "balance_bearer";
 const CUSTOM_BALANCE_AUTH_NONE: &str = "none";
+pub(crate) const AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT: &str =
+    AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA;
+
+fn is_daily_limit_error_code_text(value: &str) -> bool {
+    value
+        .trim()
+        .replace(['-', ' '], "_")
+        .eq_ignore_ascii_case("DAILY_LIMIT_EXCEEDED")
+}
+
+fn is_explicit_daily_usage_limit_message_text(value: &str) -> bool {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .contains("daily usage limit exceeded")
+}
+
+fn is_daily_limit_error_code(value: &serde_json::Value) -> bool {
+    value.as_str().is_some_and(is_daily_limit_error_code_text)
+}
+
+fn is_explicit_daily_usage_limit_message(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(is_explicit_daily_usage_limit_message_text)
+}
+
+fn is_structured_daily_limit_error(value: &serde_json::Value) -> bool {
+    if is_daily_limit_error_code(value) || is_explicit_daily_usage_limit_message(value) {
+        return true;
+    }
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    ["code", "type", "status", "reason"]
+        .into_iter()
+        .filter_map(|key| object.get(key))
+        .any(is_daily_limit_error_code)
+        || ["message", "detail"]
+            .into_iter()
+            .filter_map(|key| object.get(key))
+            .any(|value| {
+                is_explicit_daily_usage_limit_message(value)
+                    || value
+                        .as_str()
+                        .is_some_and(has_daily_limit_error_code_prefix)
+            })
+}
+
+fn has_daily_limit_error_code_prefix(value: &str) -> bool {
+    for token in value.split_whitespace() {
+        let Some((key, raw_value)) = token.split_once('=') else {
+            continue;
+        };
+        if ["code", "type", "status", "reason"]
+            .into_iter()
+            .any(|candidate| key.eq_ignore_ascii_case(candidate))
+            && is_daily_limit_error_code_text(
+                raw_value.trim_matches(|ch: char| matches!(ch, ',' | ';' | '"' | '\'')),
+            )
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns the persisted breaker reason only for an explicit daily quota error.
+/// HTTP status alone is deliberately insufficient: ordinary rate limits, 5xx
+/// responses, and transport failures must not disable an aggregate API.
+pub(crate) fn classify_aggregate_api_daily_limit_failure(
+    status_code: u16,
+    body: &[u8],
+) -> Option<&'static str> {
+    let eligible_status = (200..300).contains(&status_code)
+        || ((400..500).contains(&status_code) && status_code != 408);
+    if !eligible_status {
+        return None;
+    }
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let root_error = value
+        .as_object()
+        .is_some_and(|_| is_structured_daily_limit_error(&value));
+    (root_error
+        || [
+            value.get("error"),
+            value.pointer("/response/error"),
+            value.pointer("/response/status_details/error"),
+        ]
+        .into_iter()
+        .flatten()
+        .any(is_structured_daily_limit_error))
+    .then_some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+}
+
+pub(crate) fn classify_aggregate_api_daily_limit_hint(hint: &str) -> Option<&'static str> {
+    let structured_json_signal = serde_json::from_str::<serde_json::Value>(hint)
+        .ok()
+        .is_some_and(|value| is_structured_daily_limit_error(&value));
+    (structured_json_signal
+        || has_daily_limit_error_code_prefix(hint)
+        || is_daily_limit_error_code_text(hint)
+        || is_explicit_daily_usage_limit_message_text(hint))
+    .then_some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct AggregateApiSortUpdate {
@@ -1552,6 +1661,9 @@ fn probe_gemini_endpoint(
 /// 返回函数执行结果
 pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> {
     let storage = open_storage().ok_or_else(|| "open storage failed".to_string())?;
+    if let Err(err) = storage.recover_aggregate_apis_auto_disabled_before_today() {
+        log::warn!("event=aggregate_api_list_auto_recovery_failed err={err}");
+    }
     let items = storage
         .list_aggregate_api_summaries()
         .map_err(|err| format!("load aggregate api list failed: {err}"))?;
@@ -1590,6 +1702,11 @@ pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> 
             action: item.action,
             model_override: item.model_override,
             status: item.status,
+            auto_toggle_enabled: item.auto_toggle_enabled,
+            consecutive_failures: item.consecutive_failures,
+            auto_disabled: item.auto_disabled,
+            auto_disabled_at: item.auto_disabled_at,
+            auto_disabled_reason: item.auto_disabled_reason,
             created_at: item.created_at,
             updated_at: item.updated_at,
             last_test_at: item.last_test_at,
@@ -1625,6 +1742,7 @@ pub(crate) fn create_aggregate_api(
     provider_type: Option<String>,
     supplier_name: Option<String>,
     sort: Option<i64>,
+    auto_toggle_enabled: Option<bool>,
     auth_type: Option<String>,
     auth_custom_enabled: Option<bool>,
     auth_params: Option<serde_json::Value>,
@@ -1701,6 +1819,11 @@ pub(crate) fn create_aggregate_api(
         action: normalized_action,
         model_override: normalized_model_override,
         status: "active".to_string(),
+        auto_toggle_enabled: auto_toggle_enabled.unwrap_or(false),
+        consecutive_failures: 0,
+        auto_disabled: false,
+        auto_disabled_at: None,
+        auto_disabled_reason: None,
         created_at,
         updated_at: created_at,
         last_test_at: None,
@@ -1760,6 +1883,7 @@ pub(crate) fn update_aggregate_api(
     supplier_name: Option<String>,
     sort: Option<i64>,
     status: Option<String>,
+    auto_toggle_enabled: Option<bool>,
     auth_type: Option<String>,
     auth_custom_enabled: Option<bool>,
     auth_params: Option<serde_json::Value>,
@@ -1789,6 +1913,10 @@ pub(crate) fn update_aggregate_api(
         Some(raw) => Some(normalize_auth_type(Some(raw))?),
         None => None,
     };
+    let normalized_status = match status {
+        Some(raw) => Some(normalize_status(Some(raw))?),
+        None => None,
+    };
     let next_auth_type = normalized_auth_type
         .as_deref()
         .unwrap_or(existing_auth_type.as_str())
@@ -1813,12 +1941,6 @@ pub(crate) fn update_aggregate_api(
     if sort.is_some() {
         storage
             .update_aggregate_api_sort(api_id, normalize_sort(sort))
-            .map_err(|err| err.to_string())?;
-    }
-    if let Some(status) = status {
-        let normalized_status = normalize_status(Some(status))?;
-        storage
-            .update_aggregate_api_status(api_id, normalized_status.as_str())
             .map_err(|err| err.to_string())?;
     }
     if let Some(url) = url {
@@ -1969,6 +2091,33 @@ pub(crate) fn update_aggregate_api(
                 .map_err(|err| err.to_string())?;
         }
     }
+    if normalized_status.is_some() || auto_toggle_enabled.is_some() {
+        storage
+            .update_aggregate_api_controls(
+                api_id,
+                normalized_status.as_deref(),
+                auto_toggle_enabled,
+            )
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn recover_aggregate_api(api_id: &str) -> Result<(), String> {
+    let api_id = api_id.trim();
+    if api_id.is_empty() {
+        return Err("aggregate api id required".to_string());
+    }
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    if !storage
+        .aggregate_api_exists(api_id)
+        .map_err(|err| err.to_string())?
+    {
+        return Err("aggregate api not found".to_string());
+    }
+    storage
+        .recover_aggregate_api_auto_disable(api_id)
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 

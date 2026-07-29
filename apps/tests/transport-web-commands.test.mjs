@@ -93,6 +93,12 @@ test("createWebCommandMap exposes aggregate API batch sort updates", () => {
   });
 });
 
+test("createWebCommandMap exposes aggregate API manual recovery", () => {
+  assert.deepEqual(commandMap.service_aggregate_api_recover, {
+    rpcMethod: "aggregateApi/recover",
+  });
+});
+
 test("createWebCommandMap keeps app and gateway transport settings payloads aligned", () => {
   const appSettingsSet = commandMap.app_settings_set;
   assert.equal(appSettingsSet.rpcMethod, "appSettings/set");

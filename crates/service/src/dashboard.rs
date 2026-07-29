@@ -445,6 +445,9 @@ fn load_dashboard_source_context(
         current_sources.insert((OPENAI_ACCOUNT_SOURCE.to_string(), account.id), source);
     }
 
+    if let Err(err) = storage.recover_aggregate_apis_auto_disabled_before_today() {
+        log::warn!("event=dashboard_aggregate_auto_recovery_failed err={err}");
+    }
     let aggregate_apis = storage
         .list_aggregate_apis()
         .map_err(|err| format!("list dashboard aggregate APIs failed: {err}"))?;
@@ -455,7 +458,7 @@ fn load_dashboard_source_context(
             .last_test_status
             .as_deref()
             .is_some_and(|value| value.trim().eq_ignore_ascii_case("failed"));
-        let available = enabled && !test_failed;
+        let available = enabled && !api.auto_disabled && !test_failed;
         let name = api
             .supplier_name
             .as_deref()

@@ -203,6 +203,11 @@ fn gateway_aggregate_compatible_messages_passthrough_accepts_message_stop() {
             action: None,
             model_override: None,
             status: "active".to_string(),
+            auto_toggle_enabled: true,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
             created_at: now,
             updated_at: now,
             last_test_at: None,
@@ -319,6 +324,12 @@ fn gateway_aggregate_compatible_messages_passthrough_accepts_message_stop() {
     assert_eq!(log.response_adapter.as_deref(), Some("Passthrough"));
     assert_eq!(log.actual_source_kind.as_deref(), Some("aggregate_api"));
     assert_eq!(log.actual_source_id.as_deref(), Some(aggregate_id));
+    let aggregate = storage
+        .find_aggregate_api_by_id(aggregate_id)
+        .expect("read aggregate API")
+        .expect("aggregate API exists");
+    assert_eq!(aggregate.consecutive_failures, 0);
+    assert!(!aggregate.auto_disabled);
 }
 
 #[test]
@@ -365,6 +376,11 @@ fn gateway_aggregate_responses_bridge_adds_anthropic_headers_and_messages_path()
             action: None,
             model_override: None,
             status: "active".to_string(),
+            auto_toggle_enabled: false,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
             created_at: now,
             updated_at: now,
             last_test_at: None,

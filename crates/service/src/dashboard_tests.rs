@@ -5,8 +5,9 @@ use super::{
     SourceMetadata,
 };
 use codexmanager_core::storage::{
-    ApiKey, ApiKeyOwner, AppUser, DailyTokenUsageRollup, ModelTokenUsageRollup, RequestTokenStat,
-    SourceTokenUsageRollup, Storage, TokenUsageRollup, UserTokenUsageRollup,
+    now_ts, AggregateApi, ApiKey, ApiKeyOwner, AppUser, DailyTokenUsageRollup,
+    ModelTokenUsageRollup, RequestTokenStat, SourceTokenUsageRollup, Storage, TokenUsageRollup,
+    UserTokenUsageRollup, AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA,
 };
 use std::collections::HashMap;
 
@@ -83,6 +84,63 @@ fn api_key(id: &str) -> ApiKey {
         created_at: 1,
         last_used_at: None,
     }
+}
+
+fn aggregate_api(id: &str) -> AggregateApi {
+    let now = now_ts();
+    AggregateApi {
+        id: id.to_string(),
+        provider_type: "codex".to_string(),
+        supplier_name: Some("Auto-disabled aggregate".to_string()),
+        sort: 0,
+        url: "https://aggregate.example.test".to_string(),
+        auth_type: "apikey".to_string(),
+        auth_params_json: None,
+        action: None,
+        model_override: None,
+        status: "active".to_string(),
+        auto_toggle_enabled: true,
+        consecutive_failures: 3,
+        auto_disabled: true,
+        auto_disabled_at: Some(now),
+        auto_disabled_reason: Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA.to_string()),
+        created_at: now,
+        updated_at: now,
+        last_test_at: None,
+        last_test_status: None,
+        last_test_error: None,
+        balance_query_enabled: false,
+        balance_query_template: None,
+        balance_query_base_url: None,
+        balance_query_user_id: None,
+        balance_query_config_json: None,
+        last_balance_at: None,
+        last_balance_status: None,
+        last_balance_error: None,
+        last_balance_json: None,
+    }
+}
+
+#[test]
+fn dashboard_marks_auto_disabled_aggregate_api_unavailable() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let api = aggregate_api("agg-auto-disabled-dashboard");
+    storage
+        .insert_aggregate_api(&api)
+        .expect("insert aggregate API");
+
+    let context = super::load_dashboard_source_context(&storage).expect("load dashboard sources");
+    let source = context
+        .current_sources
+        .get(&(super::AGGREGATE_API_SOURCE.to_string(), api.id.to_string()))
+        .expect("aggregate API source");
+
+    assert!(!source.available);
+    assert_eq!(
+        source.unavailable_reason.as_deref(),
+        Some("aggregate_api_disabled")
+    );
 }
 
 #[test]

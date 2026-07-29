@@ -95,6 +95,30 @@ test("aggregate API list uses one RPC call for atomic batch reordering", async (
   assert.doesNotMatch(pageSource, /for \(const update of updates\)/);
 });
 
+test("aggregate API automatic control stays separate from manual status", async () => {
+  const clientSource = await fs.readFile(
+    path.join(appsRoot, "src", "lib", "api", "account-client.ts"),
+    "utf8",
+  );
+  const pageSource = await fs.readFile(
+    path.join(appsRoot, "src", "app", "aggregate-api", "page.tsx"),
+    "utf8",
+  );
+  const modalSource = await fs.readFile(
+    path.join(appsRoot, "src", "components", "modals", "aggregate-api-modal.tsx"),
+    "utf8",
+  );
+
+  assert.match(clientSource, /autoToggleEnabled:\s*[\s\S]*?params\.autoToggleEnabled/);
+  assert.match(
+    clientSource,
+    /recoverAggregateApi:[\s\S]*?service_aggregate_api_recover/,
+  );
+  assert.match(pageSource, /status:\s*enabled \? "active" : "disabled"/);
+  assert.match(pageSource, /api\.autoToggleEnabled && api\.autoDisabled/);
+  assert.match(modalSource, /useState\(false\)[\s\S]*?setAutoToggleEnabled/);
+});
+
 test("desktop import picker results are not imported a second time by the web client", async () => {
   const source = await fs.readFile(
     path.join(appsRoot, "src", "lib", "api", "account-client.ts"),

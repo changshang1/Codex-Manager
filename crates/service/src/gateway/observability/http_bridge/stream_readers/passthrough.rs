@@ -22,6 +22,29 @@ pub(crate) struct PassthroughSseUsageReader {
 }
 
 impl PassthroughSseUsageReader {
+    pub(crate) fn from_reader<R>(
+        upstream: R,
+        usage_collector: Arc<Mutex<PassthroughSseCollector>>,
+        keepalive_frame: SseKeepAliveFrame,
+        protocol: PassthroughSseProtocol,
+        request_started_at: Instant,
+    ) -> Self
+    where
+        R: Read + Send + 'static,
+    {
+        Self {
+            upstream: UpstreamSseFramePump::from_reader(upstream),
+            out_cursor: Cursor::new(Vec::new()),
+            usage_collector,
+            keepalive_frame,
+            protocol,
+            request_started_at,
+            last_upstream_activity: Instant::now(),
+            saw_upstream_frame: false,
+            finished: false,
+        }
+    }
+
     /// 函数 `new`
     ///
     /// 作者: gaohongshun
@@ -40,17 +63,13 @@ impl PassthroughSseUsageReader {
         protocol: PassthroughSseProtocol,
         request_started_at: Instant,
     ) -> Self {
-        Self {
-            upstream: UpstreamSseFramePump::new(upstream),
-            out_cursor: Cursor::new(Vec::new()),
+        Self::from_reader(
+            upstream,
             usage_collector,
             keepalive_frame,
             protocol,
             request_started_at,
-            last_upstream_activity: Instant::now(),
-            saw_upstream_frame: false,
-            finished: false,
-        }
+        )
     }
 
     /// 函数 `update_usage_from_frame`

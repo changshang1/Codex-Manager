@@ -2,6 +2,8 @@
 mod anthropic;
 #[path = "gateway_logs/basic.rs"]
 mod basic;
+#[path = "gateway_logs/gemini.rs"]
+mod gemini;
 #[path = "gateway_logs/hybrid_routing.rs"]
 mod hybrid_routing;
 #[path = "gateway_logs/images.rs"]

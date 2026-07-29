@@ -82,6 +82,11 @@ fn aggregate_api(id: &str, balance_json: Option<&str>, now: i64) -> AggregateApi
         action: None,
         model_override: None,
         status: "active".to_string(),
+        auto_toggle_enabled: false,
+        consecutive_failures: 0,
+        auto_disabled: false,
+        auto_disabled_at: None,
+        auto_disabled_reason: None,
         created_at: now,
         updated_at: now,
         last_test_at: None,
@@ -571,6 +576,57 @@ fn model_pool_accounts_skip_unavailable_sources_before_batch_loading() {
     assert_eq!(pool.account_primary_remaining_tokens, 75);
     assert_eq!(pool.account_secondary_remaining_tokens, 180);
     assert_eq!(pool.account_estimated_remaining_tokens, 180);
+}
+
+#[test]
+fn model_pool_aggregate_apis_skip_auto_disabled_sources() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let active = aggregate_api("agg-active", Some(r#"{"remaining":2.0,"unit":"USD"}"#), now);
+    let mut auto_disabled = aggregate_api(
+        "agg-auto-disabled",
+        Some(r#"{"remaining":100.0,"unit":"USD"}"#),
+        now,
+    );
+    auto_disabled.auto_toggle_enabled = true;
+    auto_disabled.consecutive_failures = 3;
+    auto_disabled.auto_disabled = true;
+    auto_disabled.auto_disabled_at = Some(now);
+    auto_disabled.auto_disabled_reason = Some("daily_quota_exceeded".to_string());
+    storage
+        .insert_aggregate_api(&active)
+        .expect("insert active aggregate API");
+    storage
+        .insert_aggregate_api(&auto_disabled)
+        .expect("insert auto-disabled aggregate API");
+
+    let assignments = HashMap::from([
+        (
+            ("aggregate_api".to_string(), active.id.clone()),
+            vec!["gpt-test".to_string()],
+        ),
+        (
+            ("aggregate_api".to_string(), auto_disabled.id.clone()),
+            vec!["gpt-test".to_string()],
+        ),
+    ]);
+    let pools = build_model_pool_accumulators_from_storage(
+        &storage,
+        &[],
+        &["gpt-test".to_string()],
+        &assignments,
+    )
+    .expect("build pools");
+    let pool = pools.get("gpt-test").expect("pool exists");
+    let source_ids = pool
+        .sources
+        .iter()
+        .filter(|source| source.source_kind == "aggregate_api")
+        .map(|source| source.source_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(source_ids, vec!["agg-active"]);
 }
 
 #[test]

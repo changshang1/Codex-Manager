@@ -800,11 +800,14 @@ fn add_aggregate_api_pools(
     target_models: Option<&HashSet<String>>,
     pools: &mut BTreeMap<String, PoolAccumulator>,
 ) -> Result<(), String> {
+    if let Err(err) = storage.recover_aggregate_apis_auto_disabled_before_today() {
+        log::warn!("event=quota_aggregate_auto_recovery_failed err={err}");
+    }
     let aggregate_apis = storage
         .list_aggregate_api_quota_source_summaries()
         .map_err(|err| format!("list aggregate APIs failed: {err}"))?;
     for api in aggregate_apis {
-        if api.status == "disabled" {
+        if api.status == "disabled" || api.auto_disabled {
             continue;
         }
         let balance = parse_quota_source_balance_snapshot(&api);

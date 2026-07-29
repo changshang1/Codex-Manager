@@ -13,6 +13,7 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Trash2,
   Unplug,
@@ -155,12 +156,14 @@ export default function AggregateApiPage() {
     null,
   );
   const [togglingApiId, setTogglingApiId] = useState<string | null>(null);
+  const [recoveringApiId, setRecoveringApiId] = useState<string | null>(null);
 
   const { data: aggregateApis = [], isLoading } = useQuery({
     queryKey: ["aggregate-apis"],
     queryFn: () => accountClient.listAggregateApis(),
     enabled: isQueryEnabled,
     staleTime: 60_000,
+    refetchInterval: isPageActive && !modalOpen ? 30_000 : false,
     retry: 1,
   });
   usePageTransitionReady("/aggregate-api/", !isServiceReady || !isLoading);
@@ -271,6 +274,22 @@ export default function AggregateApiPage() {
     onSettled: () => setTogglingApiId(null),
   });
 
+  const recoverMutation = useMutation({
+    mutationFn: (apiId: string) => accountClient.recoverAggregateApi(apiId),
+    onMutate: (apiId) => setRecoveringApiId(apiId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["aggregate-apis"] }),
+        queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
+      ]);
+      toast.success(t("自动熔断已解除"));
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("解除熔断失败")}: ${getAppErrorMessage(error)}`);
+    },
+    onSettled: () => setRecoveringApiId(null),
+  });
+
   const reorderMutation = useMutation({
     mutationFn: (updates: AggregateApiSortUpdatePayload[]) =>
       accountClient.updateAggregateApiSorts(updates),
@@ -364,7 +383,7 @@ export default function AggregateApiPage() {
 
         <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <MetricCard title={t("总数")} value={aggregateApis.length} icon={Database} tone="blue" />
-          <MetricCard title={t("已启用")} value={activeCount} icon={ShieldCheck} tone="emerald" />
+          <MetricCard title={t("人工已启用")} value={activeCount} icon={ShieldCheck} tone="emerald" />
           <MetricCard title={t("已有模型路由")} value={routedCount} icon={Gauge} tone="violet" />
           <MetricCard title={t("测试失败")} value={failedCount} icon={Unplug} tone="rose" />
         </section>
@@ -404,7 +423,8 @@ export default function AggregateApiPage() {
                     <TableHead>{t("模型路由")}</TableHead>
                     <TableHead>{t("余额")}</TableHead>
                     <TableHead>{t("连通性")}</TableHead>
-                    <TableHead>{t("启用")}</TableHead>
+                    <TableHead>{t("人工启用")}</TableHead>
+                    <TableHead className="min-w-[220px]">{t("自动熔断")}</TableHead>
                     <TableHead className="text-right">{t("操作")}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -412,14 +432,14 @@ export default function AggregateApiPage() {
                   {isLoading ? (
                     Array.from({ length: 4 }).map((_, index) => (
                       <TableRow key={index}>
-                        {Array.from({ length: 9 }).map((__, cell) => (
+                        {Array.from({ length: 10 }).map((__, cell) => (
                           <TableCell key={cell}><Skeleton className="h-7 w-full" /></TableCell>
                         ))}
                       </TableRow>
                     ))
                   ) : filteredApis.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={9} className="h-48 text-center text-muted-foreground">
+                      <TableCell colSpan={10} className="h-48 text-center text-muted-foreground">
                         {t("暂无聚合 API，点击右上角新建")}
                       </TableCell>
                     </TableRow>
@@ -428,6 +448,16 @@ export default function AggregateApiPage() {
                       const revealed = revealedSecrets[api.id];
                       const balance = parseBalanceSnapshot(api);
                       const testError = String(api.lastTestError || "").trim();
+                      const autoDisabledReason = String(api.autoDisabledReason || "").trim();
+                      const autoDisabledReasonLabel = autoDisabledReason
+                        ? autoDisabledReason === "daily_quota_exceeded"
+                          ? t("上游按日额度已耗尽")
+                          : t("未知熔断原因：{reason}", { reason: autoDisabledReason })
+                        : null;
+                      const isAutoDisabled = api.autoToggleEnabled && api.autoDisabled;
+                      const displayedFailureCount = api.autoToggleEnabled
+                        ? api.consecutiveFailures
+                        : 0;
                       const filteredIndex = filteredApiIndexMap.get(api.id) ?? -1;
                       return (
                         <TableRow key={api.id}>
@@ -547,9 +577,68 @@ export default function AggregateApiPage() {
                           <TableCell>
                             <Switch
                               checked={api.status === "active"}
-                              disabled={togglingApiId === api.id}
+                              disabled={!isServiceReady || togglingApiId === api.id}
                               onCheckedChange={(enabled) => toggleMutation.mutate({ api, enabled })}
+                              aria-label={`${t("人工启用")}: ${api.supplierName || api.id}`}
                             />
+                          </TableCell>
+                          <TableCell className="align-top whitespace-normal">
+                            <div className="space-y-1.5 text-[11px]">
+                              <Badge
+                                variant={
+                                  !api.autoToggleEnabled
+                                    ? "secondary"
+                                    : isAutoDisabled
+                                      ? "destructive"
+                                      : "default"
+                                }
+                              >
+                                {!api.autoToggleEnabled
+                                  ? t("自动启停已关闭")
+                                  : isAutoDisabled
+                                    ? t("已自动停用")
+                                    : api.status !== "active"
+                                      ? t("等待人工启用")
+                                      : t("监控中")}
+                              </Badge>
+                              <div className="text-muted-foreground">
+                                {t("连续失败")}: {displayedFailureCount}
+                              </div>
+                              {api.autoDisabledAt ? (
+                                <div className="text-muted-foreground">
+                                  {t("上次自动停用")}: {formatTsFromSeconds(api.autoDisabledAt, "-")}
+                                </div>
+                              ) : null}
+                              {autoDisabledReasonLabel ? (
+                                <div
+                                  className="max-w-[260px] break-words text-muted-foreground [overflow-wrap:anywhere]"
+                                  title={autoDisabledReason}
+                                >
+                                  {t("停用原因")}: {autoDisabledReasonLabel}
+                                </div>
+                              ) : null}
+                              {isAutoDisabled ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 px-2 text-xs"
+                                  disabled={
+                                    !isServiceReady || recoverMutation.isPending
+                                  }
+                                  onClick={() => recoverMutation.mutate(api.id)}
+                                >
+                                  <RotateCcw
+                                    className={`mr-1.5 h-3.5 w-3.5 ${
+                                      recoveringApiId === api.id ? "animate-spin" : ""
+                                    }`}
+                                  />
+                                  {recoveringApiId === api.id
+                                    ? t("解除中...")
+                                    : t("解除熔断")}
+                                </Button>
+                              ) : null}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <div className="flex justify-end gap-1">

@@ -11,6 +11,7 @@ use crate::gateway::upstream::executor::{
 };
 use codexmanager_core::storage::{
     now_ts, Account, AggregateApi, ManagedModelV2, ManagedModelV2Upsert, ModelRouteV2, Storage,
+    AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD,
 };
 use std::time::{Duration, Instant};
 
@@ -39,6 +40,11 @@ fn insert_test_aggregate_api_with_provider(storage: &Storage, id: &str, provider
             action: None,
             model_override: None,
             status: "active".to_string(),
+            auto_toggle_enabled: false,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
             created_at: now,
             updated_at: now,
             last_test_at: None,
@@ -71,6 +77,11 @@ fn insert_test_aggregate_api_with_model_override(storage: &Storage, id: &str, mo
             action: None,
             model_override: Some(model.to_string()),
             status: "active".to_string(),
+            auto_toggle_enabled: false,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
             created_at: now,
             updated_at: now,
             last_test_at: None,
@@ -740,6 +751,33 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
         anthropic_candidates[0].model_override.as_deref(),
         Some("vendor-codex")
     );
+}
+
+#[test]
+fn explicit_aggregate_route_cannot_bypass_auto_disable() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let api_id = "agg-explicit-auto-disabled";
+    insert_test_aggregate_api(&storage, api_id);
+    storage
+        .set_aggregate_api_auto_toggle_enabled(api_id, true)
+        .expect("enable auto toggle");
+    for _ in 0..AGGREGATE_API_AUTO_DISABLE_FAILURE_THRESHOLD {
+        storage
+            .record_aggregate_api_daily_quota_failure(api_id)
+            .expect("record daily quota failure");
+    }
+
+    let err = resolve_aggregate_candidates_for_route(
+        &storage,
+        "openai_responses",
+        Some(api_id),
+        "key-explicit-disabled",
+        None,
+    )
+    .expect_err("auto-disabled explicit aggregate API must be unavailable");
+
+    assert!(err.contains("aggregate api not found for provider codex"));
 }
 
 #[test]

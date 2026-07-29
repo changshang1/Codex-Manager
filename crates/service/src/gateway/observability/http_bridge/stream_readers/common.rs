@@ -126,21 +126,6 @@ impl UpstreamSseFramePump {
         Self { rx }
     }
 
-    /// 函数 `new`
-    ///
-    /// 作者: gaohongshun
-    ///
-    /// 时间: 2026-04-02
-    ///
-    /// # 参数
-    /// - crate: 参数 crate
-    ///
-    /// # 返回
-    /// 返回函数执行结果
-    pub(crate) fn new(upstream: reqwest::blocking::Response) -> Self {
-        Self::from_reader(upstream)
-    }
-
     /// 函数 `recv_timeout`
     ///
     /// 作者: gaohongshun
