@@ -2186,10 +2186,10 @@ fn request_token_stats_rollups_use_owner_and_actual_source_precedence() {
         .summarize_request_token_stats_daily(base, base + 2 * 86_400, 86_400)
         .expect("daily rollup");
     assert_eq!(daily.len(), 2);
-    assert_eq!(daily[0].usage.total_tokens, 170);
-    assert_eq!(daily[0].usage.input_tokens, 180);
-    assert_eq!(daily[0].usage.cached_input_tokens, 50);
-    assert_eq!(daily[0].usage.output_tokens, 70);
+    assert_eq!(daily[0].usage.total_tokens, 100);
+    assert_eq!(daily[0].usage.input_tokens, 100);
+    assert_eq!(daily[0].usage.cached_input_tokens, 20);
+    assert_eq!(daily[0].usage.output_tokens, 50);
     assert_eq!(daily[0].usage.request_count, 2);
     assert_eq!(daily[0].usage.success_count, 1);
     assert_eq!(daily[0].usage.error_count, 1);
@@ -2207,7 +2207,7 @@ fn request_token_stats_rollups_use_owner_and_actual_source_precedence() {
         .find(|item| item.user_id == "current-user")
         .expect("current owner fallback rollup");
     assert_eq!(ledger_user.usage.total_tokens, 100);
-    assert_eq!(current_user.usage.total_tokens, 70);
+    assert_eq!(current_user.usage.total_tokens, 0);
 
     let ledger_direct = storage
         .summarize_request_token_stats_for_user_between("ledger-user", base, base + 86_400)
@@ -2233,7 +2233,7 @@ fn request_token_stats_rollups_use_owner_and_actual_source_precedence() {
             .expect("legacy account")
             .usage
             .total_tokens,
-        70
+        0
     );
 
     let aggregate_sources = storage

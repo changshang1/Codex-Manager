@@ -94,6 +94,10 @@ function stringList(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function serviceTierName(id: string): string {
+  return id.toLowerCase() === "priority" ? "Fast" : id;
+}
+
 function booleanCapability(
   model: ManagedModelV2,
   fallback: boolean,
@@ -147,7 +151,11 @@ export function managedModelV2ToModelInfo(model: ManagedModelV2): ModelInfo {
     additionalSpeedTiers: stringList(
       capability(model, "additionalSpeedTiers", "additional_speed_tiers"),
     ),
-    serviceTiers: serviceTiers.map((id) => ({ id, name: id, description: "" })),
+    serviceTiers: serviceTiers.map((id) => ({
+      id,
+      name: serviceTierName(id),
+      description: "",
+    })),
     defaultServiceTier: nullableString(
       capability(model, "defaultServiceTier", "default_service_tier"),
     ),

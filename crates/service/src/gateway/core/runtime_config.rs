@@ -34,6 +34,8 @@ static TRACE_BODY_PREVIEW_MAX_BYTES: AtomicUsize =
     AtomicUsize::new(DEFAULT_TRACE_BODY_PREVIEW_MAX_BYTES);
 static FRONT_PROXY_MAX_BODY_BYTES: AtomicUsize =
     AtomicUsize::new(DEFAULT_FRONT_PROXY_MAX_BODY_BYTES);
+static FRONT_PROXY_ZSTD_MAX_BODY_BYTES: AtomicUsize =
+    AtomicUsize::new(DEFAULT_FRONT_PROXY_ZSTD_MAX_BODY_BYTES);
 static UPSTREAM_CONNECT_TIMEOUT_SECS: AtomicU64 =
     AtomicU64::new(DEFAULT_UPSTREAM_CONNECT_TIMEOUT_SECS);
 static UPSTREAM_TOTAL_TIMEOUT_MS: AtomicU64 = AtomicU64::new(DEFAULT_UPSTREAM_TOTAL_TIMEOUT_MS);
@@ -82,6 +84,7 @@ const DEFAULT_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL: bool = false;
 const DEFAULT_REQUEST_GATE_WAIT_TIMEOUT_MS: u64 = 0;
 const DEFAULT_TRACE_BODY_PREVIEW_MAX_BYTES: usize = 0;
 const DEFAULT_FRONT_PROXY_MAX_BODY_BYTES: usize = 0;
+const DEFAULT_FRONT_PROXY_ZSTD_MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_FREE_ACCOUNT_MAX_MODEL: &str = "auto";
 const DEFAULT_COMPACT_MODEL: &str = "auto";
 const DEFAULT_COMPACT_API_PATH: &str = "/v1/responses/compact";
@@ -96,6 +99,7 @@ const MAX_CANDIDATE_CLIENT_CACHE_ENTRIES: usize = 512;
 const ENV_REQUEST_GATE_WAIT_TIMEOUT_MS: &str = "CODEXMANAGER_REQUEST_GATE_WAIT_TIMEOUT_MS";
 const ENV_TRACE_BODY_PREVIEW_MAX_BYTES: &str = "CODEXMANAGER_TRACE_BODY_PREVIEW_MAX_BYTES";
 const ENV_FRONT_PROXY_MAX_BODY_BYTES: &str = "CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES";
+const ENV_FRONT_PROXY_ZSTD_MAX_BODY_BYTES: &str = "CODEXMANAGER_FRONT_PROXY_ZSTD_MAX_BODY_BYTES";
 const ENV_UPSTREAM_CONNECT_TIMEOUT_SECS: &str = "CODEXMANAGER_UPSTREAM_CONNECT_TIMEOUT_SECS";
 const ENV_UPSTREAM_TOTAL_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS";
 const ENV_UPSTREAM_STREAM_TIMEOUT_MS: &str = "CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS";
@@ -1008,6 +1012,11 @@ pub(crate) fn front_proxy_max_body_bytes() -> usize {
     FRONT_PROXY_MAX_BODY_BYTES.load(Ordering::Relaxed)
 }
 
+pub(crate) fn front_proxy_zstd_max_body_bytes() -> usize {
+    ensure_runtime_config_loaded();
+    FRONT_PROXY_ZSTD_MAX_BODY_BYTES.load(Ordering::Relaxed)
+}
+
 /// 函数 `upstream_proxy_url`
 ///
 /// 作者: gaohongshun
@@ -1566,6 +1575,18 @@ pub(super) fn reload_from_env() {
             ENV_FRONT_PROXY_MAX_BODY_BYTES,
             DEFAULT_FRONT_PROXY_MAX_BODY_BYTES,
         ),
+        Ordering::Relaxed,
+    );
+    let zstd_max_body_bytes = env_usize_or(
+        ENV_FRONT_PROXY_ZSTD_MAX_BODY_BYTES,
+        DEFAULT_FRONT_PROXY_ZSTD_MAX_BODY_BYTES,
+    );
+    FRONT_PROXY_ZSTD_MAX_BODY_BYTES.store(
+        if zstd_max_body_bytes == 0 {
+            DEFAULT_FRONT_PROXY_ZSTD_MAX_BODY_BYTES
+        } else {
+            zstd_max_body_bytes
+        },
         Ordering::Relaxed,
     );
     UPSTREAM_CONNECT_TIMEOUT_SECS.store(

@@ -492,6 +492,8 @@ export const EN_MESSAGES: MessageCatalog = {
   保存: "Save",
   清除: "Clear",
   确定: "Confirm",
+  首页: "First page",
+  跳至: "Go to",
   "服务未连接，暂时无法": "Service is disconnected, unable to",
   更新密钥: "update key",
   启用密钥: "enable key",

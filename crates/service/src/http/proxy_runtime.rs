@@ -14,7 +14,6 @@ use crate::http::proxy_response::{merge_upstream_headers, text_error_response};
 
 const DEFAULT_FRONT_PROXY_MAX_BLOCKING_THREADS: usize = 32;
 const DEFAULT_FRONT_PROXY_WORKER_THREADS: usize = 2;
-const ZSTD_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 const ZSTD_MAX_CONCURRENT_DECODES: usize = 4;
 const ENV_FRONT_PROXY_MAX_BLOCKING_THREADS: &str = "CODEXMANAGER_FRONT_PROXY_MAX_BLOCKING_THREADS";
 const ENV_FRONT_PROXY_WORKER_THREADS: &str = "CODEXMANAGER_FRONT_PROXY_WORKER_THREADS";
@@ -126,11 +125,12 @@ fn has_zstd_magic(body: &[u8]) -> bool {
     body.starts_with(&[0x28, 0xB5, 0x2F, 0xFD])
 }
 
-fn zstd_body_limit(max_body_bytes: usize) -> usize {
+fn zstd_body_limit(max_body_bytes: usize, zstd_max_body_bytes: usize) -> usize {
+    let zstd_max_body_bytes = zstd_max_body_bytes.max(1);
     if max_body_bytes == 0 {
-        ZSTD_MAX_BODY_BYTES
+        zstd_max_body_bytes
     } else {
-        max_body_bytes.min(ZSTD_MAX_BODY_BYTES)
+        max_body_bytes.min(zstd_max_body_bytes)
     }
 }
 
@@ -181,7 +181,7 @@ fn decode_zstd_body(body: &[u8], decode_limit: usize) -> Result<Vec<u8>, Incomin
 async fn normalize_incoming_request_body(
     headers: &mut HeaderMap,
     body: Bytes,
-    max_body_bytes: usize,
+    decode_limit: usize,
     decode_permit: Option<tokio::sync::SemaphorePermit<'static>>,
 ) -> Result<Bytes, IncomingBodyDecodeError> {
     if body.is_empty() || (!has_zstd_content_encoding(headers) && !has_zstd_magic(body.as_ref())) {
@@ -192,7 +192,6 @@ async fn normalize_incoming_request_body(
         Some(permit) => permit,
         None => try_acquire_zstd_decode_permit()?,
     };
-    let decode_limit = zstd_body_limit(max_body_bytes);
     let decoded = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         decode_zstd_body(body.as_ref(), decode_limit)
@@ -230,6 +229,8 @@ async fn proxy_handler(
     let prefer_raw_errors = crate::gateway::prefers_raw_errors_for_http_headers(&parts.headers);
     let target_url = build_target_url(&state.backend_base_url, &parts.uri);
     let max_body_bytes = crate::gateway::front_proxy_max_body_bytes();
+    let zstd_max_body_bytes = crate::gateway::front_proxy_zstd_max_body_bytes();
+    let zstd_decode_limit = zstd_body_limit(max_body_bytes, zstd_max_body_bytes);
     let declared_zstd = has_zstd_content_encoding(&parts.headers);
     let zstd_decode_permit = if declared_zstd {
         match try_acquire_zstd_decode_permit() {
@@ -246,7 +247,7 @@ async fn proxy_handler(
         None
     };
     let request_body_limit = if declared_zstd {
-        zstd_body_limit(max_body_bytes)
+        zstd_decode_limit
     } else {
         max_body_bytes
     };
@@ -306,7 +307,7 @@ async fn proxy_handler(
     let body_bytes = match normalize_incoming_request_body(
         &mut outbound_headers,
         body_bytes,
-        max_body_bytes,
+        zstd_decode_limit,
         zstd_decode_permit,
     )
     .await

@@ -164,6 +164,7 @@ name = "Other"
 
     assert!(output.contains("model_provider = \"cm\""));
     assert!(output.contains("[model_providers.cm]"));
+    assert!(output.contains("name = \"CodexManager\""));
     assert!(output.contains("base_url = \"http://127.0.0.1:48770/v1\""));
     assert!(output.contains("wire_api = \"responses\""));
     assert!(output.contains("supports_websockets = true"));
@@ -178,6 +179,64 @@ name = "Other"
     )
     .expect("disable gateway websocket");
     assert!(without_websocket.contains("supports_websockets = false"));
+}
+
+#[test]
+fn gateway_config_preserves_custom_managed_provider_values() {
+    let input = r#"
+model_provider = "cm"
+
+[model_providers.cm]
+name = "Custom Gateway"
+base_url = "https://stale.example.test/v1"
+wire_api = "chat"
+supports_websockets = false
+experimental_bearer_token = "custom-key"
+custom_header = "custom-value"
+"#;
+
+    let managed_catalog = PathBuf::from("/tmp/codexmanager/gateway-models.json");
+    let output = patch_config_for_gateway(
+        Some(input.to_string()),
+        "http://127.0.0.1:48770/v1",
+        &managed_catalog,
+        true,
+    )
+    .expect("patch gateway");
+    let doc = parse_config(&output).expect("parse patched gateway config");
+    let provider = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get(PROVIDER_ID))
+        .and_then(Item::as_table)
+        .expect("managed provider");
+
+    assert_eq!(
+        provider.get("name").and_then(Item::as_str),
+        Some("Custom Gateway")
+    );
+    assert_eq!(
+        provider
+            .get("experimental_bearer_token")
+            .and_then(Item::as_str),
+        Some("custom-key")
+    );
+    assert_eq!(
+        provider.get("custom_header").and_then(Item::as_str),
+        Some("custom-value")
+    );
+    assert_eq!(
+        provider.get("base_url").and_then(Item::as_str),
+        Some("http://127.0.0.1:48770/v1")
+    );
+    assert_eq!(
+        provider.get("wire_api").and_then(Item::as_str),
+        Some("responses")
+    );
+    assert_eq!(
+        provider.get("supports_websockets").and_then(Item::as_bool),
+        Some(true)
+    );
 }
 
 #[test]

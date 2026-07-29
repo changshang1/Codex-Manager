@@ -395,7 +395,6 @@ use request_gate::{request_gate_lock, RequestGateAcquireError};
 pub(crate) use request_log::write_request_log;
 use route_hint::{apply_route_strategy, apply_route_strategy_with_source};
 use route_quality::record_route_quality;
-pub(crate) use runtime_config::front_proxy_max_body_bytes;
 pub(crate) use runtime_config::invalidate_account_proxy_client_cache as invalidate_account_proxy_cache;
 pub(crate) use runtime_config::upstream_client;
 pub(crate) use runtime_config::{account_max_inflight_limit, set_account_max_inflight_limit};
@@ -404,6 +403,7 @@ pub(crate) use runtime_config::{
     fresh_upstream_client_for_account, prepare_upstream_client_for_account,
     upstream_client_for_account,
 };
+pub(crate) use runtime_config::{front_proxy_max_body_bytes, front_proxy_zstd_max_body_bytes};
 use runtime_config::{
     prepare_upstream_client_for_aggregate_api_candidate, request_gate_wait_timeout,
     trace_body_preview_max_bytes, upstream_client_for_aggregate_api_candidate,

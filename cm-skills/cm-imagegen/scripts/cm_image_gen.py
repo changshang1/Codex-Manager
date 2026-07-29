@@ -13,6 +13,8 @@ from pathlib import Path
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_SIZE = "1024x1024"
 DEFAULT_RESPONSE_FORMAT = "b64_json"
+DEFAULT_MINIMAX_MODEL = "image-01"
+MINIMAX_HOST_FRAGMENTS = ("minimax.io", "minimaxi.com")
 
 
 def home() -> Path:
@@ -70,6 +72,12 @@ def provider_base_url() -> str:
     return base_url.rstrip("/")
 
 
+def is_minimax_base_url(base_url: str) -> bool:
+    """Return True when the configured provider base URL targets the image_generation API."""
+    lowered = base_url.lower()
+    return any(fragment in lowered for fragment in MINIMAX_HOST_FRAGMENTS)
+
+
 def load_api_key() -> str:
     auth_path = codex_home() / "auth.json"
     if auth_path.exists():
@@ -118,6 +126,17 @@ def request_json(url: str, api_key: str, payload: dict, timeout: int) -> dict:
         raise SystemExit(f"Failed to reach CodexManager Images API: {exc}")
 
 
+def download_bytes(url: str, timeout: int) -> bytes:
+    req = urllib.request.Request(url, headers={"Accept": "image/*"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"HTTP {exc.code} downloading image {url}")
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"Failed to download image {url}: {exc}")
+
+
 def data_url_from_file(path: Path) -> str:
     if not path.exists() or not path.is_file():
         raise SystemExit(f"Input image not found: {path}")
@@ -126,12 +145,7 @@ def data_url_from_file(path: Path) -> str:
     return f"data:{mime_type};base64,{b64}"
 
 
-def save_image_from_item(item: dict, out_dir: Path, filename: str | None, index: int) -> Path:
-    b64 = item.get("b64_json")
-    if not isinstance(b64, str) or not b64.strip():
-        url = item.get("url")
-        raise SystemExit(f"Response item has no b64_json. URL responses are not saved by this script: {url}")
-    raw = base64.b64decode(b64)
+def save_image_bytes(raw: bytes, out_dir: Path, filename: str | None, index: int) -> Path:
     ext = ".png"
     if raw.startswith(b"\xff\xd8"):
         ext = ".jpg"
@@ -154,10 +168,106 @@ def save_image_from_item(item: dict, out_dir: Path, filename: str | None, index:
     return path
 
 
+def save_image_from_item(item: dict, out_dir: Path, filename: str | None, index: int) -> Path:
+    b64 = item.get("b64_json")
+    if not isinstance(b64, str) or not b64.strip():
+        url = item.get("url")
+        raise SystemExit(f"Response item has no b64_json. URL responses are not saved by this script: {url}")
+    return save_image_bytes(base64.b64decode(b64), out_dir, filename, index)
+
+
+def normalize_response_format(value: str, minimax: bool) -> str:
+    if minimax:
+        if value == "b64_json":
+            return "base64"
+        if value in ("url", "base64"):
+            return value
+    return value
+
+
+def minimax_payload(args: argparse.Namespace, model: str, prompt: str, subject_reference=None) -> dict:
+    payload: dict = {"model": model, "prompt": prompt}
+    response_format = normalize_response_format(args.response_format, True)
+    if response_format:
+        payload["response_format"] = response_format
+    if getattr(args, "aspect_ratio", None):
+        payload["aspect_ratio"] = args.aspect_ratio
+    if getattr(args, "width", None):
+        payload["width"] = args.width
+    if getattr(args, "height", None):
+        payload["height"] = args.height
+    if getattr(args, "seed", None) is not None:
+        payload["seed"] = args.seed
+    if args.n is not None:
+        payload["n"] = args.n
+    if getattr(args, "prompt_optimizer", None) is not None:
+        payload["prompt_optimizer"] = args.prompt_optimizer
+    if subject_reference is not None:
+        payload["subject_reference"] = subject_reference
+    return payload
+
+
+def parse_minimax_response(data: dict, out_dir: Path, filename: str | None, timeout: int) -> list[Path]:
+    base_resp = data.get("base_resp") or {}
+    status_code = base_resp.get("status_code")
+    if status_code not in (None, 0):
+        raise SystemExit(
+            f"image_generation failed (base_resp.status_code={status_code}): "
+            f"{base_resp.get('status_msg')}"
+        )
+    data_obj = data.get("data") or {}
+    sources: list[tuple[str, str]] = []
+    image_urls = data_obj.get("image_urls")
+    if isinstance(image_urls, list):
+        for value in image_urls:
+            if isinstance(value, str) and value.strip():
+                sources.append(("url", value.strip()))
+    image_base64 = data_obj.get("image_base64")
+    if isinstance(image_base64, list):
+        for value in image_base64:
+            if isinstance(value, str) and value.strip():
+                sources.append(("base64", value.strip()))
+    if not sources:
+        metadata = data.get("metadata") or {}
+        raise SystemExit(
+            "image_generation returned no images "
+            f"(success_count={metadata.get('success_count')}, "
+            f"failed_count={metadata.get('failed_count')}): "
+            f"{json.dumps(data, ensure_ascii=False)[:1000]}"
+        )
+    paths: list[Path] = []
+    for index, (kind, value) in enumerate(sources):
+        if kind == "url":
+            raw = download_bytes(value, timeout)
+        else:
+            raw = base64.b64decode(value)
+        paths.append(save_image_bytes(raw, out_dir, filename, index))
+    return paths
+
+
 def generate(args: argparse.Namespace) -> int:
     base_url = provider_base_url()
     api_key = load_api_key()
-    model = args.model or os.environ.get("CODEXMANAGER_IMAGE_MODEL") or DEFAULT_MODEL
+    minimax = is_minimax_base_url(base_url)
+    model = args.model or os.environ.get("CODEXMANAGER_IMAGE_MODEL") or (
+        DEFAULT_MINIMAX_MODEL if minimax else DEFAULT_MODEL
+    )
+    if minimax:
+        url = f"{base_url.rstrip('/')}/image_generation"
+        payload = minimax_payload(args, model, args.prompt)
+        data = request_json(url, api_key, payload, args.timeout)
+        out_dir = Path(args.out_dir) if args.out_dir else output_dir()
+        paths = parse_minimax_response(data, out_dir, args.filename, args.timeout)
+        result = {
+            "ok": True,
+            "base_url": base_url,
+            "model": model,
+            "paths": [str(path.resolve()) for path in paths],
+            "metadata": data.get("metadata"),
+            "created": data.get("created"),
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     url = f"{base_url.rstrip('/')}/images/generations"
     payload = {
         "model": model,
@@ -194,9 +304,34 @@ def generate(args: argparse.Namespace) -> int:
 def edit(args: argparse.Namespace) -> int:
     base_url = provider_base_url()
     api_key = load_api_key()
-    model = args.model or os.environ.get("CODEXMANAGER_IMAGE_MODEL") or DEFAULT_MODEL
-    url = f"{base_url.rstrip('/')}/images/edits"
+    minimax = is_minimax_base_url(base_url)
+    model = args.model or os.environ.get("CODEXMANAGER_IMAGE_MODEL") or (
+        DEFAULT_MINIMAX_MODEL if minimax else DEFAULT_MODEL
+    )
     image_paths = [Path(value).expanduser() for value in args.image]
+    if minimax:
+        url = f"{base_url.rstrip('/')}/image_generation"
+        subject_reference = [
+            {"type": "character", "image_file": data_url_from_file(path)}
+            for path in image_paths
+        ]
+        payload = minimax_payload(args, model, args.prompt, subject_reference=subject_reference)
+        data = request_json(url, api_key, payload, args.timeout)
+        out_dir = Path(args.out_dir) if args.out_dir else output_dir()
+        paths = parse_minimax_response(data, out_dir, args.filename, args.timeout)
+        result = {
+            "ok": True,
+            "operation": "edit",
+            "base_url": base_url,
+            "model": model,
+            "source_images": [str(path.resolve()) for path in image_paths],
+            "paths": [str(path.resolve()) for path in paths],
+            "metadata": data.get("metadata"),
+            "created": data.get("created"),
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    url = f"{base_url.rstrip('/')}/images/edits"
     payload = {
         "model": model,
         "prompt": args.prompt,
@@ -234,6 +369,25 @@ def edit(args: argparse.Namespace) -> int:
     return 0
 
 
+def add_minimax_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--aspect-ratio")
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--height", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--prompt-optimizer",
+        choices=["true", "false"],
+        help="enable automatic prompt optimization for the image_generation API",
+    )
+
+
+def coerce_prompt_optimizer(args: argparse.Namespace) -> None:
+    value = getattr(args, "prompt_optimizer", None)
+    if value is None:
+        return
+    setattr(args, "prompt_optimizer", value == "true")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate images through CodexManager Images API.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -241,7 +395,7 @@ def main() -> int:
     gen.add_argument("--prompt", required=True)
     gen.add_argument("--model")
     gen.add_argument("--size", default=DEFAULT_SIZE)
-    gen.add_argument("--response-format", default=DEFAULT_RESPONSE_FORMAT, choices=["b64_json", "url"])
+    gen.add_argument("--response-format", default=DEFAULT_RESPONSE_FORMAT, choices=["b64_json", "url", "base64"])
     gen.add_argument("--out-dir")
     gen.add_argument("--filename")
     gen.add_argument("--n", type=int)
@@ -249,6 +403,7 @@ def main() -> int:
     gen.add_argument("--background")
     gen.add_argument("--output-format", choices=["png", "jpeg", "webp"])
     gen.add_argument("--timeout", type=int, default=600)
+    add_minimax_arguments(gen)
     gen.set_defaults(func=generate)
     edit_parser = sub.add_parser("edit")
     edit_parser.add_argument("--prompt", required=True)
@@ -256,7 +411,7 @@ def main() -> int:
     edit_parser.add_argument("--mask")
     edit_parser.add_argument("--model")
     edit_parser.add_argument("--size", default=DEFAULT_SIZE)
-    edit_parser.add_argument("--response-format", default=DEFAULT_RESPONSE_FORMAT, choices=["b64_json", "url"])
+    edit_parser.add_argument("--response-format", default=DEFAULT_RESPONSE_FORMAT, choices=["b64_json", "url", "base64"])
     edit_parser.add_argument("--out-dir")
     edit_parser.add_argument("--filename")
     edit_parser.add_argument("--n", type=int)
@@ -264,8 +419,10 @@ def main() -> int:
     edit_parser.add_argument("--background")
     edit_parser.add_argument("--output-format", choices=["png", "jpeg", "webp"])
     edit_parser.add_argument("--timeout", type=int, default=600)
+    add_minimax_arguments(edit_parser)
     edit_parser.set_defaults(func=edit)
     args = parser.parse_args()
+    coerce_prompt_optimizer(args)
     return args.func(args)
 
 

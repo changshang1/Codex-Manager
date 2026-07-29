@@ -119,6 +119,9 @@ test("managed model adapter carries non-prompt Codex runtime metadata", () => {
   assert.equal(info.useResponsesLite, true);
   assert.equal(info.compHash, "3000");
   assert.deepEqual(info.additionalSpeedTiers, ["fast"]);
+  assert.deepEqual(info.serviceTiers, [
+    { id: "priority", name: "Fast", description: "" },
+  ]);
   assert.deepEqual(info.outputModalities, ["text"]);
   assert.deepEqual(info.supportedEndpoints, [
     "/v1/responses",

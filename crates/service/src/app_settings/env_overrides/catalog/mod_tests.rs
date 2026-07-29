@@ -49,4 +49,23 @@ fn catalog_marks_request_semantic_env_overrides_as_high_risk() {
             .and_then(|value| value.as_str()),
         Some(ENV_OVERRIDE_EFFECT_SCOPE_REQUEST_SEMANTIC)
     );
+
+    let zstd_limit = catalog
+        .iter()
+        .find(|item| {
+            item.get("key").and_then(|value| value.as_str())
+                == Some("CODEXMANAGER_FRONT_PROXY_ZSTD_MAX_BODY_BYTES")
+        })
+        .expect("zstd body limit catalog item");
+
+    assert_eq!(
+        zstd_limit.get("applyMode").and_then(|value| value.as_str()),
+        Some("runtime")
+    );
+    assert_eq!(
+        zstd_limit
+            .get("effectScope")
+            .and_then(|value| value.as_str()),
+        Some(ENV_OVERRIDE_EFFECT_SCOPE_REQUEST_SEMANTIC)
+    );
 }

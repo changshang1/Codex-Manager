@@ -120,6 +120,13 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         "0",
     ),
     EnvOverrideCatalogItem::new(
+        "CODEXMANAGER_FRONT_PROXY_ZSTD_MAX_BODY_BYTES",
+        "zstd 解压后最大请求体（字节）",
+        ENV_OVERRIDE_SCOPE_SERVICE,
+        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
+        "268435456",
+    ),
+    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_GATEWAY_BLOCKED_PATHS",
         "网关本地屏蔽路径",
         ENV_OVERRIDE_SCOPE_SERVICE,

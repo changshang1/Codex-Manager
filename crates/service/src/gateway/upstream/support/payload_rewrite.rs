@@ -33,15 +33,18 @@ fn item_requires_encrypted_content(value: &Value) -> bool {
     let Value::Object(map) = value else {
         return false;
     };
-    if !map.contains_key("encrypted_content") {
-        return false;
-    }
+    // These response-history items are account scoped. Drop the whole item even when a
+    // previous recovery pass already removed its encrypted_content field; forwarding the
+    // remaining shell makes the Responses API reject input[N].encrypted_content as missing.
     map.get("type")
         .and_then(Value::as_str)
         .map(str::trim)
         .is_some_and(|item_type| {
             item_type.eq_ignore_ascii_case("reasoning")
                 || item_type.eq_ignore_ascii_case("encrypted_content")
+                || item_type.eq_ignore_ascii_case("compaction")
+                || item_type.eq_ignore_ascii_case("compaction_summary")
+                || item_type.eq_ignore_ascii_case("context_compaction")
         })
 }
 
@@ -132,6 +135,15 @@ mod tests {
                     "encrypted_content": "reasoning-secret"
                 },
                 {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": "compaction-secret"
+                },
+                {
+                    "type": "context_compaction",
+                    "id": "cmp_2"
+                },
+                {
                     "type": "agent_message",
                     "content": [
                         { "type": "input_text", "text": "keep me" },
@@ -180,5 +192,48 @@ mod tests {
             "encrypted content part must be removed without dropping normal text"
         );
         assert_eq!(input[1]["type"], "message");
+    }
+
+    #[test]
+    fn strip_encrypted_content_removes_compaction_at_reported_input_index() {
+        let mut input = (0..24)
+            .map(|index| {
+                json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": format!("history-{index}")
+                    }]
+                })
+            })
+            .collect::<Vec<_>>();
+        input.push(json!({
+            "type": "compaction",
+            "id": "cmp_reported_24",
+            "encrypted_content": "account-scoped-compaction"
+        }));
+        input.push(json!({
+            "type": "message",
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "continue" }]
+        }));
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "input": input
+        });
+
+        let rewritten = strip_encrypted_content_from_body(
+            serde_json::to_vec(&body)
+                .expect("serialize body")
+                .as_slice(),
+        )
+        .expect("rewrite body");
+        let value: Value = serde_json::from_slice(&rewritten).expect("parse rewritten body");
+        let input = value["input"].as_array().expect("input array");
+
+        assert_eq!(input.len(), 25);
+        assert_eq!(input[24]["type"], "message");
+        assert_eq!(input[24]["content"][0]["text"], "continue");
     }
 }

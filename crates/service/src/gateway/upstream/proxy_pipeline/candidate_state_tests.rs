@@ -205,7 +205,7 @@ fn compact_body_for_attempt_preserves_existing_prompt_cache_key() {
 }
 
 #[test]
-fn stripped_candidate_removes_encrypted_reasoning_items_without_leaving_invalid_shells() {
+fn stripped_candidate_removes_account_scoped_items_without_leaving_invalid_shells() {
     let mut state = CandidateExecutionState::default();
     let body = Bytes::from_static(
         br#"{
@@ -216,6 +216,11 @@ fn stripped_candidate_removes_encrypted_reasoning_items_without_leaving_invalid_
                     "id":"rs_1",
                     "summary":[],
                     "encrypted_content":"reasoning-secret"
+                },
+                {
+                    "type":"compaction",
+                    "id":"cmp_1",
+                    "encrypted_content":"compaction-secret"
                 },
                 {
                     "type":"agent_message",

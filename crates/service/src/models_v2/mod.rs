@@ -138,6 +138,14 @@ pub(crate) fn ensure_text_generation_model(
     ))
 }
 
+fn service_tier_display_name(id: &str) -> &str {
+    if id.eq_ignore_ascii_case("priority") {
+        "Fast"
+    } else {
+        id
+    }
+}
+
 pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
     let string_list = |keys: &[&str]| {
         capability(model, keys)
@@ -159,14 +167,20 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
             ..Default::default()
         })
         .collect();
+    let additional_speed_tiers = string_list(&["additional_speed_tiers", "additionalSpeedTiers"]);
     let service_tiers = string_list(&["service_tiers", "serviceTiers"])
         .into_iter()
         .map(|id| ModelServiceTier {
-            name: id.clone(),
+            name: service_tier_display_name(&id).to_string(),
             id,
             ..Default::default()
         })
         .collect();
+    let default_service_tier = capability(model, &["default_service_tier", "defaultServiceTier"])
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
     let truncation_policy = capability(model, &["truncation_mode", "truncationMode"])
         .and_then(Value::as_str)
         .zip(capability(model, &["truncation_limit", "truncationLimit"]).and_then(Value::as_i64))
@@ -251,7 +265,9 @@ pub(crate) fn model_info(model: &ManagedModelV2) -> ModelInfo {
         visibility: Some(model.visibility.clone()),
         supported_in_api: model.supported_in_api,
         priority: model.sort_order,
+        additional_speed_tiers,
         service_tiers,
+        default_service_tier,
         availability_nux: Some(
             capability(model, &["availability_nux", "availabilityNux"])
                 .cloned()
@@ -398,6 +414,29 @@ mod tests {
             .expect("text generation models response");
         assert!(!text.models.iter().any(|model| model.slug == "gpt-image-2"));
         assert_eq!(text.models.len() + 1, all.models.len());
+    }
+
+    #[test]
+    fn model_info_exposes_fast_service_tier_for_codex_clients() {
+        let model = ManagedModelV2 {
+            slug: "fast-model".to_string(),
+            display_name: "Fast Model".to_string(),
+            capabilities: serde_json::json!({
+                "service_tiers": ["priority", "flex"],
+                "additional_speed_tiers": ["fast"],
+                "default_service_tier": "priority"
+            }),
+            ..Default::default()
+        };
+
+        let info = model_info(&model);
+        assert_eq!(info.additional_speed_tiers, ["fast"]);
+        assert_eq!(info.default_service_tier.as_deref(), Some("priority"));
+        assert_eq!(info.service_tiers.len(), 2);
+        assert_eq!(info.service_tiers[0].id, "priority");
+        assert_eq!(info.service_tiers[0].name, "Fast");
+        assert_eq!(info.service_tiers[1].id, "flex");
+        assert_eq!(info.service_tiers[1].name, "flex");
     }
 
     #[test]

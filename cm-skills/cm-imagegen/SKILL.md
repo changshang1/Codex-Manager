@@ -31,7 +31,8 @@ CodexManager config policy:
 - Otherwise, read the active `model_provider` from `$CODEX_HOME/config.toml`.
 - Read that provider's `base_url` from `[model_providers.<provider>]`.
 - Read `OPENAI_API_KEY` from `$CODEX_HOME/auth.json`.
-- Use `CODEXMANAGER_IMAGE_MODEL` only for the image model override; otherwise use `gpt-image-2`.
+- Use `CODEXMANAGER_IMAGE_MODEL` only for the image model override; otherwise use `gpt-image-2` for OpenAI-compatible Images providers, or `image-01` when the provider base URL targets the image_generation API (`minimax.io` / `minimaxi.com` hosts).
+- When the provider base URL targets the image_generation API, the CLI calls `POST /v1/image_generation` with `aspect_ratio`/`width`/`height`/`seed`/`n`/`prompt_optimizer`/`response_format` request fields, passes `--image` inputs as `subject_reference`, and parses `data.image_urls` / `data.image_base64` + `base_resp.status_code`; otherwise it calls the OpenAI Images `/images/generations` and `/images/edits` endpoints and parses `data[].b64_json`.
 - Use `CODEXMANAGER_IMAGE_OUTPUT_DIR` only for the output directory override; otherwise save under the current working directory's `generated-images/` folder.
 
 Save-path policy:

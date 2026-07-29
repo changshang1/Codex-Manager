@@ -50,13 +50,14 @@ fn token_total_sql_expr() -> &'static str {
 }
 
 const TOKEN_ROLLUP_COLUMNS: &str = "
-    IFNULL(SUM(IFNULL(t.input_tokens, 0)), 0) AS input_tokens,
-    IFNULL(SUM(IFNULL(t.cached_input_tokens, 0)), 0) AS cached_input_tokens,
-    IFNULL(SUM(IFNULL(t.output_tokens, 0)), 0) AS output_tokens,
-    IFNULL(SUM(IFNULL(t.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
+    IFNULL(SUM(CASE WHEN t.usage_included = 1 THEN IFNULL(t.input_tokens, 0) ELSE 0 END), 0) AS input_tokens,
+    IFNULL(SUM(CASE WHEN t.usage_included = 1 THEN IFNULL(t.cached_input_tokens, 0) ELSE 0 END), 0) AS cached_input_tokens,
+    IFNULL(SUM(CASE WHEN t.usage_included = 1 THEN IFNULL(t.output_tokens, 0) ELSE 0 END), 0) AS output_tokens,
+    IFNULL(SUM(CASE WHEN t.usage_included = 1 THEN IFNULL(t.reasoning_output_tokens, 0) ELSE 0 END), 0) AS reasoning_output_tokens,
     IFNULL(
         SUM(
             CASE
+                WHEN t.usage_included <> 1 THEN 0
                 WHEN t.total_tokens IS NOT NULL THEN
                     CASE WHEN t.total_tokens > 0 THEN t.total_tokens ELSE 0 END
                 ELSE
@@ -69,7 +70,7 @@ const TOKEN_ROLLUP_COLUMNS: &str = "
         ),
         0
     ) AS total_tokens,
-    IFNULL(SUM(IFNULL(t.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd,
+    IFNULL(SUM(CASE WHEN t.usage_included = 1 THEN IFNULL(t.estimated_cost_usd, 0.0) ELSE 0.0 END), 0.0) AS estimated_cost_usd,
     COUNT(DISTINCT t.request_log_id) AS request_count,
     COUNT(DISTINCT CASE WHEN r.status_code >= 200 AND r.status_code <= 299 THEN t.request_log_id END) AS success_count,
     COUNT(DISTINCT CASE WHEN IFNULL(r.status_code, 0) >= 400 OR TRIM(IFNULL(r.error, '')) <> '' THEN t.request_log_id END) AS error_count";
@@ -189,7 +190,8 @@ fn request_log_today_summary_sql(
                 IFNULL(SUM(IFNULL(s.reasoning_output_tokens, 0)), 0) AS reasoning_output_tokens,
                 IFNULL(SUM(IFNULL(s.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
             FROM request_token_stats s
-            WHERE s.created_at >= ? AND s.created_at < ?{raw_key_clause}
+            WHERE s.created_at >= ? AND s.created_at < ?
+              AND s.usage_included = 1{raw_key_clause}
             UNION ALL
             SELECT
                 IFNULL(SUM(IFNULL(h.input_tokens, 0)), 0) AS input_tokens,
@@ -669,7 +671,7 @@ fn raw_key_usage_select(select_prefix: &str, where_clause: &str, group_by: &str)
             IFNULL(SUM({token_total}), 0) AS total_tokens,
             IFNULL(SUM(IFNULL(t.estimated_cost_usd, 0.0)), 0.0) AS estimated_cost_usd
          FROM request_token_stats t
-         WHERE {where_clause}
+         WHERE ({where_clause}) AND t.usage_included = 1
          {group_by}",
         token_total = token_total_sql_expr(),
     )
@@ -791,8 +793,22 @@ impl Storage {
             "INSERT INTO request_token_stats (
                 request_log_id, key_id, account_id, model, actual_source_kind, actual_source_id,
                 input_tokens, cached_input_tokens, output_tokens, total_tokens, reasoning_output_tokens,
-                estimated_cost_usd, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                estimated_cost_usd, usage_included, created_at
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                COALESCE(
+                    (
+                        SELECT CASE
+                            WHEN status_code >= 200 AND status_code <= 299 THEN 1
+                            ELSE 0
+                        END
+                        FROM request_logs
+                        WHERE id = ?1
+                    ),
+                    1
+                ),
+                ?13
+             )",
             (
                 stat.request_log_id,
                 &stat.key_id,
@@ -880,12 +896,12 @@ impl Storage {
                     COALESCE(NULLIF(TRIM(t.actual_source_kind), ''), ''),
                     COALESCE(NULLIF(TRIM(t.actual_source_id), ''), ''),
                     COALESCE({USER_OWNER_EXPR}, ''),
-                    IFNULL(SUM(CASE WHEN t.input_tokens > 0 THEN t.input_tokens ELSE 0 END), 0),
-                    IFNULL(SUM(CASE WHEN t.cached_input_tokens > 0 THEN t.cached_input_tokens ELSE 0 END), 0),
-                    IFNULL(SUM(CASE WHEN t.output_tokens > 0 THEN t.output_tokens ELSE 0 END), 0),
-                    IFNULL(SUM({token_total}), 0),
-                    IFNULL(SUM(CASE WHEN t.reasoning_output_tokens > 0 THEN t.reasoning_output_tokens ELSE 0 END), 0),
-                    IFNULL(SUM(CASE WHEN t.estimated_cost_usd > 0 THEN t.estimated_cost_usd ELSE 0 END), 0.0),
+                    IFNULL(SUM(CASE WHEN t.usage_included = 1 AND t.input_tokens > 0 THEN t.input_tokens ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.usage_included = 1 AND t.cached_input_tokens > 0 THEN t.cached_input_tokens ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.usage_included = 1 AND t.output_tokens > 0 THEN t.output_tokens ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.usage_included = 1 THEN {token_total} ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.usage_included = 1 AND t.reasoning_output_tokens > 0 THEN t.reasoning_output_tokens ELSE 0 END), 0),
+                    IFNULL(SUM(CASE WHEN t.usage_included = 1 AND t.estimated_cost_usd > 0 THEN t.estimated_cost_usd ELSE 0.0 END), 0.0),
                     COUNT(DISTINCT t.request_log_id),
                     COUNT(DISTINCT CASE WHEN r.status_code >= 200 AND r.status_code <= 299 THEN t.request_log_id END),
                     COUNT(DISTINCT CASE WHEN IFNULL(r.status_code, 0) >= 400 OR TRIM(IFNULL(r.error, '')) <> '' THEN t.request_log_id END),
@@ -1755,6 +1771,8 @@ impl Storage {
                 total_tokens INTEGER,
                 reasoning_output_tokens INTEGER,
                 estimated_cost_usd REAL,
+                usage_included INTEGER NOT NULL DEFAULT 1
+                    CHECK (usage_included IN (0, 1)),
                 created_at INTEGER NOT NULL
             )",
             [],
@@ -1797,6 +1815,17 @@ impl Storage {
         self.ensure_column("request_token_stats", "total_tokens", "INTEGER")?;
         self.ensure_column("request_token_stats", "actual_source_kind", "TEXT")?;
         self.ensure_column("request_token_stats", "actual_source_id", "TEXT")?;
+        self.ensure_column(
+            "request_token_stats",
+            "usage_included",
+            "INTEGER NOT NULL DEFAULT 1 CHECK (usage_included IN (0, 1))",
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_request_token_stats_success_key_model_created_at
+             ON request_token_stats(key_id, model, created_at DESC)
+             WHERE usage_included = 1",
+            [],
+        )?;
         if self.has_column("request_logs", "actual_source_kind")?
             && self.has_column("request_logs", "actual_source_id")?
         {
@@ -1927,12 +1956,14 @@ impl Storage {
                 "INSERT OR IGNORE INTO request_token_stats (
                     request_log_id, key_id, account_id, model, actual_source_kind, actual_source_id,
                     input_tokens, cached_input_tokens, output_tokens, total_tokens, reasoning_output_tokens,
-                    estimated_cost_usd, created_at
+                    estimated_cost_usd, usage_included, created_at
                  )
                  SELECT
                     id, key_id, account_id, model, {actual_source_kind_expr}, {actual_source_id_expr},
                     input_tokens, cached_input_tokens, output_tokens, NULL, reasoning_output_tokens,
-                    estimated_cost_usd, created_at
+                    estimated_cost_usd,
+                    CASE WHEN status_code >= 200 AND status_code <= 299 THEN 1 ELSE 0 END,
+                    created_at
                  FROM request_logs
                  WHERE input_tokens IS NOT NULL
                     OR cached_input_tokens IS NOT NULL
@@ -1942,6 +1973,41 @@ impl Storage {
             );
             self.conn.execute(&backfill_sql, [])?;
         }
+        Ok(())
+    }
+
+    pub(super) fn ensure_request_token_stats_usage_included_column(&self) -> Result<()> {
+        self.ensure_column(
+            "request_token_stats",
+            "usage_included",
+            "INTEGER NOT NULL DEFAULT 1 CHECK (usage_included IN (0, 1))",
+        )?;
+        self.conn.execute(
+            "UPDATE request_token_stats
+             SET usage_included = CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM request_logs
+                    WHERE request_logs.id = request_token_stats.request_log_id
+                      AND request_logs.status_code >= 200
+                      AND request_logs.status_code <= 299
+                ) THEN 1
+                ELSE 0
+             END",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE request_token_stat_hourly_rollups
+             SET
+                input_tokens = 0,
+                cached_input_tokens = 0,
+                output_tokens = 0,
+                total_tokens = 0,
+                reasoning_output_tokens = 0,
+                estimated_cost_usd = 0.0
+             WHERE success_count = 0",
+            [],
+        )?;
         Ok(())
     }
 }

@@ -441,8 +441,10 @@ function LogsPageContent() {
           setPageSize(value || "10");
           setPage(1);
         }}
+        onFirstPage={() => setPage(1)}
         onPreviousPage={() => setPage(Math.max(1, currentPage - 1))}
         onNextPage={() => setPage(Math.min(totalPages, currentPage + 1))}
+        onJumpPage={setPage}
       />
       {isAdminMode ? (
         <ConfirmDialog

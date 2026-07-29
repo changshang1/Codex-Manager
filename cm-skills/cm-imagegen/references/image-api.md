@@ -44,6 +44,35 @@ Model-specific note for `input_fidelity`:
 - High `input_fidelity` can materially increase input token usage.
 - If a request fails because a specific option is unsupported by the selected GPT Image model, retry manually without that option.
 
+## Image generation API (provider-configured)
+
+When the active `model_provider.base_url` points at the image_generation API (hostnames `minimax.io` or `minimaxi.com`), the CLI routes `generate` and `edit` to `POST /v1/image_generation` instead of the OpenAI Images endpoints.
+
+### Endpoint
+- Generate / edit: `POST /v1/image_generation`
+
+### Core request fields
+- `model`: image model (default `image-01`)
+- `prompt`: text prompt (max 1500 characters)
+- `aspect_ratio`: `1:1` (default), `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`. Takes priority over `width`/`height`.
+- `width` / `height`: pixels, range [512, 2048], must be divisible by 8, and must be set together.
+- `response_format`: `url` (default, link expires in 24 hours) or `base64`
+- `seed`: random seed for reproducibility
+- `n`: number of images, range [1, 9], default 1
+- `prompt_optimizer`: boolean, default `false`
+
+### Image-to-image (edit)
+- `subject_reference`: array of `{ "type": "character", "image_file": "<public URL or data:image/...;base64,...>" }`. For local files the CLI embeds each `--image` as a base64 data URL.
+
+### Response
+- `data.image_urls`: array of image URL strings (returned when `response_format=url`)
+- `data.image_base64`: array of base64 image strings (returned when `response_format=base64`)
+- `metadata.success_count` / `metadata.failed_count`
+- `base_resp.status_code`: `0` on success; non-zero indicates failure (for example `1004` auth failed, `1008` insufficient balance, `1026` sensitive content).
+
+The CLI downloads `url` responses and decodes `base64` responses, then writes PNG/JPG/WEBP files to the output directory.
+
 ## Important boundary
-- `quality`, `input_fidelity`, explicit masks, `background`, `output_format`, and related parameters are fallback-only execution controls.
+- `quality`, `input_fidelity`, explicit masks, `background`, `output_format`, and related parameters are OpenAI-Images fallback-only execution controls.
+- They are not accepted by the image_generation API and are ignored when the provider targets that API.
 - Do not assume they are built-in `image_gen` tool arguments.

@@ -2041,8 +2041,9 @@ fn patch_config_for_gateway(
         .get_mut(PROVIDER_ID)
         .and_then(Item::as_table_mut)
         .ok_or_else(|| "config.toml model_providers.cm is not a table".to_string())?;
-    provider.clear();
-    provider.insert("name", toml_value("CodexManager"));
+    if provider.get("name").is_none() {
+        provider.insert("name", toml_value("CodexManager"));
+    }
     provider.insert("base_url", toml_value(base_url));
     provider.insert("wire_api", toml_value("responses"));
     provider.insert("supports_websockets", toml_value(supports_websockets));

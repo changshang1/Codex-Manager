@@ -679,8 +679,8 @@ fn request_logs_filtered_summary_aggregates_counts_and_tokens() {
     assert_eq!(summary.count, 3);
     assert_eq!(summary.success_count, 2);
     assert_eq!(summary.error_count, 1);
-    assert_eq!(summary.total_tokens, 150);
-    assert_eq!(summary.estimated_cost_usd, 0.03);
+    assert_eq!(summary.total_tokens, 80);
+    assert_eq!(summary.estimated_cost_usd, 0.02);
 }
 
 #[test]

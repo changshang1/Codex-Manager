@@ -12,7 +12,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -88,8 +88,10 @@ export function RequestLogsTabContent({
   onEndTimeChange,
   onClearTimeRange,
   onPageSizeChange,
+  onFirstPage,
   onPreviousPage,
   onNextPage,
+  onJumpPage,
 }: {
   t: TranslateFn;
   isDirectAccountMode: boolean;
@@ -122,10 +124,26 @@ export function RequestLogsTabContent({
   onEndTimeChange: (value: string) => void;
   onClearTimeRange: () => void;
   onPageSizeChange: (value: string | null) => void;
+  onFirstPage: () => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
+  onJumpPage: (page: number) => void;
 }) {
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [jumpPageInput, setJumpPageInput] = useState(String(currentPage));
+
+  useEffect(() => {
+    setJumpPageInput(String(currentPage));
+  }, [currentPage]);
+
+  const submitJumpPage = () => {
+    const parsedPage = jumpPageInput.trim() ? Number(jumpPageInput) : currentPage;
+    const targetPage = Number.isInteger(parsedPage)
+      ? Math.min(totalPages, Math.max(1, parsedPage))
+      : currentPage;
+    setJumpPageInput(String(targetPage));
+    onJumpPage(targetPage);
+  };
 
   return (
     <div className="space-y-4">
@@ -549,6 +567,15 @@ export function RequestLogsTabContent({
               size="sm"
               className="h-8 px-3 text-xs"
               disabled={currentPage <= 1}
+              onClick={onFirstPage}
+            >
+              {t("首页")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs"
+              disabled={currentPage <= 1}
               onClick={onPreviousPage}
             >
               {t("上一页")}
@@ -566,6 +593,46 @@ export function RequestLogsTabContent({
               {t("下一页")}
             </Button>
           </div>
+          <form
+            className="flex items-center gap-2"
+            noValidate
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitJumpPage();
+            }}
+          >
+            <label
+              className="whitespace-nowrap text-xs text-muted-foreground"
+              htmlFor="request-log-jump-page"
+            >
+              {t("跳至")}
+            </label>
+            <Input
+              id="request-log-jump-page"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={totalPages}
+              step={1}
+              className="h-8 w-[68px] text-center text-xs"
+              value={jumpPageInput}
+              onChange={(event) => setJumpPageInput(event.target.value)}
+              onBlur={() => {
+                if (!jumpPageInput) {
+                  setJumpPageInput(String(currentPage));
+                }
+              }}
+            />
+            <span className="text-xs text-muted-foreground">{t("页")}</span>
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="h-8 px-3 text-xs"
+            >
+              {t("确定")}
+            </Button>
+          </form>
         </div>
       </div>
     </div>

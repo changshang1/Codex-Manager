@@ -91,6 +91,8 @@
 - `CODEXMANAGER_UPSTREAM_PROXY_BYPASS_HOSTS`
 - `CODEXMANAGER_UPSTREAM_TOTAL_TIMEOUT_MS`: gateway request total timeout in milliseconds. Default `0` means the service does not cut requests off by total duration.
 - `CODEXMANAGER_UPSTREAM_STREAM_TIMEOUT_MS`
+- `CODEXMANAGER_FRONT_PROXY_MAX_BODY_BYTES`: general front-proxy request-body limit in bytes. Default `0` disables the general limit, while zstd requests remain protected by the separate decompression safety limit.
+- `CODEXMANAGER_FRONT_PROXY_ZSTD_MAX_BODY_BYTES`: safety limit for a zstd request body after decompression, in bytes. Default `268435456` (256 MiB). When zstd encoding is declared, the same limit also bounds reading the compressed body; when the general limit is non-zero, the smaller limit wins. This value must be greater than `0`; `0` or an invalid value falls back to the safe default. Saving it in Settings > Environment variables applies it to subsequent requests immediately.
 - `CODEXMANAGER_USE_WEBSOCKET_UPSTREAM`: makes ChatGPT `/v1/responses` streaming upstream requests try WebSocket first. Default `0`. This is experimental; failures fall back to HTTP streaming and the path uses the configured upstream proxy and connect timeout.
 - `CODEXMANAGER_SSE_KEEPALIVE_ENABLED`: enables downstream SSE comment keepalives. Default `1`; set `0` to disable them without changing the configured interval. This applies only to streaming SSE responses; non-streaming Images JSON responses still rely on sufficiently long client and reverse-proxy read timeouts.
 - `CODEXMANAGER_SSE_KEEPALIVE_INTERVAL_MS`

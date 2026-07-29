@@ -988,7 +988,7 @@ fn by_key_usage_summary_query_includes_raw_hourly_and_legacy_sources() {
 
     assert_uses_index(
         &details,
-        "idx_request_token_stats_key_model_created_at",
+        "idx_request_token_stats_success_key_model_created_at",
         "by-key raw usage summary",
     );
     assert_uses_index(
@@ -1033,7 +1033,7 @@ fn by_key_for_user_usage_summary_query_joins_owner_index() {
 
     assert_uses_index(
         &details,
-        "idx_request_token_stats_key_model_created_at",
+        "idx_request_token_stats_success_key_model_created_at",
         "by-key-for-user raw usage summary",
     );
     assert_uses_index(
@@ -1070,7 +1070,7 @@ fn by_model_usage_summary_query_includes_key_scoped_sources() {
 
     assert_uses_index(
         &details,
-        "idx_request_token_stats_key_model_created_at",
+        "idx_request_token_stats_success_key_model_created_at",
         "by-model raw usage summary",
     );
     assert_uses_index(
@@ -1115,7 +1115,7 @@ fn by_key_model_usage_summary_query_includes_key_scoped_sources() {
 
     assert_uses_index(
         &details,
-        "idx_request_token_stats_key_model_created_at",
+        "idx_request_token_stats_success_key_model_created_at",
         "by-key-model raw usage summary",
     );
     assert_uses_index(
@@ -1143,6 +1143,116 @@ fn summarize_request_token_stats_between_short_circuits_empty_range() {
     assert_eq!(summary.output_tokens, 0);
     assert_eq!(summary.reasoning_output_tokens, 0);
     assert_eq!(summary.estimated_cost_usd, 0.0);
+}
+
+#[test]
+fn usage_rollups_exclude_499_and_502_tokens_before_and_after_compaction() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+
+    for (status_code, input_tokens, output_tokens, total_tokens, estimated_cost_usd) in [
+        (200, 20, 10, 30, 0.30),
+        (499, 30, 10, 40, 0.40),
+        (502, 40, 10, 50, 0.50),
+    ] {
+        storage
+            .insert_request_log_with_token_stat(
+                &RequestLog {
+                    key_id: Some("key-success-only".to_string()),
+                    account_id: Some("account-success-only".to_string()),
+                    request_path: "/v1/responses".to_string(),
+                    method: "POST".to_string(),
+                    model: Some("gpt-5".to_string()),
+                    actual_source_kind: Some("openai_account".to_string()),
+                    actual_source_id: Some("account-success-only".to_string()),
+                    status_code: Some(status_code),
+                    error: (status_code != 200).then(|| format!("http {status_code}")),
+                    created_at: 1_000 + status_code,
+                    ..Default::default()
+                },
+                &RequestTokenStat {
+                    key_id: Some("key-success-only".to_string()),
+                    account_id: Some("account-success-only".to_string()),
+                    model: Some("gpt-5".to_string()),
+                    actual_source_kind: Some("openai_account".to_string()),
+                    actual_source_id: Some("account-success-only".to_string()),
+                    input_tokens: Some(input_tokens),
+                    cached_input_tokens: Some(5),
+                    output_tokens: Some(output_tokens),
+                    total_tokens: Some(total_tokens),
+                    reasoning_output_tokens: Some(2),
+                    estimated_cost_usd: Some(estimated_cost_usd),
+                    created_at: 1_000 + status_code,
+                    ..Default::default()
+                },
+            )
+            .expect("insert request usage");
+    }
+
+    let inclusion_flags = storage
+        .conn
+        .prepare(
+            "SELECT r.status_code, t.usage_included
+             FROM request_logs r
+             JOIN request_token_stats t ON t.request_log_id = r.id
+             ORDER BY r.status_code",
+        )
+        .expect("prepare inclusion flags")
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+        .expect("query inclusion flags")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect inclusion flags");
+    assert_eq!(inclusion_flags, vec![(200, 1), (499, 0), (502, 0)]);
+
+    let query_summary = storage
+        .summarize_request_token_stats_query_between(Some(0), Some(3_600))
+        .expect("summarize request token stats");
+    assert_eq!(query_summary.count, 3);
+    assert_eq!(query_summary.success_count, 1);
+    assert_eq!(query_summary.error_count, 2);
+    assert_eq!(query_summary.total_tokens, 30);
+    assert_float_close(query_summary.estimated_cost_usd, 0.30);
+
+    let today = storage
+        .summarize_request_token_stats_between(0, 3_600)
+        .expect("summarize today usage");
+    assert_eq!(today.input_tokens, 20);
+    assert_eq!(today.cached_input_tokens, 5);
+    assert_eq!(today.output_tokens, 10);
+    assert_eq!(today.reasoning_output_tokens, 2);
+    assert_float_close(today.estimated_cost_usd, 0.30);
+
+    let by_key = storage
+        .summarize_request_token_stats_by_key_for_keys(&["key-success-only".to_string()])
+        .expect("summarize key usage");
+    assert_eq!(by_key.len(), 1);
+    assert_eq!(by_key[0].total_tokens, 30);
+    assert_float_close(by_key[0].estimated_cost_usd, 0.30);
+    assert_eq!(
+        storage
+            .api_key_total_token_usage("key-success-only")
+            .expect("summarize quota usage"),
+        30
+    );
+
+    storage
+        .rollup_request_token_stats_before(3_600)
+        .expect("compact request usage");
+
+    let compacted = storage
+        .summarize_request_token_stats_query_between(Some(0), Some(3_600))
+        .expect("summarize compacted request token stats");
+    assert_eq!(compacted.count, 3);
+    assert_eq!(compacted.success_count, 1);
+    assert_eq!(compacted.error_count, 2);
+    assert_eq!(compacted.total_tokens, 30);
+    assert_float_close(compacted.estimated_cost_usd, 0.30);
+    assert_eq!(
+        storage
+            .api_key_total_token_usage("key-success-only")
+            .expect("summarize compacted quota usage"),
+        30
+    );
 }
 
 #[test]
@@ -1638,7 +1748,7 @@ fn model_usage_timeline_groups_raw_and_hourly_usage_by_bucket() {
     assert_eq!(timeline[0].usage.success_count, 1);
     assert_eq!(timeline[1].bucket_start_ts, 3_600);
     assert_eq!(timeline[1].model, "gpt-4.1");
-    assert_eq!(timeline[1].usage.total_tokens, 20);
+    assert_eq!(timeline[1].usage.total_tokens, 0);
     assert_eq!(timeline[1].usage.request_count, 1);
     assert_eq!(timeline[1].usage.error_count, 1);
 }
@@ -1667,7 +1777,7 @@ fn key_model_range_query_matches_composite_index() {
     );
     assert!(details
         .iter()
-        .any(|detail| detail.contains("idx_request_token_stats_key_model_created_at")));
+        .any(|detail| detail.contains("idx_request_token_stats_success_key_model_created_at")));
 }
 
 #[test]

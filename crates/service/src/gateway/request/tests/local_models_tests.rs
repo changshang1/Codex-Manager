@@ -149,13 +149,22 @@ fn serialize_models_response_preserves_service_tier_capabilities_for_codex_clien
             slug: "gpt-5.5-codex".to_string(),
             display_name: "GPT-5.5 Codex".to_string(),
             supported_in_api: true,
-            service_tiers: vec![ModelServiceTier {
-                id: "flex".to_string(),
-                name: "Flex".to_string(),
-                description: "Lower priority capacity.".to_string(),
-                ..Default::default()
-            }],
-            default_service_tier: Some("flex".to_string()),
+            additional_speed_tiers: vec!["fast".to_string()],
+            service_tiers: vec![
+                ModelServiceTier {
+                    id: "priority".to_string(),
+                    name: "Fast".to_string(),
+                    description: "Faster responses with increased usage.".to_string(),
+                    ..Default::default()
+                },
+                ModelServiceTier {
+                    id: "flex".to_string(),
+                    name: "Flex".to_string(),
+                    description: "Lower priority capacity.".to_string(),
+                    ..Default::default()
+                },
+            ],
+            default_service_tier: Some("priority".to_string()),
             upgrade_info: Some(serde_json::json!({
                 "model": "gpt-5.5-codex",
                 "upgrade_copy": "Use the newer coding model"
@@ -176,13 +185,23 @@ fn serialize_models_response_preserves_service_tier_capabilities_for_codex_clien
         models[0]["service_tiers"][0]
             .get("id")
             .and_then(Value::as_str),
-        Some("flex")
+        Some("priority")
+    );
+    assert_eq!(
+        models[0]["service_tiers"][0]
+            .get("name")
+            .and_then(Value::as_str),
+        Some("Fast")
+    );
+    assert_eq!(
+        models[0]["additional_speed_tiers"],
+        serde_json::json!(["fast"])
     );
     assert_eq!(
         models[0]
             .get("default_service_tier")
             .and_then(Value::as_str),
-        Some("flex")
+        Some("priority")
     );
     assert_eq!(
         models[0]["upgrade_info"]
