@@ -139,14 +139,12 @@
   - 增加配置项：
     ```text
     codex_image_generation_enabled
-    codex_image_generation_auto_inject_tool
     codex_image_generation_main_model
     codex_image_generation_tool_model
     ```
   - 默认建议：
     ```text
     codex_image_generation_enabled = true
-    codex_image_generation_auto_inject_tool = false
     codex_image_generation_tool_model = gpt-image-2
     ```
   - 验收：关闭开关后 `/v1/images/*` 返回清晰错误。
@@ -190,8 +188,8 @@
 - Images 输出：支持 `b64_json` 和 `url`，并透出 `revised_prompt`、`usage`、`size`、`quality`、`background`、`output_format`。
 - Partial image：支持 `response.image_generation_call.partial_image`，并对 partial/done 相同图片做去重。
 - 模型列表：本地 `/v1/models` 会补 `gpt-image-2`，普通 `/v1/chat/completions` 和 `/v1/responses` 直接使用 `gpt-image-2` 会被拒绝。
-- 配置项：支持 `CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED`、`CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL`、`CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL`、`CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL`；默认开启并自动注入 `image_generation` tool，默认主模型 `gpt-5.4-mini`，默认图片工具模型 `gpt-image-2`。
-- 设置页：上述 4 个图片配置项已注册到环境变量覆盖目录，可在 Settings 的环境变量页修改；保存后按 runtime 配置热重载生效。
+- 配置项：支持 `CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED`、`CODEXMANAGER_CODEX_IMAGE_MAIN_MODEL`、`CODEXMANAGER_CODEX_IMAGE_TOOL_MODEL`；Images API 默认开启，但普通 `/v1/responses` 不自动注入 `image_generation` tool，客户端需显式提供；默认主模型 `gpt-5.4-mini`，默认图片工具模型 `gpt-image-2`。
+- 设置页：上述 3 个图片配置项已注册到环境变量覆盖目录，可在 Settings 的环境变量页修改；保存后按 runtime 配置热重载生效。
 - 安全与日志：trace 日志会将 `data:image/*;base64,...` 的图片载荷替换为 `<base64 image omitted>`；request log 不记录请求体；JSON edits 会本地拒绝非法 base64 data URL、缺 prompt、缺 image 和 `file_id`。
 - 测试覆盖：新增 mock upstream 集成测试，覆盖 `/v1/images/generations` → `/v1/responses + image_generation tool` → Codex SSE → OpenAI Images JSON 的完整网关路径。
 - 当前 TODO 已全部完成。

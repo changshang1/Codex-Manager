@@ -26,7 +26,7 @@ CodexManager is a local desktop + service-process account pool manager and gatew
 - Skills and plugins: `/skills/` separates **Skills Installation** from **Codex Plugin Installation**. Skills can be installed individually from built-in or custom GitHub repositories and skills.sh search results, or imported from ZIPs and existing directories; the native Codex Marketplace remains available for complete plugin installation, and `.system` skills stay read-only.
 - Desktop project launcher: bookmark local project folders; on Windows and macOS, open the workspace in the ChatGPT Codex App, while Sessions keeps the local Codex CLI `resume` picker with the local CodexManager profile. Web and Docker never access device folders.
 - Local service + gateway: custom bind/listen settings, upstream proxy, total request timeout, stream idle timeout, SSE keepalive, and a unified compatible endpoint. SSE keepalive is enabled by default; set `CODEXMANAGER_SSE_KEEPALIVE_ENABLED=0` (or `false`) to disable it.
-- Image generation: automatically injects the official Codex `image_generation` tool for `/v1/responses` by default, forwards explicit tools unchanged, and exposes compatible `/v1/images/generations` and `/v1/images/edits` endpoints with `gpt-image-2` as the default image tool model.
+- Image generation: does not automatically inject an image tool for `/v1/responses`, but still forwards an explicitly supplied official Codex `image_generation` tool unchanged. Compatible `/v1/images/generations` and `/v1/images/edits` endpoints remain available, with `gpt-image-2` as the default image tool model.
 
 ## Quick Start
 

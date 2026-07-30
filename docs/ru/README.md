@@ -26,7 +26,7 @@ CodexManager — локальный desktop + service-process менеджер �
 - Skills и плагины: в `/skills/` установка Skills отделена от установки плагинов Codex. Отдельные Skills можно устанавливать из встроенных и пользовательских GitHub-репозиториев, результатов поиска skills.sh, ZIP-файлов и существующих каталогов; нативный Marketplace Codex по-прежнему устанавливает плагины целиком, а `.system` Skills доступны только для чтения.
 - Desktop-запуск проектов: можно сохранить локальные папки проектов и открыть Codex или выбор `resume` для текущего проекта в новом терминале с локальным профилем CodexManager; Web и Docker не получают доступ к папкам устройства.
 - Локальный service + gateway: настройки bind/listen, upstream proxy, общий таймаут запроса, stream idle timeout, SSE keepalive и единая совместимая точка входа. SSE keepalive включён по умолчанию; для отключения задайте `CODEXMANAGER_SSE_KEEPALIVE_ENABLED=0` (или `false`).
-- Генерация изображений: по умолчанию автоматически добавляется официальный Codex tool `image_generation` для `/v1/responses`, явно переданные tools проксируются без изменений, также поддерживаются совместимые endpoints `/v1/images/generations` и `/v1/images/edits`; модель image tool по умолчанию — `gpt-image-2`.
+- Генерация изображений: для `/v1/responses` image tool больше не добавляется автоматически, а явно переданный официальный Codex tool `image_generation` проксируется без изменений. Совместимые endpoints `/v1/images/generations` и `/v1/images/edits` по-прежнему поддерживаются; модель image tool по умолчанию — `gpt-image-2`.
 
 ## Быстрый старт
 
