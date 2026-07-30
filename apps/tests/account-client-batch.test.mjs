@@ -59,7 +59,42 @@ test("account access toggle validates before enabling and keeps a force-enable e
     /String\(account\.status \|\| ""\)[\s\S]*?\.toLowerCase\(\) !==[\s\S]*?"disabled"/,
   );
   assert.doesNotMatch(viewSource, /accessEnabled[\s\S]{0,120}"inactive"/);
-  assert.match(viewSource, /!accessEnabled[\s\S]*?forceEnableAccount\(account\.id\)/);
+  assert.match(
+    viewSource,
+    /checked=\{accessEnabled\}[\s\S]{0,240}isUpdatingManyStatuses/,
+  );
+  assert.match(
+    viewSource,
+    /!accessEnabled[\s\S]{0,420}isUpdatingManyStatuses[\s\S]{0,240}forceEnableAccount\(account\.id\)/,
+  );
+  assert.match(
+    viewSource,
+    /canRecoverInactive[\s\S]*?toggleAccountStatus\(account\.id, true\)/,
+  );
+});
+
+test("bulk account access validates each account before enabling", async () => {
+  const source = await fs.readFile(
+    path.join(appsRoot, "src", "hooks", "useAccounts.ts"),
+    "utf8",
+  );
+
+  const mutation = source.match(
+    /const toggleManyAccountStatusMutation = useMutation\(\{[\s\S]*?const importByDirectoryMutation/,
+  )?.[0] || "";
+  assert.match(
+    mutation,
+    /if \(!enabled\) \{[\s\S]*?accountClient\.disableAccount\(accountId\)[\s\S]*?accountClient\.refreshUsage\(accountId\)[\s\S]*?accountClient\.enableAccount\(accountId\)/,
+  );
+  assert.match(
+    mutation,
+    /!refreshResult\.ok[\s\S]*?refreshResult\.total === 0[\s\S]*?refreshResult\.processed === 0/,
+  );
+  assert.match(
+    mutation,
+    /start \+= BULK_ACCOUNT_STATUS_CONCURRENCY[\s\S]*?normalizedIds\.slice\([\s\S]*?Promise\.allSettled\(batch\.map\(updateStatus\)\)/,
+  );
+  assert.doesNotMatch(mutation, /normalizedIds\.map\(updateStatus\)/);
 });
 
 test("account UI groups by the selected display mode and moves only inside the same group", async () => {

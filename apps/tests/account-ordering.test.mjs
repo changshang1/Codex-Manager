@@ -110,7 +110,7 @@ test("warranty incidents require an unexpired date and explicit refresh-token in
       { ...base, status: "disabled" },
       "2026-08-01",
     ),
-    false,
+    true,
   );
 });
 

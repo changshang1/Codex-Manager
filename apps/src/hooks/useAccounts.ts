@@ -44,6 +44,19 @@ type DeleteAccountsByStatusesResult = Awaited<
   ReturnType<typeof accountClient.deleteByStatuses>
 >;
 type AccountSortUpdate = { accountId: string; sort: number };
+type ToggleManyAccountStatusInput = {
+  accountIds: string[];
+  enabled: boolean;
+  selectedCount?: number;
+};
+
+type ToggleManyAccountStatusResult = {
+  requested: number;
+  succeeded: number;
+  failed: Array<{ accountId: string; reason: string }>;
+};
+
+const BULK_ACCOUNT_STATUS_CONCURRENCY = 5;
 
 /**
  * 函数 `isAccountRefreshBlocked`
@@ -882,6 +895,130 @@ export function useAccounts() {
     },
   });
 
+  const toggleManyAccountStatusMutation = useMutation({
+    mutationFn: async ({
+      accountIds,
+      enabled,
+    }: ToggleManyAccountStatusInput): Promise<ToggleManyAccountStatusResult> => {
+      const normalizedIds = Array.from(
+        new Set(accountIds.map((accountId) => accountId.trim()).filter(Boolean)),
+      );
+      if (normalizedIds.length === 0) {
+        return { requested: 0, succeeded: 0, failed: [] };
+      }
+
+      const updateStatus = async (accountId: string) => {
+        if (!enabled) {
+          await accountClient.disableAccount(accountId);
+          return;
+        }
+
+        let refreshResult: AccountUsageRefreshResult;
+        try {
+          refreshResult = await accountClient.refreshUsage(accountId);
+        } catch (refreshError) {
+          throw new Error(formatUsageRefreshErrorMessage(refreshError, t));
+        }
+        if (
+          !refreshResult.ok ||
+          refreshResult.total === 0 ||
+          refreshResult.processed === 0
+        ) {
+          throw new Error(refreshResult.message || t("当前无法确认账号状态"));
+        }
+        await accountClient.enableAccount(accountId);
+      };
+
+      const settled: PromiseSettledResult<void>[] = [];
+      for (
+        let start = 0;
+        start < normalizedIds.length;
+        start += BULK_ACCOUNT_STATUS_CONCURRENCY
+      ) {
+        const batch = normalizedIds.slice(
+          start,
+          start + BULK_ACCOUNT_STATUS_CONCURRENCY,
+        );
+        settled.push(...(await Promise.allSettled(batch.map(updateStatus))));
+      }
+      const failed = settled.flatMap((result, index) =>
+        result.status === "rejected"
+          ? [
+              {
+                accountId: normalizedIds[index],
+                reason: getAppErrorMessage(result.reason),
+              },
+            ]
+          : [],
+      );
+
+      return {
+        requested: normalizedIds.length,
+        succeeded: normalizedIds.length - failed.length,
+        failed,
+      };
+    },
+    onSuccess: async (result, variables) => {
+      await invalidateAccountData();
+      const actionLabel = variables.enabled ? t("开启账号") : t("关闭账号");
+      const selectedCount = Math.max(
+        Number(variables.selectedCount ?? result.requested) || 0,
+        result.requested,
+      );
+      const skipped = Math.max(selectedCount - result.requested, 0);
+
+      if (result.requested === 0) {
+        toast.info(
+          variables.enabled
+            ? t("当前选中账号没有可开启项")
+            : t("当前选中账号没有可关闭项"),
+        );
+        return;
+      }
+
+      if (result.failed.length > 0) {
+        const summary =
+          skipped > 0
+            ? t("批量{action}完成：成功{success}个，失败{failed}个，跳过{skipped}个", {
+                action: actionLabel,
+                success: result.succeeded,
+                failed: result.failed.length,
+                skipped,
+              })
+            : t("批量{action}完成：成功{success}个，失败{failed}个", {
+                action: actionLabel,
+                success: result.succeeded,
+                failed: result.failed.length,
+              });
+        toast.warning(
+          `${summary}；${t("首个失败")}: ${result.failed[0].accountId} - ${result.failed[0].reason}`,
+        );
+        return;
+      }
+
+      toast.success(
+        skipped > 0
+          ? t("批量{action}完成：成功{success}个，跳过{skipped}个", {
+              action: actionLabel,
+              success: result.succeeded,
+              skipped,
+            })
+          : t("批量{action}完成：成功{success}个", {
+              action: actionLabel,
+              success: result.succeeded,
+            }),
+      );
+    },
+    onError: (error: unknown, variables) => {
+      toast.error(
+        t("批量{action}失败: {error}", {
+          action: variables.enabled ? t("开启账号") : t("关闭账号"),
+          error: getAppErrorMessage(error),
+        }),
+      );
+    },
+  });
+
   const importByDirectoryMutation = useMutation({
     mutationFn: () => accountClient.importByDirectory(),
     onSuccess: async (result: ImportByDirectoryResult) => {
@@ -1193,6 +1330,18 @@ export function useAccounts() {
         force: true,
       });
     },
+    toggleManyAccountStatuses: async (
+      accountIds: string[],
+      enabled: boolean,
+      selectedCount?: number,
+    ) => {
+      if (!ensureServiceReady(enabled ? "批量开启账号" : "批量关闭账号")) return;
+      await toggleManyAccountStatusMutation.mutateAsync({
+        accountIds,
+        enabled,
+        selectedCount,
+      });
+    },
     isRefreshingAccountId:
       refreshAccountMutation.isPending && typeof refreshAccountMutation.variables === "string"
         ? refreshAccountMutation.variables
@@ -1241,5 +1390,6 @@ export function useAccounts() {
             (toggleAccountStatusMutation.variables as { accountId?: unknown }).accountId || ""
           )
         : "",
+    isUpdatingManyStatuses: toggleManyAccountStatusMutation.isPending,
   };
 }

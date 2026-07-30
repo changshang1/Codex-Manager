@@ -1545,8 +1545,6 @@ export const RU_MESSAGES: MessageCatalog = {
   令牌刷新轮询: "Опрос обновления токенов",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "Включить вход OpenAI Images",
-  "控制普通 Responses 请求是否自动注入 image_generation tool；默认 0，填 1 时会在客户端未显式传入 tool 时自动注入。":
-    "Автоинъекция инструмента",
   "控制 Images API 兼容入口内部使用的 Codex 主模型；默认 gpt-5.4-mini。":
     "Основная модель Images API",
   "控制 Images API 兼容入口注入的图片工具模型；默认 gpt-image-2。":

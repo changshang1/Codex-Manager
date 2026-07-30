@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::gateway::runtime_config;
-
 const INSTALLATION_ID_KEY: &str = "x-codex-installation-id";
 // The Codex Responses backend requires non-empty instructions. Keep this
 // transport fallback deliberately neutral: it must not assign a persona or
@@ -350,79 +348,6 @@ fn ensure_tools_list(path: &str, obj: &mut Map<String, Value>) -> bool {
     }
 }
 
-fn should_skip_image_generation_tool_for_model(obj: &Map<String, Value>) -> bool {
-    obj.get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_some_and(|model| model.to_ascii_lowercase().ends_with("spark"))
-}
-
-fn is_local_image_gen_tool(tool: &Value) -> bool {
-    let Some(tool_type) = tool
-        .get("type")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|tool_type| !tool_type.is_empty())
-    else {
-        return false;
-    };
-    let Some(name) = tool
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    else {
-        return false;
-    };
-    let name = name.to_ascii_lowercase();
-    if tool_type.eq_ignore_ascii_case("namespace") {
-        return name == "image_gen";
-    }
-    tool_type.eq_ignore_ascii_case("function")
-        && (name == "image_gen"
-            || name.starts_with("image_gen.")
-            || name.starts_with("image_gen__"))
-}
-
-fn ensure_image_generation_tool(path: &str, obj: &mut Map<String, Value>) -> bool {
-    if !is_responses_path(path) {
-        return false;
-    }
-    if !runtime_config::codex_image_generation_enabled()
-        || !runtime_config::codex_image_generation_auto_inject_tool_enabled()
-        || should_skip_image_generation_tool_for_model(obj)
-    {
-        return false;
-    }
-
-    let tools = obj
-        .entry("tools".to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if !tools.is_array() {
-        *tools = Value::Array(Vec::new());
-    }
-    let Some(tools_array) = tools.as_array_mut() else {
-        return false;
-    };
-    if tools_array.iter().any(is_local_image_gen_tool) {
-        return false;
-    }
-    if tools_array.iter().any(|tool| {
-        tool.get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|tool_type| tool_type == "image_generation")
-    }) {
-        return false;
-    }
-
-    tools_array.push(serde_json::json!({
-        "type": "image_generation",
-        "output_format": "png"
-    }));
-    true
-}
-
 fn ensure_parallel_tool_calls_bool(path: &str, obj: &mut Map<String, Value>) -> bool {
     if !is_responses_path(path) {
         return false;
@@ -761,10 +686,6 @@ pub(crate) fn apply_codex_http_request_rules(
     {
         result.changed = true;
     }
-    if ensure_image_generation_tool(path, obj) {
-        result.changed = true;
-    }
-
     let dropped = retain_codex_fields(path, obj);
     if !dropped.is_empty() {
         result.changed = true;

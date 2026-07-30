@@ -58,6 +58,8 @@ export type TranslateFn = (
   values?: Record<string, string | number>,
 ) => string;
 
+export type AccountStatusAction = "enable" | "disable" | null;
+
 export function formatAccountPlanValueLabel(value: string, t: TranslateFn) {
   const normalized = String(value || "")
     .trim()
@@ -342,27 +344,42 @@ export function QuotaOverviewCell({ items }: { items: QuotaSummaryItem[] }) {
   );
 }
 
+export function getAccountStatusActionType(account: Account): AccountStatusAction {
+  const normalizedStatus = String(account.status || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedStatus === "disabled" || normalizedStatus === "inactive") {
+    return "enable";
+  }
+  if (normalizedStatus === "banned") {
+    return null;
+  }
+  return "disable";
+}
+
 export function getAccountStatusAction(
   account: Account,
   t: TranslateFn,
 ): {
-  action: "enable" | "disable" | null;
+  action: AccountStatusAction;
   label: string;
   icon: LucideIcon;
 } {
   const normalizedStatus = String(account.status || "")
     .trim()
     .toLowerCase();
-  if (normalizedStatus === "disabled") {
-    return { action: "enable", label: t("启用账号"), icon: Power };
+  const action = getAccountStatusActionType(account);
+  if (action === "enable") {
+    return {
+      action,
+      label: normalizedStatus === "inactive" ? t("恢复账号") : t("启用账号"),
+      icon: Power,
+    };
   }
-  if (normalizedStatus === "inactive") {
-    return { action: "enable", label: t("恢复账号"), icon: Power };
-  }
-  if (normalizedStatus === "banned") {
+  if (action === null) {
     return { action: null, label: t("封禁账号"), icon: PowerOff };
   }
-  return { action: "disable", label: t("禁用账号"), icon: PowerOff };
+  return { action, label: t("禁用账号"), icon: PowerOff };
 }
 
 export function getAccountStatusReasonCode(account: Account): string {

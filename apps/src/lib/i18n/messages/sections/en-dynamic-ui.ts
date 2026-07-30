@@ -53,8 +53,6 @@ export const EN_DYNAMIC_UI_MESSAGES: MessageCatalog = {
     "Controls the image tool model injected by the Images API compatibility endpoint. Default is gpt-image-2.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "Controls whether the OpenAI Images compatibility endpoint is enabled. Default is 1; set 0 to disable /v1/images/generations and /v1/images/edits.",
-  "控制普通 Responses 请求是否自动注入 image_generation tool；默认 0，填 1 时会在客户端未显式传入 tool 时自动注入。":
-    "Controls whether normal Responses requests auto-inject the image_generation tool. Default is 0; when set to 1, it is automatically injected only if the client did not explicitly send the tool.",
   来源模型保存结果为空: "Source model save result is empty",
   连接被拒绝: "Connection refused",
   连接超时: "Connection timed out",

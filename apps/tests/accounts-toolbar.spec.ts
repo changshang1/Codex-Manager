@@ -319,3 +319,128 @@ test("accounts toolbar shows warmup button and tooltip", async ({ page }) => {
     )
     .toBe(true);
 });
+
+test("bulk account status actions follow single-account status rules", async ({
+  page,
+}) => {
+  const statusUpdates: Array<{ accountId: string; status: string }> = [];
+
+  await page.route("**/api/runtime**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        mode: "web-gateway",
+        rpcBaseUrl: "/api/rpc",
+        canManageService: false,
+        canSelfUpdate: false,
+        canCloseToTray: false,
+        canOpenLocalDir: false,
+        canUseBrowserFileImport: true,
+        canUseBrowserDownloadExport: true,
+      }),
+    });
+  });
+
+  await page.route("**/api/rpc**", async (route) => {
+    const payload = route.request().postDataJSON();
+    const method = typeof payload?.method === "string" ? payload.method : "";
+    const id = payload?.id ?? 1;
+    const params =
+      payload?.params && typeof payload.params === "object"
+        ? (payload.params as Record<string, unknown>)
+        : {};
+
+    const ok = (result: unknown) =>
+      route.fulfill({
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({ jsonrpc: "2.0", id, result }),
+      });
+
+    if (method === "appSettings/get") {
+      await ok(SETTINGS_SNAPSHOT);
+      return;
+    }
+    if (method === "initialize") {
+      await ok({
+        userAgent: "codex_cli_rs/0.1.19",
+        codexHome: "C:/Users/Test/.codex",
+        platformFamily: "windows",
+        platformOs: "windows",
+      });
+      return;
+    }
+    if (method === "accountManager/session/current") {
+      await ok({
+        mode: "none",
+        currentUser: null,
+        role: "system_admin",
+        permissions: ["system:admin"],
+        distributionEnabled: false,
+      });
+      return;
+    }
+    if (method === "account/list") {
+      await ok({
+        items: [
+          { id: "active", label: "active@example.com", status: "active", sort: 0 },
+          { id: "disabled", label: "disabled@example.com", status: "disabled", sort: 1 },
+          { id: "inactive", label: "inactive@example.com", status: "inactive", sort: 2 },
+          { id: "banned", label: "banned@example.com", status: "banned", sort: 3 },
+        ],
+        total: 4,
+        page: 1,
+        pageSize: 20,
+      });
+      return;
+    }
+    if (method === "account/usage/list") {
+      await ok([]);
+      return;
+    }
+    if (method === "account/update") {
+      statusUpdates.push({
+        accountId: String(params.accountId || params.account_id || ""),
+        status: String(params.status || ""),
+      });
+      await ok({});
+      return;
+    }
+
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32000,
+          message: `Unhandled RPC method in test: ${method}`,
+        },
+      }),
+    });
+  });
+
+  await page.goto("/accounts/");
+  await expect(page.getByRole("heading", { name: "OpenAI 账号池" })).toBeVisible();
+
+  const selectedRows = page.locator("tbody tr").getByRole("checkbox");
+  await expect(selectedRows).toHaveCount(4);
+  for (let index = 0; index < 4; index += 1) {
+    await selectedRows.nth(index).check();
+  }
+
+  await page.getByText("账号操作", { exact: true }).click();
+  await expect(
+    page.getByRole("menuitem", { name: /批量开启选中账号/ }),
+  ).toHaveText(/批量开启选中账号\s*2/);
+
+  const disableSelectedItem = page.getByRole("menuitem", {
+    name: /批量关闭选中账号/,
+  });
+  await expect(disableSelectedItem).toHaveText(/批量关闭选中账号\s*1/);
+  await disableSelectedItem.click();
+
+  await expect.poll(() => statusUpdates).toEqual([
+    { accountId: "active", status: "disabled" },
+  ]);
+});

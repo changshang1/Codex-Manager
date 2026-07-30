@@ -123,12 +123,11 @@ fn gateway_images_generation_wraps_codex_sse_as_openai_images_json() {
 }
 
 #[test]
-fn native_codex_responses_auto_injects_image_generation_tool() {
+fn native_codex_responses_does_not_inject_image_generation_tool() {
     let _lock = test_env_guard();
-    let dir = new_test_dir("codexmanager-native-codex-image-generation-auto-inject");
+    let dir = new_test_dir("codexmanager-native-codex-no-image-generation-injection");
     let db_path: PathBuf = dir.join("codexmanager.db");
     let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
-    let _inject_guard = EnvGuard::set("CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL", "1");
 
     let result_b64 = "QUJDREVGR0g=";
     let codex_sse = format!(
@@ -245,11 +244,7 @@ fn native_codex_responses_auto_injects_image_generation_tool() {
 
     let upstream_body: serde_json::Value =
         serde_json::from_slice(&decode_upstream_request_body(&captured)).expect("upstream json");
-    let tools = upstream_body["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["type"], "image_generation");
-    assert_eq!(tools[0]["output_format"], "png");
-    assert!(tools[0].get("model").is_none());
+    assert!(upstream_body.get("tools").is_none());
     assert_eq!(upstream_body["tool_choice"], "auto");
     assert_eq!(upstream_body["model"], "gpt-5.4");
     assert!(response_body.contains("event: response.output_item.done"));

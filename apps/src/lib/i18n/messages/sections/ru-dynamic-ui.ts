@@ -53,8 +53,6 @@ export const RU_DYNAMIC_UI_MESSAGES: MessageCatalog = {
     "Управляет моделью image tool, которую внедряет совместимый endpoint Images API. По умолчанию gpt-image-2.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "Управляет включением совместимого endpoint OpenAI Images. По умолчанию 1; значение 0 отключает /v1/images/generations и /v1/images/edits.",
-  "控制普通 Responses 请求是否自动注入 image_generation tool；默认 0，填 1 时会在客户端未显式传入 tool 时自动注入。":
-    "Управляет авто-вставкой image_generation tool в обычные Responses-запросы. По умолчанию 0; при 1 tool добавляется автоматически только если клиент не передал его явно.",
   来源模型保存结果为空: "Результат сохранения модели источника пуст",
   连接被拒绝: "Соединение отклонено",
   连接超时: "Тайм-аут соединения",

@@ -53,8 +53,6 @@ export const KO_DYNAMIC_UI_MESSAGES: MessageCatalog = {
     "Images API 호환 엔드포인트가 주입하는 이미지 도구 모델을 제어합니다. 기본값은 gpt-image-2입니다.",
   "控制 OpenAI Images 兼容入口是否启用；默认 1，填 0 会关闭 /v1/images/generations 和 /v1/images/edits。":
     "OpenAI Images 호환 엔드포인트 활성화 여부를 제어합니다. 기본값은 1이며, 0을 입력하면 /v1/images/generations 및 /v1/images/edits가 꺼집니다.",
-  "控制普通 Responses 请求是否自动注入 image_generation tool；默认 0，填 1 时会在客户端未显式传入 tool 时自动注入。":
-    "일반 Responses 요청에 image_generation tool을 자동 주입할지 제어합니다. 기본값은 0이며, 1일 때는 클라이언트가 명시적으로 tool을 전달하지 않은 경우에만 자동 주입됩니다.",
   来源模型保存结果为空: "소스 모델 저장 결과가 비어 있습니다",
   连接被拒绝: "연결이 거부됨",
   连接超时: "연결 시간 초과",

@@ -78,13 +78,6 @@ pub(crate) const ENV_OVERRIDE_CATALOG: &[EnvOverrideCatalogItem] = &[
         DEFAULT_CLIENT_ID,
     ),
     EnvOverrideCatalogItem::new(
-        "CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL",
-        "Codex 图片 Tool 自动注入",
-        ENV_OVERRIDE_SCOPE_SERVICE,
-        ENV_OVERRIDE_APPLY_MODE_RUNTIME,
-        "0",
-    ),
-    EnvOverrideCatalogItem::new(
         "CODEXMANAGER_CODEX_IMAGE_GENERATION_ENABLED",
         "Codex 图片生成兼容开关",
         ENV_OVERRIDE_SCOPE_SERVICE,

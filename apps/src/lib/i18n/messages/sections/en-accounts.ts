@@ -268,6 +268,25 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "暂无重置券记录": "No reset credit history",
   "无法读取重置券详情，请重新核对。":
     "Reset credit details could not be loaded. Check again.",
+  "开启账号": "enable accounts",
+  "关闭账号": "disable accounts",
+  "批量开启账号": "Bulk enable accounts",
+  "批量关闭账号": "Bulk disable accounts",
+  "批量状态": "Bulk status",
+  "批量开启选中账号": "Enable selected accounts",
+  "批量关闭选中账号": "Disable selected accounts",
+  "请先选择账号": "Select accounts first",
+  "当前选中账号没有可开启项": "No selected accounts can be enabled",
+  "当前选中账号没有可关闭项": "No selected accounts can be disabled",
+  "批量{action}完成：成功{success}个，失败{failed}个，跳过{skipped}个":
+    "Bulk {action} complete: {success} succeeded, {failed} failed, {skipped} skipped",
+  "批量{action}完成：成功{success}个，失败{failed}个":
+    "Bulk {action} complete: {success} succeeded, {failed} failed",
+  "批量{action}完成：成功{success}个，跳过{skipped}个":
+    "Bulk {action} complete: {success} succeeded, {skipped} skipped",
+  "批量{action}完成：成功{success}个":
+    "Bulk {action} complete: {success} succeeded",
+  "批量{action}失败: {error}": "Bulk {action} failed: {error}",
   "预计删除": "Estimated delete",
   "显示顺序": "Display order",
   "可用状态优先": "Available status first",

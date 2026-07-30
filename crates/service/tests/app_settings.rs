@@ -8,12 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod support;
 use support::{test_env_guard, EnvGuard};
 
-const CODEX_IMAGE_AUTO_INJECT_TOOL_ENV: &str =
-    "CODEXMANAGER_CODEX_IMAGE_GENERATION_AUTO_INJECT_TOOL";
 const LEGACY_COMPACT_MODEL_FORWARD_RULES_SETTING_KEY: &str = "gateway.compact_model_forward_rules";
 
 const ISOLATED_RUNTIME_ENV_KEYS: &[&str] = &[
-    CODEX_IMAGE_AUTO_INJECT_TOOL_ENV,
     "CODEXMANAGER_SERVICE_ADDR",
     "CODEXMANAGER_WEB_ADDR",
     "CODEXMANAGER_ROUTE_STRATEGY",
@@ -621,42 +618,6 @@ fn sync_runtime_settings_from_storage_preserves_explicit_process_env_over_persis
         assert_eq!(
             std::env::var("CODEXMANAGER_WEB_ADDR").ok().as_deref(),
             Some("0.0.0.0:48761")
-        );
-    });
-}
-
-#[test]
-fn sync_runtime_settings_from_storage_preserves_explicit_image_auto_inject_override() {
-    with_temp_db(|db_path| {
-        let storage = Storage::open(db_path).expect("open storage");
-        storage
-            .set_app_setting(
-                codexmanager_service::APP_SETTING_ENV_OVERRIDES_KEY,
-                &serde_json::to_string(&json!({
-                    CODEX_IMAGE_AUTO_INJECT_TOOL_ENV: "0"
-                }))
-                .expect("serialize env overrides"),
-                now_ts(),
-            )
-            .expect("save legacy env overrides");
-        drop(storage);
-
-        let _env = override_env_vars(&[(CODEX_IMAGE_AUTO_INJECT_TOOL_ENV, None)]);
-
-        codexmanager_service::sync_runtime_settings_from_storage();
-
-        assert_eq!(
-            std::env::var(CODEX_IMAGE_AUTO_INJECT_TOOL_ENV)
-                .ok()
-                .as_deref(),
-            Some("0")
-        );
-        let stored = read_env_overrides_map(db_path);
-        assert_eq!(
-            stored
-                .get(CODEX_IMAGE_AUTO_INJECT_TOOL_ENV)
-                .and_then(|value| value.as_str()),
-            Some("0")
         );
     });
 }

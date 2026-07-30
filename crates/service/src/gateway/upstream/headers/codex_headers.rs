@@ -439,7 +439,6 @@ fn append_passthrough_codex_headers(
 ) {
     for (name, value) in passthrough_headers {
         if !name.eq_ignore_ascii_case(X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER_NAME)
-            || crate::gateway::runtime_config::codex_image_generation_auto_inject_tool_enabled()
             || headers
                 .iter()
                 .any(|(existing, _)| existing.eq_ignore_ascii_case(name))

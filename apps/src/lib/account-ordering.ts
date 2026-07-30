@@ -72,12 +72,10 @@ export function isAccountWarrantyIncident(
   today = getLocalDateKey(),
 ): boolean {
   const warrantyExpiresOn = String(account.warrantyExpiresOn || "").trim();
-  const status = String(account.status || "").trim().toLowerCase();
   const statusReason = String(account.statusReason || "").trim().toLowerCase();
   return (
     /^\d{4}-\d{2}-\d{2}$/.test(warrantyExpiresOn) &&
     warrantyExpiresOn >= today &&
-    status === "unavailable" &&
     statusReason.startsWith("refresh_token_invalid:")
   );
 }
