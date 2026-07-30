@@ -107,7 +107,8 @@ Service 侧还会按请求路径识别协议：
 聚合 API 候选按以下步骤筛选和排序：
 
 1. 按请求协议映射供应商类型。
-2. 只取 `status = active` 的聚合 API。
+2. 只取人工 `status = active` 且 `autoDisabled = false` 的聚合 API；自动熔断只排除业务候选，
+   不阻止管理页读取连接或刷新余额。
 3. 只取供应商类型匹配的聚合 API。
 4. 读取请求平台模型的 enabled V2 aggregate routes，并按 `priority DESC` 分成硬优先级层。
 5. 同一优先级内按 route 的 `weight` 做平滑加权轮转；首选失败时先尝试同级其它 route，再进入低优先级。
@@ -153,6 +154,11 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 | `balanceQueryAccessToken` | 否 | provider secret | 余额查询专用 access token，单独存储。 |
 | `balanceQueryUserId` | 否 | 无 | New API 查询时作为 `New-Api-User` header。 |
 | `balanceQueryConfigJson` | custom 模板时是 | 无 | 自定义余额 JSON 配置。 |
+| `autoToggleEnabled` | 否 | `false` | 是否启用该连接的按日额度自动熔断与次日恢复。 |
+| `consecutiveFailures` | 响应只读 | `0` | 连续命中明确 daily quota 错误的独立业务请求数。 |
+| `autoDisabled` | 响应只读 | `false` | 当前是否被系统自动熔断；与人工 `status` 分开。 |
+| `autoDisabledAt` | 响应只读 | 无 | 上一次达到阈值并自动熔断的 Unix 时间戳。 |
+| `autoDisabledReason` | 响应只读 | 无 | 上一次自动熔断原因；当前值为 `daily_quota_exceeded`。 |
 
 ### 管理页显示顺序
 
@@ -197,7 +203,72 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 - 启用：`active`、`enabled`、`enable`
 - 禁用：`disabled`、`disable`、`inactive`
 
-只有 `active` 会进入候选源。
+只有人工状态为 `active` 才具备进入业务候选的前提；如果同时存在 `autoDisabled = true`，仍会被
+业务路由排除，具体规则见下一节。
+
+### 自动启停与按日额度熔断
+
+自动启停是每个聚合 API 独立配置的保护功能，默认关闭。它只参与以下三种包含聚合来源的轮转：
+
+- `aggregate_api_rotation`
+- `hybrid_rotation`
+- `hybrid_aggregate_first_rotation`
+
+纯 `account_rotation` 不使用聚合 API，因此不会读取或修改聚合 API 的熔断计数。
+
+#### 状态边界
+
+- `status` 是人工启停状态，只能由人工操作修改。
+- `autoToggleEnabled` 是是否允许系统自动计数、熔断和次日恢复的配置开关。
+- `autoDisabled` 是当前自动熔断状态，不是人工开关，也不会覆盖 `status`。
+- 业务请求只有在 `status = active` 且 `autoDisabled = false` 时才会选择该连接。
+- 自动熔断后，混合轮转会继续尝试同级/低级聚合 route，并按既有策略回退账号池；route 的
+  `priority`、`weight`、`sortOrder` 和聚合连接 `sort` 均不被改写。
+- 管理页列表、读取 secret、连接测试和余额刷新不依赖业务候选过滤，因此仍可检查或充值已熔断连接。
+
+#### 计入熔断的错误
+
+只有上游明确表达“每日额度已耗尽”时才计数。HTTP 状态码本身永远不足以触发计数；可分析的响应
+范围是 2xx 或 4xx（排除 408），并且 body/SSE 中还必须出现以下明确语义之一：
+
+- 结构化错误的 `code`、`type`、`status` 或 `reason` 等于 `DAILY_LIMIT_EXCEEDED`；大小写不敏感，
+  空格或连字符会规范为下划线。
+- `message` 或 `detail` 明确包含 `daily usage limit exceeded`。
+- OpenAI Responses envelope 的 `error`、`response.error`、`response.status_details.error`，或 SSE
+  根级/错误事件包含上述信号。
+- Anthropic、Gemini 或兼容供应商的结构化错误，只要能从上述字段确认同一 daily quota 语义。
+
+以下情况不计入：
+
+- 只有 HTTP 429、普通并发限流或分钟级速率限制，没有明确 daily quota 信号。
+- HTTP 408、5xx。
+- DNS、TLS、连接中断、网络错误、总超时或流式空闲超时。
+- WAF、鉴权、模型不存在、上下文过长、参数校验等其它上游错误。
+- 正文中偶然出现相似单词，但不位于受支持错误字段、也没有明确错误提示。
+
+#### 连续失败和阈值
+
+- 阈值固定为连续 3 个独立业务请求。
+- 一个业务请求内部即使对同一聚合 API 最多重试 4 次，也最多增加一次计数。
+- 达到阈值后保存 `autoDisabled = true`、`autoDisabledAt` 和
+  `autoDisabledReason = daily_quota_exceeded`，并立即从后续业务候选中排除。
+- 任意成功请求会把 `consecutiveFailures` 清零。
+- 未达到阈值的连续次数允许跨本地自然日保留；跨日恢复只针对已经 `autoDisabled` 的记录。
+- 自动状态更新不会修改连接 `updatedAt`，因此不会扰乱现有列表和 route 排序。
+
+#### 手动解除和次日恢复
+
+- 管理页“解除熔断”只清零 `consecutiveFailures` 并把 `autoDisabled` 设为 false，不修改人工
+  `status`，也不关闭 `autoToggleEnabled`。
+- 为保留审计信息，解除熔断不会删除上一次 `autoDisabledAt` 和 `autoDisabledReason`。
+- 关闭 `autoToggleEnabled` 会同时清除当前计数和自动熔断状态，但同样保留历史时间和原因。
+- 服务按机器本地自然日惰性检查。上一自然日自动熔断、且人工 `status` 仍为 `active` 的连接会在
+  第二天清除当前自动状态和计数。
+- 人工 `status = disabled` 的连接不会被跨日恢复；人工停用始终优先。
+- 如果熔断后已经充值，可以直接点击“解除熔断”立即重新参与业务轮转，不必等待第二天。
+
+持久化字段由 `132_aggregate_api_auto_toggle.sql` 添加。旧数据库升级后默认关闭自动启停，旧记录
+不会因为 migration 被自动熔断或自动启用。
 
 ## action 和 URL 拼接规则
 
@@ -422,7 +493,7 @@ ID；因此不能仅凭 `actual_source_kind = openai_account` 判断网关没有
 
 ## 余额查询配置
 
-余额查询只影响管理界面展示，不参与实时请求转发。即使最近查询到 `remaining = 0`，本地也
+余额查询只影响管理界面展示，不参与实时请求转发。即使上一次查询得到 `remaining = 0`，本地也
 不会提前过滤该连接；只要连接仍为 `active` 且存在启用的模型 route，网关仍会请求上游。
 如果上游因余额或日额度耗尽返回错误，混合轮转才按策略尝试下一聚合候选或回退账号池。
 
@@ -717,6 +788,7 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通
 | 创建 | `service_aggregate_api_create` | `aggregateApi/create` |
 | 更新 | `service_aggregate_api_update` | `aggregateApi/update` |
 | 批量更新显示顺序 | `service_aggregate_api_update_sorts` | `aggregateApi/updateSorts` |
+| 解除自动熔断 | `service_aggregate_api_recover` | `aggregateApi/recover` |
 | 读取 secret | `service_aggregate_api_read_secret` | `aggregateApi/readSecret` |
 | 删除 | `service_aggregate_api_delete` | `aggregateApi/delete` |
 | 测试连接 | `service_aggregate_api_test_connection` | `aggregateApi/testConnection` |
@@ -797,6 +869,18 @@ model_unavailable: gpt-5.5
 
 聚合 API 对非 2xx 上游响应会归一为网关失败，最终可能以 502 返回给客户端；上游原始状态和错误体摘要会记录在请求日志错误字段中。排查时以请求日志 tooltip/详情中的 upstream 摘要为准。
 
+### 聚合 API 被自动停用或没有触发自动停用
+
+检查：
+
+1. 该连接的 `autoToggleEnabled` 是否开启；旧记录和新建连接默认关闭。
+2. 平台 Key 是否使用三种包含聚合来源的轮转之一；纯账号池不会修改聚合计数。
+3. 上游错误是否包含明确 `DAILY_LIMIT_EXCEEDED` 或 `daily usage limit exceeded`，不要只看最终 429/502。
+4. `consecutiveFailures` 是否来自三个独立业务请求；同一请求内部重试只计一次。
+5. 中间是否出现成功请求；成功会立即把连续次数清零。
+6. `status` 是否被人工设为 disabled；人工关闭不会被“解除熔断”或次日恢复改为 active。
+7. 如果已经充值，使用“解除熔断”清当前自动状态；历史时间和原因继续保留是正常行为。
+
 ## 推荐配置规范
 
 1. 每个供应商都填写清晰的 `supplierName`，例如 `New API - 主线路`。
@@ -808,3 +892,5 @@ model_unavailable: gpt-5.5
 7. Codex、Claude 和 Gemini 都手工维护 V2 route，不依赖远端发现。
 8. `sortOrder` 和聚合连接 `sort` 只用于页面整理；不要把它们当作运行时优先级。
 9. `CODEXMANAGER_ROUTE_STRATEGY=balanced` 只影响账号池 route 内的具体账号，不会均衡聚合 API route。
+10. 只对确实按日结算额度的连接开启 `autoToggleEnabled`；普通 429 和临时网络错误不会触发熔断。
+11. 需要长期停用时使用人工 `status = disabled`；不要依赖自动熔断代替人工管理状态。
