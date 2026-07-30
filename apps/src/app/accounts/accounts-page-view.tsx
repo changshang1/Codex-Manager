@@ -105,7 +105,10 @@ import {
   formatStatusFilterLabel,
 } from "@/app/accounts/accounts-page-helpers";
 import type { AccountDisplayOrderMode } from "@/lib/account-ordering";
-import { isAccountInFirstDisplayGroup } from "@/lib/account-ordering";
+import {
+  getAccountDisplayGroup,
+  isAccountWarrantyIncident,
+} from "@/lib/account-ordering";
 
 interface PlanTypeOption {
   value: string;
@@ -164,6 +167,7 @@ export interface AccountsPageViewProps {
   currentEditingAccount: Account | null;
   labelDraft: string;
   groupNameDraft: string;
+  warrantyExpiresOnDraft: string;
   tagsDraft: string;
   noteDraft: string;
   sortDraft: string;
@@ -201,11 +205,13 @@ export interface AccountsPageViewProps {
   setAccountEditorState: Dispatch<SetStateAction<AccountEditorState | null>>;
   setLabelDraft: Dispatch<SetStateAction<string>>;
   setGroupNameDraft: Dispatch<SetStateAction<string>>;
+  setWarrantyExpiresOnDraft: Dispatch<SetStateAction<string>>;
   setTagsDraft: Dispatch<SetStateAction<string>>;
   setNoteDraft: Dispatch<SetStateAction<string>>;
   setSortDraft: Dispatch<SetStateAction<string>>;
   setQuotaPrimaryDraft: Dispatch<SetStateAction<string>>;
   setQuotaSecondaryDraft: Dispatch<SetStateAction<string>>;
+  setWarrantyDays: (days: number) => void;
   setPage: Dispatch<SetStateAction<number>>;
   handleSearchChange: (value: string) => void;
   handlePlanFilterChange: (value: string | null) => void;
@@ -293,6 +299,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     currentEditingAccount,
     labelDraft,
     groupNameDraft,
+    warrantyExpiresOnDraft,
     tagsDraft,
     noteDraft,
     sortDraft,
@@ -328,11 +335,13 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     setAccountEditorState,
     setLabelDraft,
     setGroupNameDraft,
+    setWarrantyExpiresOnDraft,
     setTagsDraft,
     setNoteDraft,
     setSortDraft,
     setQuotaPrimaryDraft,
     setQuotaSecondaryDraft,
+    setWarrantyDays,
     setPage,
     handleSearchChange,
     handlePlanFilterChange,
@@ -942,23 +951,23 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   const canMoveWithinGroupUp =
                     canMoveUp &&
                     filteredAccounts[filteredIndex - 1] &&
-                    isAccountInFirstDisplayGroup(
+                    getAccountDisplayGroup(
                       filteredAccounts[filteredIndex - 1],
                       displayOrderMode,
                     ) ===
-                      isAccountInFirstDisplayGroup(account, displayOrderMode);
+                      getAccountDisplayGroup(account, displayOrderMode);
                   const canMoveWithinGroupDown =
                     canMoveDown &&
                     filteredAccounts[filteredIndex + 1] &&
-                    isAccountInFirstDisplayGroup(
+                    getAccountDisplayGroup(
                       filteredAccounts[filteredIndex + 1],
                       displayOrderMode,
                     ) ===
-                      isAccountInFirstDisplayGroup(account, displayOrderMode);
+                      getAccountDisplayGroup(account, displayOrderMode);
                   const displayGroup = accounts.filter(
                     (item) =>
-                      isAccountInFirstDisplayGroup(item, displayOrderMode) ===
-                      isAccountInFirstDisplayGroup(account, displayOrderMode),
+                      getAccountDisplayGroup(item, displayOrderMode) ===
+                      getAccountDisplayGroup(account, displayOrderMode),
                   );
                   const isAtListTop = displayGroup[0]?.id === account.id;
                   const isAtListBottom =
@@ -967,7 +976,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     String(account.status || "").trim().toLowerCase() !==
                     "disabled";
                   return (
-                    <TableRow key={account.id} className="group">
+                    <TableRow
+                      key={account.id}
+                      className={cn(
+                        "group",
+                        isAccountWarrantyIncident(account) &&
+                          "bg-destructive/10 hover:bg-destructive/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-destructive",
+                      )}
+                    >
                       <TableCell className="text-center">
                         <Checkbox
                           checked={effectiveSelectedIds.includes(account.id)}
@@ -1533,7 +1549,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
             <DialogTitle>{t("编辑账号信息")}</DialogTitle>
             <DialogDescription>
               {accountEditorState
-                ? `${t("修改")} ${accountEditorState.accountName} ${t("的名称、分组、标签、备注、排序与额度池配置。")}`
+                ? `${t("修改")} ${accountEditorState.accountName} ${t("的名称、分组、质保、标签、备注、排序与额度池配置。")}`
                 : t("修改账号的基础资料。")}
             </DialogDescription>
           </DialogHeader>
@@ -1557,6 +1573,47 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   onChange={(event) => setGroupNameDraft(event.target.value)}
                   placeholder={t("例如：团队 A")}
                 />
+              </div>
+              <div className="grid gap-2 sm:col-span-2">
+                <Label htmlFor="account-warranty-input">{t("质保到期日")}</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    id="account-warranty-input"
+                    type="date"
+                    value={warrantyExpiresOnDraft}
+                    disabled={Boolean(isUpdatingProfileAccountId)}
+                    onChange={(event) =>
+                      setWarrantyExpiresOnDraft(event.target.value)
+                    }
+                    className="w-[170px]"
+                  />
+                  {[3, 7, 15, 25, 30].map((days) => (
+                    <Button
+                      key={days}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 min-w-12 px-2"
+                      disabled={Boolean(isUpdatingProfileAccountId)}
+                      onClick={() => setWarrantyDays(days)}
+                    >
+                      {days}{t("天")}
+                    </Button>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-9 px-2"
+                    disabled={
+                      Boolean(isUpdatingProfileAccountId) ||
+                      !warrantyExpiresOnDraft
+                    }
+                    onClick={() => setWarrantyExpiresOnDraft("")}
+                  >
+                    {t("清除")}
+                  </Button>
+                </div>
               </div>
               <div className="grid gap-2 sm:col-span-2">
                 <Label htmlFor="account-tags-input">

@@ -151,6 +151,30 @@ fn update_account_group_name_sets_and_clears_group() {
 }
 
 #[test]
+fn update_account_warranty_date_is_visible_in_summary_rows_and_can_be_cleared() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let account = sample_account("acc-warranty-update", "active", now_ts());
+    storage.insert_account(&account).expect("insert account");
+
+    storage
+        .update_account_warranty_expires_on(&account.id, Some("2026-08-06"))
+        .expect("set warranty date");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list summary rows");
+    assert_eq!(rows[0].warranty_expires_on.as_deref(), Some("2026-08-06"));
+
+    storage
+        .update_account_warranty_expires_on(&account.id, None)
+        .expect("clear warranty date");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list summary rows after clear");
+    assert_eq!(rows[0].warranty_expires_on, None);
+}
+
+#[test]
 fn upsert_imported_account_bundle_merges_metadata_and_token_in_one_call() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -929,10 +953,12 @@ fn list_account_summary_rows_reads_only_list_fields() {
     assert_eq!(rows[0].id, "acc-second-summary-row");
     assert_eq!(rows[0].label, "Second Summary");
     assert_eq!(rows[0].group_name, None);
+    assert_eq!(rows[0].warranty_expires_on, None);
     assert_eq!(rows[0].sort, 0);
     assert_eq!(rows[0].status, "disabled");
     assert_eq!(rows[1].id, "acc-first-summary-row");
     assert_eq!(rows[1].group_name.as_deref(), Some("team-a"));
+    assert_eq!(rows[1].warranty_expires_on, None);
     assert_eq!(rows[1].status, "active");
 }
 

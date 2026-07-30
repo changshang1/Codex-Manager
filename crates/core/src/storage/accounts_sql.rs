@@ -77,6 +77,10 @@ pub(super) fn update_account_group_name_sql() -> &'static str {
     "UPDATE accounts SET group_name = ?1, updated_at = ?2 WHERE id = ?3"
 }
 
+pub(super) fn update_account_warranty_expires_on_sql() -> &'static str {
+    "UPDATE accounts SET warranty_expires_on = ?1, updated_at = ?2 WHERE id = ?3"
+}
+
 pub(super) fn update_account_workspace_identity_sql() -> &'static str {
     "UPDATE accounts
      SET chatgpt_account_id = ?1,
@@ -138,7 +142,7 @@ pub(super) fn account_import_snapshots_list_sql() -> &'static str {
 }
 
 pub(super) fn account_summary_rows_list_sql() -> &'static str {
-    "SELECT id, label, group_name, sort, status
+    "SELECT id, label, group_name, warranty_expires_on, sort, status
      FROM accounts
      ORDER BY sort ASC, updated_at DESC, id ASC"
 }

@@ -27,7 +27,9 @@ import {
   buildAccountGroupOrderUpdates,
   buildAccountOrderUpdates,
   groupAccountsByDisplayOrder,
-  isAccountInFirstDisplayGroup,
+  getAccountDisplayGroup,
+  getLocalDateKey,
+  isAccountWarrantyIncident,
   ACCOUNT_DISPLAY_ORDER_STORAGE_KEY,
   normalizeAccountDisplayOrderMode,
 } from "@/lib/account-ordering";
@@ -58,6 +60,13 @@ function normalizeCleanupStatus(status: string): CleanupStatus | null {
   return CLEANUP_STATUSES.includes(normalized as CleanupStatus)
     ? (normalized as CleanupStatus)
     : null;
+}
+
+function getWarrantyDateAfterDays(days: number): string {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return getLocalDateKey(date);
 }
 
 export default function AccountsPage() {
@@ -129,6 +138,7 @@ export default function AccountsPage() {
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [labelDraft, setLabelDraft] = useState("");
   const [groupNameDraft, setGroupNameDraft] = useState("");
+  const [warrantyExpiresOnDraft, setWarrantyExpiresOnDraft] = useState("");
   const [tagsDraft, setTagsDraft] = useState("");
   const [noteDraft, setNoteDraft] = useState("");
   const [sortDraft, setSortDraft] = useState("");
@@ -208,6 +218,8 @@ export default function AccountsPage() {
         planFilter === "all" || normalizeAccountPlanKey(account) === planFilter;
       const matchStatus =
         statusFilter === "all" ||
+        (statusFilter === "warranty_incident" &&
+          isAccountWarrantyIncident(account)) ||
         (statusFilter === "available" && account.isAvailable) ||
         (statusFilter === "low_quota" && account.isLowQuota) ||
         (statusFilter === "limited" && isLimitedAccount(account)) ||
@@ -225,6 +237,10 @@ export default function AccountsPage() {
   const statusFilterOptions = useMemo(
     () => [
       { id: "all" as const, label: `${t("全部")} (${accounts.length})` },
+      {
+        id: "warranty_incident" as const,
+        label: `${t("质保内失效")} (${accounts.filter((account) => isAccountWarrantyIncident(account)).length})`,
+      },
       {
         id: "available" as const,
         label: `${t("可用")} (${accounts.filter((account) => account.isAvailable).length})`,
@@ -636,6 +652,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       accountName: account.name,
       currentLabel: account.label,
       currentGroupName: account.groupName,
+      currentWarrantyExpiresOn: account.warrantyExpiresOn || "",
       currentTags: account.tags.join(", "),
       currentNote: account.note || "",
       currentSort: account.priority,
@@ -644,6 +661,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
     });
     setLabelDraft(account.label);
     setGroupNameDraft(account.groupName);
+    setWarrantyExpiresOnDraft(account.warrantyExpiresOn || "");
     setTagsDraft(account.tags.join(", "));
     setNoteDraft(account.note || "");
     setSortDraft(String(account.priority));
@@ -665,8 +683,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
   ) => {
     const originalGroup = accounts.filter(
       (item) =>
-        isAccountInFirstDisplayGroup(item, displayOrderMode) ===
-        isAccountInFirstDisplayGroup(account, displayOrderMode),
+        getAccountDisplayGroup(item, displayOrderMode) ===
+        getAccountDisplayGroup(account, displayOrderMode),
     );
     let placement: AccountMovePlacement;
 
@@ -707,8 +725,8 @@ const toggleCleanupStatus = (rawStatus: string) => {
 
       const targetAccount = filteredAccounts[targetFilteredIndex];
       if (
-        isAccountInFirstDisplayGroup(targetAccount, displayOrderMode) !==
-        isAccountInFirstDisplayGroup(account, displayOrderMode)
+        getAccountDisplayGroup(targetAccount, displayOrderMode) !==
+        getAccountDisplayGroup(account, displayOrderMode)
       ) {
         toast.info(
           direction === "up"
@@ -775,6 +793,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
 
     const nextLabel = labelDraft.trim();
     const nextGroupName = groupNameDraft.trim();
+    const nextWarrantyExpiresOn = warrantyExpiresOnDraft.trim();
     const nextTags = normalizeTagsDraft(tagsDraft);
     const nextTagsText = nextTags.join(", ");
     const nextNote = noteDraft.trim();
@@ -813,6 +832,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
     if (
       nextLabel === accountEditorState.currentLabel &&
       nextGroupName === accountEditorState.currentGroupName &&
+      nextWarrantyExpiresOn === accountEditorState.currentWarrantyExpiresOn &&
       nextTagsText === accountEditorState.currentTags &&
       nextNote === accountEditorState.currentNote &&
       nextSort === accountEditorState.currentSort &&
@@ -827,6 +847,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       await updateAccountProfile(accountEditorState.accountId, {
         label: nextLabel,
         groupName: nextGroupName,
+        warrantyExpiresOn: nextWarrantyExpiresOn || null,
         note: nextNote || null,
         tags: nextTags,
         sort: nextSort,
@@ -892,6 +913,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       currentEditingAccount={currentEditingAccount}
       labelDraft={labelDraft}
       groupNameDraft={groupNameDraft}
+      warrantyExpiresOnDraft={warrantyExpiresOnDraft}
       tagsDraft={tagsDraft}
       noteDraft={noteDraft}
       sortDraft={sortDraft}
@@ -929,11 +951,15 @@ const toggleCleanupStatus = (rawStatus: string) => {
       setAccountEditorState={setAccountEditorState}
       setLabelDraft={setLabelDraft}
       setGroupNameDraft={setGroupNameDraft}
+      setWarrantyExpiresOnDraft={setWarrantyExpiresOnDraft}
       setTagsDraft={setTagsDraft}
       setNoteDraft={setNoteDraft}
       setSortDraft={setSortDraft}
       setQuotaPrimaryDraft={setQuotaPrimaryDraft}
       setQuotaSecondaryDraft={setQuotaSecondaryDraft}
+      setWarrantyDays={(days) =>
+        setWarrantyExpiresOnDraft(getWarrantyDateAfterDays(days))
+      }
       setPage={setPage}
       handleSearchChange={handleSearchChange}
       handlePlanFilterChange={handlePlanFilterChange}

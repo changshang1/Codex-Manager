@@ -183,6 +183,7 @@ pub struct AccountListSummaryRow {
     pub id: String,
     pub label: String,
     pub group_name: Option<String>,
+    pub warranty_expires_on: Option<String>,
     pub sort: i64,
     pub status: String,
 }
@@ -2337,6 +2338,11 @@ impl Storage {
             "132_aggregate_api_auto_toggle",
             include_str!("../../migrations/132_aggregate_api_auto_toggle.sql"),
             |s| s.ensure_aggregate_api_auto_toggle_columns(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "133_accounts_warranty_expires_on",
+            include_str!("../../migrations/133_accounts_warranty_expires_on.sql"),
+            |s| s.ensure_account_warranty_expires_on_column(),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

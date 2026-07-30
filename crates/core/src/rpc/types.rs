@@ -178,6 +178,8 @@ pub struct AccountSummary {
     pub id: String,
     pub label: String,
     pub group_name: Option<String>,
+    #[serde(default)]
+    pub warranty_expires_on: Option<String>,
     pub preferred: bool,
     pub sort: i64,
     pub status: String,

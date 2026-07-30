@@ -689,8 +689,9 @@ impl Storage {
                 id: row.get(0)?,
                 label: row.get(1)?,
                 group_name: row.get(2)?,
-                sort: row.get(3)?,
-                status: row.get(4)?,
+                warranty_expires_on: row.get(3)?,
+                sort: row.get(4)?,
+                status: row.get(5)?,
             })
         })?;
         rows.collect()
@@ -1150,6 +1151,18 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_account_warranty_expires_on(
+        &self,
+        account_id: &str,
+        warranty_expires_on: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            update_account_warranty_expires_on_sql(),
+            (warranty_expires_on, now_ts(), account_id),
+        )?;
+        Ok(())
+    }
+
     pub fn update_account_workspace_identity(
         &self,
         account_id: &str,
@@ -1330,6 +1343,10 @@ impl Storage {
                ON accounts(group_name, sort ASC, updated_at DESC);",
         )?;
         Ok(())
+    }
+
+    pub(super) fn ensure_account_warranty_expires_on_column(&self) -> Result<()> {
+        self.ensure_column("accounts", "warranty_expires_on", "TEXT")
     }
 
     pub(super) fn ensure_accounts_list_order_index(&self) -> Result<()> {

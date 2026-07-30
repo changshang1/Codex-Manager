@@ -74,7 +74,7 @@ test("account UI groups by the selected display mode and moves only inside the s
   );
   assert.match(
     pageSource,
-    /const originalGroup = accounts\.filter\([\s\S]*?isAccountInFirstDisplayGroup\(item, displayOrderMode\)[\s\S]*?isAccountInFirstDisplayGroup\(account, displayOrderMode\)/,
+    /const originalGroup = accounts\.filter\([\s\S]*?getAccountDisplayGroup\(item, displayOrderMode\)[\s\S]*?getAccountDisplayGroup\(account, displayOrderMode\)/,
   );
   assert.match(
     pageSource,
@@ -82,7 +82,7 @@ test("account UI groups by the selected display mode and moves only inside the s
   );
   assert.match(
     pageSource,
-    /isAccountInFirstDisplayGroup\(targetAccount, displayOrderMode\)[\s\S]*?!==[\s\S]*?isAccountInFirstDisplayGroup\(account, displayOrderMode\)/,
+    /getAccountDisplayGroup\(targetAccount, displayOrderMode\)[\s\S]*?!==[\s\S]*?getAccountDisplayGroup\(account, displayOrderMode\)/,
   );
 });
 

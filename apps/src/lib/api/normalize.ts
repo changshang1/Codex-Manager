@@ -434,6 +434,8 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
     preferred: Boolean(source.preferred),
     label: name,
     groupName,
+    warrantyExpiresOn:
+      asString(source.warrantyExpiresOn ?? source.warranty_expires_on) || null,
     sort: asInteger(source.sort ?? source.priority, 0, 0),
     status,
     statusReason,

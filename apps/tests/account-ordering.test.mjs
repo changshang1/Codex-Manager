@@ -58,6 +58,62 @@ test("access ordering puts non-disabled accounts first without changing sort", (
   assert.deepEqual(accounts.map((account) => account.sort), [0, 5, 10]);
 });
 
+test("in-warranty refresh-token incidents are placed before every display group", () => {
+  const accounts = [
+    { id: "available", sort: 0, status: "active", isAvailable: true },
+    {
+      id: "warranty-incident",
+      sort: 5,
+      status: "unavailable",
+      statusReason: "refresh_token_invalid:expired",
+      warrantyExpiresOn: "2999-08-06",
+      isAvailable: false,
+    },
+    { id: "disabled", sort: 10, status: "disabled", isAvailable: false },
+  ];
+
+  assert.deepEqual(
+    ordering
+      .groupAccountsByDisplayOrder(accounts, "availability")
+      .map((account) => account.id),
+    ["warranty-incident", "available", "disabled"],
+  );
+  assert.deepEqual(
+    ordering
+      .groupAccountsByDisplayOrder(accounts, "access")
+      .map((account) => account.id),
+    ["warranty-incident", "available", "disabled"],
+  );
+});
+
+test("warranty incidents require an unexpired date and explicit refresh-token invalidation", () => {
+  const base = {
+    id: "account",
+    sort: 0,
+    status: "unavailable",
+    statusReason: "refresh_token_invalid:expired",
+    warrantyExpiresOn: "2026-08-06",
+    isAvailable: false,
+  };
+
+  assert.equal(ordering.isAccountWarrantyIncident(base, "2026-08-06"), true);
+  assert.equal(ordering.isAccountWarrantyIncident(base, "2026-08-07"), false);
+  assert.equal(
+    ordering.isAccountWarrantyIncident(
+      { ...base, statusReason: "usage_http_401" },
+      "2026-08-01",
+    ),
+    false,
+  );
+  assert.equal(
+    ordering.isAccountWarrantyIncident(
+      { ...base, status: "disabled" },
+      "2026-08-01",
+    ),
+    false,
+  );
+});
+
 test("invalid persisted display order falls back to availability", () => {
   assert.equal(ordering.normalizeAccountDisplayOrderMode("access"), "access");
   assert.equal(ordering.normalizeAccountDisplayOrderMode("unknown"), "availability");

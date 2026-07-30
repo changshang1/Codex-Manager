@@ -72,6 +72,12 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 .and_then(serde_json::Value::as_object)
                 .is_some_and(|params| params.contains_key("groupName"));
             let group_name = super::string_param(req, "groupName");
+            let has_warranty_expires_on = req
+                .params
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|params| params.contains_key("warrantyExpiresOn"));
+            let warranty_expires_on = super::string_param(req, "warrantyExpiresOn");
             let note = super::string_param(req, "note");
             let tags = super::string_param(req, "tags");
             let quota_capacity_primary_window_tokens =
@@ -89,6 +95,8 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                     label.as_deref(),
                     group_name.as_deref(),
                     has_group_name,
+                    warranty_expires_on.as_deref(),
+                    has_warranty_expires_on,
                     note.as_deref(),
                     tags.as_deref(),
                     quota_capacity_primary_window_tokens,

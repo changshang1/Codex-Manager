@@ -164,6 +164,7 @@ interface AccountUpdatePayload {
   status?: string | null;
   label?: string | null;
   groupName?: string | null;
+  warrantyExpiresOn?: string | null;
   note?: string | null;
   tags?: string[] | string | null;
   quotaCapacityPrimaryWindowTokens?: number | null;
@@ -474,6 +475,9 @@ export const accountClient = {
     };
     if (params.groupName !== undefined) {
       payload.groupName = params.groupName ?? "";
+    }
+    if (params.warrantyExpiresOn !== undefined) {
+      payload.warrantyExpiresOn = params.warrantyExpiresOn ?? "";
     }
     return invoke("service_account_update", withAddr(payload));
   },

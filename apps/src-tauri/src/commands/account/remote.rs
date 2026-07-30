@@ -31,6 +31,7 @@ fn account_update_payload(
     status: Option<String>,
     label: Option<String>,
     group_name: Option<String>,
+    warranty_expires_on: Option<String>,
     note: Option<String>,
     tags: Option<String>,
     quota_capacity_primary_window_tokens: Option<i64>,
@@ -56,6 +57,12 @@ fn account_update_payload(
     if let Some(value) = group_name {
         params.insert(
             "groupName".to_string(),
+            serde_json::json!(value.trim()),
+        );
+    }
+    if let Some(value) = warranty_expires_on {
+        params.insert(
+            "warrantyExpiresOn".to_string(),
             serde_json::json!(value.trim()),
         );
     }
@@ -208,6 +215,7 @@ pub async fn service_account_update(
     status: Option<String>,
     label: Option<String>,
     group_name: Option<String>,
+    warranty_expires_on: Option<String>,
     note: Option<String>,
     tags: Option<String>,
     quota_capacity_primary_window_tokens: Option<i64>,
@@ -223,6 +231,7 @@ pub async fn service_account_update(
             status,
             label,
             group_name,
+            warranty_expires_on,
             note,
             tags,
             quota_capacity_primary_window_tokens,
@@ -470,6 +479,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("payload");
         let expected = serde_json::json!({
@@ -495,6 +505,7 @@ mod tests {
         let actual = account_update_payload(
             "acc-1".to_string(),
             Some(5),
+            None,
             None,
             None,
             None,
@@ -536,6 +547,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("payload");
         let expected = serde_json::json!({
@@ -550,6 +562,7 @@ mod tests {
             "acc-1".to_string(),
             None,
             Some(true),
+            None,
             None,
             None,
             None,
@@ -579,6 +592,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("omitted payload");
         assert!(omitted.get("groupName").is_none());
@@ -594,8 +608,52 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("cleared payload");
         assert_eq!(cleared.get("groupName").and_then(|value| value.as_str()), Some(""));
+    }
+
+    #[test]
+    fn account_update_payload_supports_setting_and_clearing_warranty_date() {
+        let set = account_update_payload(
+            "acc-1".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(" 2026-08-06 ".to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("set warranty payload");
+        assert_eq!(
+            set.get("warrantyExpiresOn").and_then(|value| value.as_str()),
+            Some("2026-08-06")
+        );
+
+        let cleared = account_update_payload(
+            "acc-1".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("   ".to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("clear warranty payload");
+        assert_eq!(
+            cleared
+                .get("warrantyExpiresOn")
+                .and_then(|value| value.as_str()),
+            Some("")
+        );
     }
 }

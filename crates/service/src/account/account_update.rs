@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use codexmanager_core::storage::{now_ts, Event};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -34,6 +35,8 @@ pub(crate) fn update_account(
     label: Option<&str>,
     group_name: Option<&str>,
     has_group_name: bool,
+    warranty_expires_on: Option<&str>,
+    has_warranty_expires_on: bool,
     note: Option<&str>,
     tags: Option<&str>,
     quota_capacity_primary_window_tokens: Option<i64>,
@@ -51,6 +54,15 @@ pub(crate) fn update_account(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
+    let normalized_warranty_expires_on = warranty_expires_on
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .map(|date| date.format("%Y-%m-%d").to_string())
+                .map_err(|_| "warrantyExpiresOn must be a valid YYYY-MM-DD date".to_string())
+        })
+        .transpose()?;
     let normalized_note = normalize_optional_text(note);
     let normalized_tags = normalize_optional_tags(tags);
     let metadata_requested = note.is_some() || tags.is_some();
@@ -62,6 +74,7 @@ pub(crate) fn update_account(
         && normalized_status.is_none()
         && normalized_label.is_none()
         && !has_group_name
+        && !has_warranty_expires_on
         && !metadata_requested
         && !quota_override_requested
     {
@@ -137,6 +150,24 @@ pub(crate) fn update_account(
             message: format!(
                 "group_name={}",
                 normalized_group_name.as_deref().unwrap_or("-")
+            ),
+            created_at: now,
+        });
+    }
+
+    if has_warranty_expires_on {
+        storage
+            .update_account_warranty_expires_on(
+                normalized_account_id,
+                normalized_warranty_expires_on.as_deref(),
+            )
+            .map_err(|e| e.to_string())?;
+        let _ = storage.insert_event(&Event {
+            account_id: Some(normalized_account_id.to_string()),
+            event_type: "account_warranty_update".to_string(),
+            message: format!(
+                "warranty_expires_on={}",
+                normalized_warranty_expires_on.as_deref().unwrap_or("-")
             ),
             created_at: now,
         });

@@ -81,6 +81,8 @@ fn update_account_preferred_uses_existence_check_without_loading_account() {
         None,
         false,
         None,
+        false,
+        None,
         None,
         None,
         None,
@@ -101,6 +103,8 @@ fn update_account_preferred_uses_existence_check_without_loading_account() {
         Some(true),
         None,
         None,
+        None,
+        false,
         None,
         false,
         None,
@@ -130,6 +134,8 @@ fn update_account_group_name_trims_and_clears_explicitly() {
         Some("  team-a  "),
         true,
         None,
+        false,
+        None,
         None,
         None,
         None,
@@ -155,6 +161,8 @@ fn update_account_group_name_trims_and_clears_explicitly() {
         Some("   "),
         true,
         None,
+        false,
+        None,
         None,
         None,
         None,
@@ -169,6 +177,78 @@ fn update_account_group_name_trims_and_clears_explicitly() {
             .group_name,
         None
     );
+}
+
+#[test]
+fn update_account_warranty_date_validates_sets_and_clears() {
+    let _lock = crate::test_env_guard();
+    let (db_path, _guard) = set_test_db("account-update-warranty");
+    let storage = Storage::open(&db_path).expect("open db");
+    storage
+        .insert_account(&account("acc-warranty", 1))
+        .expect("insert account");
+
+    update_account(
+        "acc-warranty",
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some(" 2026-08-06 "),
+        true,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("set warranty");
+    let rows = Storage::open(&db_path)
+        .expect("reopen db")
+        .list_account_summary_rows()
+        .expect("list summary rows");
+    assert_eq!(rows[0].warranty_expires_on.as_deref(), Some("2026-08-06"));
+
+    let err = update_account(
+        "acc-warranty",
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some("2026-02-30"),
+        true,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect_err("invalid warranty date should fail");
+    assert!(err.contains("valid YYYY-MM-DD date"));
+
+    update_account(
+        "acc-warranty",
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some(""),
+        true,
+        None,
+        None,
+        None,
+        None,
+    )
+    .expect("clear warranty");
+    let rows = Storage::open(&db_path)
+        .expect("reopen db")
+        .list_account_summary_rows()
+        .expect("list summary rows after clear");
+    assert_eq!(rows[0].warranty_expires_on, None);
 }
 
 #[test]

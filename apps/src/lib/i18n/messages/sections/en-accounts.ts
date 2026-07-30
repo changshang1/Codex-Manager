@@ -272,4 +272,9 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "显示顺序": "Display order",
   "可用状态优先": "Available status first",
   "允许接入优先": "Access enabled first",
+  "质保到期日": "Warranty expiration date",
+  "质保至": "Warranty until",
+  "质保内失效": "Failed within warranty",
+  "的名称、分组、质保、标签、备注、排序与额度池配置。":
+    "'s name, group, warranty, tags, notes, sort order, and quota pool configuration.",
 };

@@ -44,6 +44,7 @@ export interface Account {
   preferred: boolean;
   label: string;
   groupName: string;
+  warrantyExpiresOn: string | null;
   sort: number;
   status: string;
   statusReason: string;

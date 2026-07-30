@@ -25,6 +25,7 @@ struct AccountSummaryParts {
     id: String,
     label: String,
     group_name: Option<String>,
+    warranty_expires_on: Option<String>,
     sort: i64,
     status: String,
 }
@@ -35,6 +36,7 @@ impl From<Account> for AccountSummaryParts {
             id: account.id,
             label: account.label,
             group_name: account.group_name,
+            warranty_expires_on: None,
             sort: account.sort,
             status: account.status,
         }
@@ -47,6 +49,7 @@ impl From<AccountListSummaryRow> for AccountSummaryParts {
             id: account.id,
             label: account.label,
             group_name: account.group_name,
+            warranty_expires_on: account.warranty_expires_on,
             sort: account.sort,
             status: account.status,
         }
@@ -72,6 +75,7 @@ impl From<&Account> for AccountSummaryParts {
             id: account.id.clone(),
             label: account.label.clone(),
             group_name: account.group_name.clone(),
+            warranty_expires_on: None,
             sort: account.sort,
             status: account.status.clone(),
         }
@@ -185,6 +189,7 @@ fn to_account_summary_with_reason(
         id: parts.id,
         label: parts.label,
         group_name: parts.group_name,
+        warranty_expires_on: parts.warranty_expires_on,
         preferred,
         sort: parts.sort,
         status: parts.status,
@@ -435,6 +440,7 @@ where
         id: account_id,
         label,
         group_name,
+        warranty_expires_on,
         sort,
         status,
     } = account;
@@ -461,6 +467,7 @@ where
             id: account_id,
             label,
             group_name,
+            warranty_expires_on,
             sort,
             status,
         },

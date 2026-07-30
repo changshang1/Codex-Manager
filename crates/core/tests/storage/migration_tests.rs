@@ -712,6 +712,18 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
         )
         .expect("count 132 migration");
     assert_eq!(applied_132, 1);
+    let applied_133: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '133_accounts_warranty_expires_on'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 133 migration");
+    assert_eq!(applied_133, 1);
+    assert!(storage
+        .has_column("accounts", "warranty_expires_on")
+        .expect("check accounts.warranty_expires_on"));
     for column in [
         "auto_toggle_enabled",
         "consecutive_failures",

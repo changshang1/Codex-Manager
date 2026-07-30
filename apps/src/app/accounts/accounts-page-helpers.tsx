@@ -20,9 +20,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { Account } from "@/types";
+import { isAccountWarrantyIncident } from "@/lib/account-ordering";
 
 export type StatusFilter =
   | "all"
+  | "warranty_incident"
   | "available"
   | "low_quota"
   | "limited"
@@ -105,6 +107,8 @@ export function formatStatusFilterLabel(value: string, t: TranslateFn) {
   switch (nextValue) {
     case "available":
       return t("可用");
+    case "warranty_incident":
+      return t("质保内失效");
     case "low_quota":
       return t("低配额");
     case "limited":
@@ -139,6 +143,7 @@ export interface AccountEditorState {
   accountName: string;
   currentLabel: string;
   currentGroupName: string;
+  currentWarrantyExpiresOn: string;
   currentTags: string;
   currentNote: string;
   currentSort: number;
@@ -735,7 +740,9 @@ export function AccountInfoCell({
   const statusReasonLabel = formatAccountStatusReasonLabel(account, t);
   const tagsText = formatAccountTags(account.tags);
   const groupName = String(account.groupName || "").trim();
+  const warrantyExpiresOn = String(account.warrantyExpiresOn || "").trim();
   const noteText = String(account.note || "").trim();
+  const warrantyIncident = isAccountWarrantyIncident(account);
 
   return (
     <Tooltip>
@@ -777,6 +784,22 @@ export function AccountInfoCell({
                 title={groupName}
               >
                 <span className="truncate">{groupName}</span>
+              </Badge>
+            ) : null}
+            {warrantyIncident ? (
+              <Badge
+                variant="destructive"
+                className="h-5 shrink-0 px-2 text-[10px] font-semibold"
+              >
+                {t("质保内失效")}
+              </Badge>
+            ) : null}
+            {warrantyExpiresOn ? (
+              <Badge
+                variant="outline"
+                className="h-5 shrink-0 border-border/70 px-2 text-[10px] font-medium text-muted-foreground"
+              >
+                {t("质保至")} {warrantyExpiresOn}
               </Badge>
             ) : null}
           </div>
@@ -853,6 +876,8 @@ export function AccountInfoCell({
           <div className="space-y-0.5">
             <div className="text-[10px] text-muted-foreground">{t("账号分组")}</div>
             <div className="break-words">{groupName || t("未分组")}</div>
+            <div className="text-muted-foreground">{t("质保到期日")}</div>
+            <div className="break-words">{warrantyExpiresOn || t("未设置")}</div>
           </div>
           <div className="space-y-0.5">
             <div className="text-[10px] text-muted-foreground">{t("标签")}</div>
