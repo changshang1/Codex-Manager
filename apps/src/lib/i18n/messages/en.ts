@@ -1214,7 +1214,16 @@ export const EN_MESSAGES: MessageCatalog = {
   停止接入: "Stop access",
   允许账号接入: "allow account access",
   停止账号接入: "stop account access",
+  强制允许账号接入: "force account access",
+  强制允许接入: "Force allow access",
   账号已停止接入: "Account access stopped",
+  账号已强制允许接入: "Account access force-enabled",
+  "账号验证失败，保持停止接入: {error}":
+    "Account validation failed; access remains stopped: {error}",
+  当前无法确认账号状态: "The account status cannot currently be confirmed",
+  "账号验证成功，已允许接入": "Account validated; access is now allowed",
+  "开启允许接入时会先刷新验证账号；验证成功后才会启用，验证失败则保持停止接入。":
+    "Turning on access validates the account with a refresh first. Access is enabled only after validation succeeds; otherwise it remains stopped.",
   "账号已允许接入，但刷新失败: {error}":
     "Account access is allowed, but refresh failed: {error}",
   "账号已允许接入，但刷新未执行: {message}":

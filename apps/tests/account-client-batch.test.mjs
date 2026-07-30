@@ -31,7 +31,7 @@ test("accounts hook reorders accounts through the batch sort API", async () => {
   assert.doesNotMatch(mutation, /for \(const update of updates\)/);
 });
 
-test("account access toggle enables before refreshing and never treats inactive as manual off", async () => {
+test("account access toggle validates before enabling and keeps a force-enable escape hatch", async () => {
   const hookSource = await fs.readFile(
     path.join(appsRoot, "src", "hooks", "useAccounts.ts"),
     "utf8",
@@ -46,26 +46,35 @@ test("account access toggle enables before refreshing and never treats inactive 
   )?.[0] || "";
   assert.match(
     toggleMutation,
-    /await accountClient\.enableAccount\(accountId\);[\s\S]*?await accountClient\.refreshUsage\(accountId,\s*\{[\s\S]*?markUnavailableOnFailure:\s*true/,
+    /const refreshResult = await accountClient\.refreshUsage\(accountId\);[\s\S]*?await accountClient\.enableAccount\(accountId\);/,
   );
-  assert.match(toggleMutation, /return \{ refreshResult: null, refreshError \};/);
+  assert.match(toggleMutation, /action: "validation_failed" as const/);
+  assert.doesNotMatch(toggleMutation, /markUnavailableOnFailure:\s*true/);
+  assert.match(
+    toggleMutation,
+    /if \(force\) \{[\s\S]*?await accountClient\.enableAccount\(accountId\);[\s\S]*?action: "force_enabled"/,
+  );
   assert.match(
     viewSource,
     /String\(account\.status \|\| ""\)[\s\S]*?\.toLowerCase\(\) !==[\s\S]*?"disabled"/,
   );
   assert.doesNotMatch(viewSource, /accessEnabled[\s\S]{0,120}"inactive"/);
+  assert.match(viewSource, /!accessEnabled[\s\S]*?forceEnableAccount\(account\.id\)/);
 });
 
-test("account UI groups availability for display and moves only inside the same group", async () => {
+test("account UI groups by the selected display mode and moves only inside the same group", async () => {
   const pageSource = await fs.readFile(
     path.join(appsRoot, "src", "app", "accounts", "page.tsx"),
     "utf8",
   );
 
-  assert.match(pageSource, /return groupAccountsByAvailability\(matchedAccounts\);/);
   assert.match(
     pageSource,
-    /const originalGroup = accounts\.filter\([\s\S]*?item\.isAvailable === account\.isAvailable/,
+    /return groupAccountsByDisplayOrder\(matchedAccounts, displayOrderMode\);/,
+  );
+  assert.match(
+    pageSource,
+    /const originalGroup = accounts\.filter\([\s\S]*?isAccountInFirstDisplayGroup\(item, displayOrderMode\)[\s\S]*?isAccountInFirstDisplayGroup\(account, displayOrderMode\)/,
   );
   assert.match(
     pageSource,
@@ -73,8 +82,33 @@ test("account UI groups availability for display and moves only inside the same 
   );
   assert.match(
     pageSource,
-    /targetAccount\.isAvailable !== account\.isAvailable/,
+    /isAccountInFirstDisplayGroup\(targetAccount, displayOrderMode\)[\s\S]*?!==[\s\S]*?isAccountInFirstDisplayGroup\(account, displayOrderMode\)/,
   );
+});
+
+test("account status filter includes manually disabled accounts", async () => {
+  const pageSource = await fs.readFile(
+    path.join(appsRoot, "src", "app", "accounts", "page.tsx"),
+    "utf8",
+  );
+  const helperSource = await fs.readFile(
+    path.join(
+      appsRoot,
+      "src",
+      "app",
+      "accounts",
+      "accounts-page-helpers.tsx",
+    ),
+    "utf8",
+  );
+
+  assert.match(helperSource, /StatusFilter[\s\S]*?\| "disabled"/);
+  assert.match(helperSource, /case "disabled":[\s\S]*?return t\("已禁用"\)/);
+  assert.match(
+    pageSource,
+    /statusFilter === "disabled"[\s\S]*?\.toLowerCase\(\) === "disabled"/,
+  );
+  assert.match(pageSource, /id: "disabled" as const/);
 });
 
 test("aggregate API list uses one RPC call for atomic batch reordering", async () => {

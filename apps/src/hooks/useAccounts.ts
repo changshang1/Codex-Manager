@@ -806,59 +806,70 @@ export function useAccounts() {
     mutationFn: async ({
       accountId,
       enabled,
+      force = false,
     }: {
       accountId: string;
       enabled: boolean;
+      force?: boolean;
     }) => {
       if (!enabled) {
         await accountClient.disableAccount(accountId);
-        return { refreshResult: null, refreshError: null };
+        return { action: "disabled" as const };
+      }
+
+      if (force) {
+        await accountClient.enableAccount(accountId);
+        return { action: "force_enabled" as const };
+      }
+
+      try {
+        const refreshResult = await accountClient.refreshUsage(accountId);
+        if (
+          !refreshResult.ok ||
+          refreshResult.total === 0 ||
+          refreshResult.processed === 0
+        ) {
+          return {
+            action: "validation_failed" as const,
+            error: refreshResult.message,
+          };
+        }
+      } catch (refreshError) {
+        return {
+          action: "validation_failed" as const,
+          error: formatUsageRefreshErrorMessage(refreshError, t),
+        };
       }
 
       await accountClient.enableAccount(accountId);
-      try {
-        const refreshResult = await accountClient.refreshUsage(accountId, {
-          markUnavailableOnFailure: true,
-        });
-        return { refreshResult, refreshError: null };
-      } catch (refreshError) {
-        // Enabling is durable even when validation fails. Health remains a separate state
-        // and a later refresh can recover the account without toggling access again.
-        return { refreshResult: null, refreshError };
-      }
+      return { action: "enabled" as const };
     },
-    onSuccess: async (result, variables) => {
+    onSuccess: async (result) => {
       await invalidateAccountData();
-      if (!variables.enabled) {
+      if (result.action === "disabled") {
         toast.success(t("账号已停止接入"));
         return;
       }
-      if (result.refreshError) {
+      if (result.action === "force_enabled") {
+        toast.success(t("账号已强制允许接入"));
+        return;
+      }
+      if (result.action === "validation_failed") {
         toast.warning(
-          t("账号已允许接入，但刷新失败: {error}", {
-            error: formatUsageRefreshErrorMessage(result.refreshError, t),
+          t("账号验证失败，保持停止接入: {error}", {
+            error: result.error || t("当前无法确认账号状态"),
           }),
         );
         return;
       }
-      if (
-        !result.refreshResult?.ok ||
-        result.refreshResult.total === 0 ||
-        result.refreshResult.processed === 0
-      ) {
-        toast.warning(
-          result.refreshResult?.message
-            ? t("账号已允许接入，但刷新未执行: {message}", {
-                message: result.refreshResult.message,
-              })
-            : t("账号已允许接入，但当前无法确认健康状态"),
-        );
-        return;
-      }
-      toast.success(t("账号已允许接入并完成刷新"));
+      toast.success(t("账号验证成功，已允许接入"));
     },
     onError: (error: unknown, variables) => {
-      const actionLabel = variables.enabled ? t("允许接入") : t("停止接入");
+      const actionLabel = variables.force
+        ? t("强制允许接入")
+        : variables.enabled
+          ? t("允许接入")
+          : t("停止接入");
       toast.error(
         t("账号{action}失败: {error}", {
           action: actionLabel,
@@ -1169,6 +1180,14 @@ export function useAccounts() {
     toggleAccountStatus: (accountId: string, enabled: boolean) => {
       if (!ensureServiceReady(enabled ? "允许账号接入" : "停止账号接入")) return;
       toggleAccountStatusMutation.mutate({ accountId, enabled });
+    },
+    forceEnableAccount: (accountId: string) => {
+      if (!ensureServiceReady("强制允许账号接入")) return;
+      toggleAccountStatusMutation.mutate({
+        accountId,
+        enabled: true,
+        force: true,
+      });
     },
     isRefreshingAccountId:
       refreshAccountMutation.isPending && typeof refreshAccountMutation.variables === "string"

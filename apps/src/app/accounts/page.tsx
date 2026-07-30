@@ -104,6 +104,7 @@ export default function AccountsPage() {
     updateAccountProfile,
     isUpdatingProfileAccountId,
     toggleAccountStatus,
+    forceEnableAccount,
     isUpdatingStatusAccountId,
   } = useAccounts();
   const isPageActive = useDesktopPageActive("/accounts/");
@@ -210,7 +211,9 @@ export default function AccountsPage() {
         (statusFilter === "available" && account.isAvailable) ||
         (statusFilter === "low_quota" && account.isLowQuota) ||
         (statusFilter === "limited" && isLimitedAccount(account)) ||
-        (statusFilter === "banned" && isBannedAccount(account));
+        (statusFilter === "banned" && isBannedAccount(account)) ||
+        (statusFilter === "disabled" &&
+          String(account.status || "").trim().toLowerCase() === "disabled");
       return matchSearch && matchPlan && matchStatus;
     });
 
@@ -237,6 +240,13 @@ export default function AccountsPage() {
       {
         id: "banned" as const,
         label: `${t("封禁")} (${accounts.filter((account) => isBannedAccount(account)).length})`,
+      },
+      {
+        id: "disabled" as const,
+        label: `${t("已禁用")} (${accounts.filter(
+          (account) =>
+            String(account.status || "").trim().toLowerCase() === "disabled",
+        ).length})`,
       },
     ],
     [accounts, t],
@@ -696,7 +706,10 @@ const toggleCleanupStatus = (rawStatus: string) => {
       }
 
       const targetAccount = filteredAccounts[targetFilteredIndex];
-      if (targetAccount.isAvailable !== account.isAvailable) {
+      if (
+        isAccountInFirstDisplayGroup(targetAccount, displayOrderMode) !==
+        isAccountInFirstDisplayGroup(account, displayOrderMode)
+      ) {
         toast.info(
           direction === "up"
             ? t("当前账号已经在分组最前面")
@@ -959,6 +972,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       clearPreferredAccount={clearPreferredAccount}
       setPreferredAccount={setPreferredAccount}
       toggleAccountStatus={toggleAccountStatus}
+      forceEnableAccount={forceEnableAccount}
     />
   );
 }

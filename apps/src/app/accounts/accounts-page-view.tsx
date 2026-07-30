@@ -18,6 +18,7 @@ import {
   PencilLine,
   Pin,
   Plus,
+  Power,
   RefreshCw,
   Search,
   Trash2,
@@ -249,6 +250,7 @@ export interface AccountsPageViewProps {
     accountId: string,
     enabled: boolean,
   ) => void;
+  forceEnableAccount: (accountId: string) => void;
 }
 
 export function AccountsPageView(props: AccountsPageViewProps) {
@@ -369,6 +371,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     clearPreferredAccount,
     setPreferredAccount,
     toggleAccountStatus,
+    forceEnableAccount,
   } = props;
 
   const accountProxyBusy =
@@ -1092,7 +1095,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                           </TooltipTrigger>
                           <TooltipContent className="max-w-xs">
                             {t(
-                              "允许接入只控制人工停用；账号是否真正参与请求仍取决于旁边的健康状态。开启后会立即刷新验证。",
+                              "开启允许接入时会先刷新验证账号；验证成功后才会启用，验证失败则保持停止接入。",
                             )}
                           </TooltipContent>
                         </Tooltip>
@@ -1164,6 +1167,22 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                               </DropdownMenuGroup>
                               <DropdownMenuSeparator />
                                   <DropdownMenuGroup>
+                              {!accessEnabled && (
+                                <>
+                                  <DropdownMenuItem
+                                    className="gap-2"
+                                    disabled={
+                                      !isServiceReady ||
+                                      isUpdatingStatusAccountId === account.id
+                                    }
+                                    onClick={() => forceEnableAccount(account.id)}
+                                  >
+                                    <Power className="h-4 w-4" />
+                                    {t("强制允许接入")}
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              )}
                               <DropdownMenuItem
                                 className="gap-2"
                                 disabled={

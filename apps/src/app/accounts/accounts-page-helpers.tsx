@@ -21,7 +21,13 @@ import {
 } from "@/components/ui/tooltip";
 import type { Account } from "@/types";
 
-export type StatusFilter = "all" | "available" | "low_quota" | "limited" | "banned";
+export type StatusFilter =
+  | "all"
+  | "available"
+  | "low_quota"
+  | "limited"
+  | "banned"
+  | "disabled";
 export type AccountExportMode = "single" | "multiple";
 export type AccountSizeSortMode = "large-first" | "small-first";
 export type AccountMoveDirection = "up" | "down" | "top" | "bottom";
@@ -105,6 +111,8 @@ export function formatStatusFilterLabel(value: string, t: TranslateFn) {
       return t("限流");
     case "banned":
       return t("封禁");
+    case "disabled":
+      return t("已禁用");
     case "all":
     default:
       return t("全部");
