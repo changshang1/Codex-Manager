@@ -269,4 +269,7 @@ export const EN_ACCOUNTS_MESSAGES: MessageCatalog = {
   "无法读取重置券详情，请重新核对。":
     "Reset credit details could not be loaded. Check again.",
   "预计删除": "Estimated delete",
+  "显示顺序": "Display order",
+  "可用状态优先": "Available status first",
+  "允许接入优先": "Access enabled first",
 };

@@ -5,6 +5,17 @@ interface AccountOrderItem {
   sort: number;
   priority?: number;
   isAvailable: boolean;
+  status?: string;
+}
+
+export type AccountDisplayOrderMode = "availability" | "access";
+export const ACCOUNT_DISPLAY_ORDER_STORAGE_KEY =
+  "codexmanager.accounts.display-order";
+
+export function normalizeAccountDisplayOrderMode(
+  value: unknown,
+): AccountDisplayOrderMode {
+  return value === "access" ? "access" : "availability";
 }
 
 export interface AccountSortUpdate {
@@ -22,14 +33,34 @@ function readAccountSort(account: AccountOrderItem): number {
 export function groupAccountsByAvailability<T extends AccountOrderItem>(
   accounts: T[],
 ): T[] {
+  return groupAccountsByDisplayOrder(accounts, "availability");
+}
+
+export function groupAccountsByDisplayOrder<T extends AccountOrderItem>(
+  accounts: T[],
+  mode: AccountDisplayOrderMode,
+): T[] {
   const available: T[] = [];
-  const unavailable: T[] = [];
+  const unavailableOrDisabled: T[] = [];
 
   for (const account of accounts) {
-    (account.isAvailable ? available : unavailable).push(account);
+    (isAccountInFirstDisplayGroup(account, mode)
+      ? available
+      : unavailableOrDisabled
+    ).push(account);
   }
 
-  return [...available, ...unavailable];
+  return [...available, ...unavailableOrDisabled];
+}
+
+export function isAccountInFirstDisplayGroup(
+  account: AccountOrderItem,
+  mode: AccountDisplayOrderMode,
+): boolean {
+  if (mode === "availability") {
+    return account.isAvailable;
+  }
+  return String(account.status || "").trim().toLowerCase() !== "disabled";
 }
 
 export function buildAccountOrderUpdates<T extends AccountOrderItem>(

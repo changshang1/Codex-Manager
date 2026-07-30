@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useAccounts } from "@/hooks/useAccounts";
 import { useDesktopPageActive } from "@/hooks/useDesktopPageActive";
@@ -26,8 +26,12 @@ import {
 import {
   buildAccountGroupOrderUpdates,
   buildAccountOrderUpdates,
-  groupAccountsByAvailability,
+  groupAccountsByDisplayOrder,
+  isAccountInFirstDisplayGroup,
+  ACCOUNT_DISPLAY_ORDER_STORAGE_KEY,
+  normalizeAccountDisplayOrderMode,
 } from "@/lib/account-ordering";
+import type { AccountDisplayOrderMode } from "@/lib/account-ordering";
 import { AccountsPageView } from "@/app/accounts/accounts-page-view";
 import { isBannedAccount, isLimitedAccount } from "@/lib/utils/usage";
 import type { Account, ProxyProfile } from "@/types";
@@ -108,6 +112,10 @@ export default function AccountsPage() {
   const [search, setSearch] = useState("");
   const [planFilter, setPlanFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [displayOrderMode, setDisplayOrderMode] =
+    useState<AccountDisplayOrderMode>("availability");
+  const [displayOrderPreferenceLoaded, setDisplayOrderPreferenceLoaded] =
+    useState(false);
   const [pageSize, setPageSize] = useState("20");
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -134,6 +142,33 @@ export default function AccountsPage() {
     useState<AccountProxySource>("custom");
   const [proxyProfileIdDraft, setProxyProfileIdDraft] = useState("");
   const [proxyUrlDraft, setProxyUrlDraft] = useState("");
+
+  useEffect(() => {
+    let storedValue: string | null = null;
+    try {
+      storedValue = window.localStorage.getItem(
+        ACCOUNT_DISPLAY_ORDER_STORAGE_KEY,
+      );
+    } catch {
+      // Continue with the default when browser storage is unavailable.
+    }
+    setDisplayOrderMode(normalizeAccountDisplayOrderMode(storedValue));
+    setDisplayOrderPreferenceLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!displayOrderPreferenceLoaded) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        ACCOUNT_DISPLAY_ORDER_STORAGE_KEY,
+        displayOrderMode,
+      );
+    } catch {
+      // The display preference remains available for the current session.
+    }
+  }, [displayOrderMode, displayOrderPreferenceLoaded]);
 
   const [accountEditorState, setAccountEditorState] =
     useState<AccountEditorState | null>(null);
@@ -179,10 +214,10 @@ export default function AccountsPage() {
       return matchSearch && matchPlan && matchStatus;
     });
 
-    // Availability grouping is presentation-only. The persisted sort values stay untouched,
+    // Display grouping is presentation-only. The persisted sort values stay untouched,
     // so gateway account routing continues to use the configured account order.
-    return groupAccountsByAvailability(matchedAccounts);
-  }, [accounts, planFilter, search, statusFilter]);
+    return groupAccountsByDisplayOrder(matchedAccounts, displayOrderMode);
+  }, [accounts, displayOrderMode, planFilter, search, statusFilter]);
 
   const statusFilterOptions = useMemo(
     () => [
@@ -619,7 +654,9 @@ const toggleCleanupStatus = (rawStatus: string) => {
     direction: AccountMoveDirection,
   ) => {
     const originalGroup = accounts.filter(
-      (item) => item.isAvailable === account.isAvailable,
+      (item) =>
+        isAccountInFirstDisplayGroup(item, displayOrderMode) ===
+        isAccountInFirstDisplayGroup(account, displayOrderMode),
     );
     let placement: AccountMovePlacement;
 
@@ -811,6 +848,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       search={search}
       planFilter={planFilter}
       statusFilter={statusFilter}
+      displayOrderMode={displayOrderMode}
       pageSize={pageSize}
       safePage={safePage}
       totalPages={totalPages}
@@ -887,6 +925,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       handleSearchChange={handleSearchChange}
       handlePlanFilterChange={handlePlanFilterChange}
       handleStatusFilterChange={handleStatusFilterChange}
+      setDisplayOrderMode={setDisplayOrderMode}
       handlePageSizeChange={handlePageSizeChange}
       toggleSelect={toggleSelect}
       toggleSelectAllVisible={toggleSelectAllVisible}

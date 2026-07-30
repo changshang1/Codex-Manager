@@ -42,6 +42,28 @@ test("availability grouping is stable and does not rewrite persisted sort", () =
   assert.deepEqual(accounts.map((account) => account.sort), [1, 2, 3]);
 });
 
+test("access ordering puts non-disabled accounts first without changing sort", () => {
+  const accounts = [
+    { id: "disabled", sort: 0, status: "disabled", isAvailable: false },
+    { id: "limited", sort: 5, status: "active", isAvailable: false },
+    { id: "available", sort: 10, status: "active", isAvailable: true },
+  ];
+
+  assert.deepEqual(
+    ordering
+      .groupAccountsByDisplayOrder(accounts, "access")
+      .map((account) => account.id),
+    ["limited", "available", "disabled"],
+  );
+  assert.deepEqual(accounts.map((account) => account.sort), [0, 5, 10]);
+});
+
+test("invalid persisted display order falls back to availability", () => {
+  assert.equal(ordering.normalizeAccountDisplayOrderMode("access"), "access");
+  assert.equal(ordering.normalizeAccountDisplayOrderMode("unknown"), "availability");
+  assert.equal(ordering.normalizeAccountDisplayOrderMode(null), "availability");
+});
+
 test("same-availability moves reuse that group's original sort slots", () => {
   const availableFirst = {
     id: "available-1",

@@ -103,6 +103,8 @@ import {
   formatPlanFilterLabel,
   formatStatusFilterLabel,
 } from "@/app/accounts/accounts-page-helpers";
+import type { AccountDisplayOrderMode } from "@/lib/account-ordering";
+import { isAccountInFirstDisplayGroup } from "@/lib/account-ordering";
 
 interface PlanTypeOption {
   value: string;
@@ -130,6 +132,7 @@ export interface AccountsPageViewProps {
   search: string;
   planFilter: string;
   statusFilter: StatusFilter;
+  displayOrderMode: AccountDisplayOrderMode;
   pageSize: string;
   safePage: number;
   totalPages: number;
@@ -206,6 +209,7 @@ export interface AccountsPageViewProps {
   handleSearchChange: (value: string) => void;
   handlePlanFilterChange: (value: string | null) => void;
   handleStatusFilterChange: (value: StatusFilter) => void;
+  setDisplayOrderMode: Dispatch<SetStateAction<AccountDisplayOrderMode>>;
   handlePageSizeChange: (value: string | null) => void;
   toggleSelect: (id: string) => void;
   toggleSelectAllVisible: () => void;
@@ -258,6 +262,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     search,
     planFilter,
     statusFilter,
+    displayOrderMode,
     pageSize,
     safePage,
     totalPages,
@@ -330,6 +335,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     handleSearchChange,
     handlePlanFilterChange,
     handleStatusFilterChange,
+    setDisplayOrderMode,
     handlePageSizeChange,
     toggleSelect,
     toggleSelectAllVisible,
@@ -439,6 +445,32 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     {filter.label}
                   </SelectItem>
                 ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select
+              value={displayOrderMode}
+              onValueChange={(value) =>
+                setDisplayOrderMode(value as AccountDisplayOrderMode)
+              }
+            >
+              <SelectTrigger className="h-10 w-full min-w-0 rounded-xl bg-card/50 sm:w-[176px] sm:shrink-0">
+                <SelectValue placeholder={t("显示顺序")}>
+                  {(value) =>
+                    String(value) === "access"
+                      ? t("允许接入优先")
+                      : t("可用状态优先")
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="availability">
+                    {t("可用状态优先")}
+                  </SelectItem>
+                  <SelectItem value="access">
+                    {t("允许接入优先")}
+                  </SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
@@ -906,19 +938,28 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     filteredIndex < filteredAccounts.length - 1;
                   const canMoveWithinGroupUp =
                     canMoveUp &&
-                    filteredAccounts[filteredIndex - 1]?.isAvailable ===
-                      account.isAvailable;
+                    filteredAccounts[filteredIndex - 1] &&
+                    isAccountInFirstDisplayGroup(
+                      filteredAccounts[filteredIndex - 1],
+                      displayOrderMode,
+                    ) ===
+                      isAccountInFirstDisplayGroup(account, displayOrderMode);
                   const canMoveWithinGroupDown =
                     canMoveDown &&
-                    filteredAccounts[filteredIndex + 1]?.isAvailable ===
-                      account.isAvailable;
-                  const availabilityGroup = accounts.filter(
-                    (item) => item.isAvailable === account.isAvailable,
+                    filteredAccounts[filteredIndex + 1] &&
+                    isAccountInFirstDisplayGroup(
+                      filteredAccounts[filteredIndex + 1],
+                      displayOrderMode,
+                    ) ===
+                      isAccountInFirstDisplayGroup(account, displayOrderMode);
+                  const displayGroup = accounts.filter(
+                    (item) =>
+                      isAccountInFirstDisplayGroup(item, displayOrderMode) ===
+                      isAccountInFirstDisplayGroup(account, displayOrderMode),
                   );
-                  const isAtListTop = availabilityGroup[0]?.id === account.id;
+                  const isAtListTop = displayGroup[0]?.id === account.id;
                   const isAtListBottom =
-                    availabilityGroup[availabilityGroup.length - 1]?.id ===
-                    account.id;
+                    displayGroup[displayGroup.length - 1]?.id === account.id;
                   const accessEnabled =
                     String(account.status || "").trim().toLowerCase() !==
                     "disabled";
