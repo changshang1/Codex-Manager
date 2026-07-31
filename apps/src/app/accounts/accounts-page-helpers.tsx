@@ -803,24 +803,31 @@ export function AccountInfoCell({
                 <span className="truncate">{groupName}</span>
               </Badge>
             ) : null}
-            {warrantyIncident ? (
-              <Badge
-                variant="destructive"
-                className="h-5 shrink-0 px-2 text-[10px] font-semibold"
-              >
-                {t("质保内失效")}
-              </Badge>
-            ) : null}
-            {warrantyExpiresOn ? (
+          </div>
+          {warrantyExpiresOn ? (
+            <div className="mt-1.5 flex min-h-5 min-w-0 flex-wrap items-center gap-1.5">
+              {warrantyIncident ? (
+                <Badge
+                  variant="destructive"
+                  className="h-5 shrink-0 px-2 text-[10px] font-semibold"
+                >
+                  {t("质保内失效")}
+                </Badge>
+              ) : null}
               <Badge
                 variant="outline"
-                className="h-5 shrink-0 border-border/70 px-2 text-[10px] font-medium text-muted-foreground"
+                className="h-5 max-w-full shrink-0 border-border/70 px-2 text-[10px] font-medium text-muted-foreground"
               >
                 {t("质保至")} {warrantyExpiresOn}
               </Badge>
-            ) : null}
-          </div>
-          <span className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
+            </div>
+          ) : null}
+          <span
+            className={cn(
+              "text-[11px] leading-4 text-muted-foreground",
+              warrantyExpiresOn ? "mt-1" : "mt-1.5",
+            )}
+          >
             {t("最近刷新")}:{" "}
             {formatTsFromSeconds(account.lastRefreshAt, t("从未刷新"))}
           </span>
