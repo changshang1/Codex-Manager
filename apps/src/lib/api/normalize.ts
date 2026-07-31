@@ -439,6 +439,10 @@ export function normalizeAccount(item: unknown, usage?: AccountUsage | null): Ac
     sort: asInteger(source.sort ?? source.priority, 0, 0),
     status,
     statusReason,
+    refreshTokenInvalidReason:
+      asString(
+        source.refreshTokenInvalidReason ?? source.refresh_token_invalid_reason,
+      ) || null,
     hasToken,
     planType:
       asString(source.planType ?? source.plan_type ?? source.subscriptionPlan ?? source.subscription_plan) ||

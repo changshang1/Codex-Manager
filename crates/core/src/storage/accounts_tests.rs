@@ -175,6 +175,146 @@ fn update_account_warranty_date_is_visible_in_summary_rows_and_can_be_cleared() 
 }
 
 #[test]
+fn refresh_token_invalid_reason_tracks_current_credentials_independently() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    let account = sample_account("acc-refresh-health", "disabled", now);
+    storage.insert_account(&account).expect("insert account");
+    let mut token = sample_token(&account.id, now);
+    token.refresh_token = "refresh-old".to_string();
+    storage.insert_token(&token).expect("insert token");
+
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            &account.id,
+            "refresh-old",
+            "refresh_token_invalid:refresh_token_invalidated",
+        )
+        .expect("mark current refresh token invalid"));
+    storage
+        .update_account_status_if_changed(&account.id, "disabled")
+        .expect("keep account manually disabled");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list account summary rows");
+    assert_eq!(
+        rows[0].refresh_token_invalid_reason.as_deref(),
+        Some("refresh_token_invalid:refresh_token_invalidated")
+    );
+
+    token.access_token = "access-reimported".to_string();
+    storage
+        .insert_token(&token)
+        .expect("reimport same refresh token");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list after same token import");
+    assert_eq!(
+        rows[0].refresh_token_invalid_reason.as_deref(),
+        Some("refresh_token_invalid:refresh_token_invalidated")
+    );
+
+    storage
+        .insert_verified_token(&token)
+        .expect("persist verified refresh result");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list after verified refresh");
+    assert_eq!(rows[0].refresh_token_invalid_reason, None);
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            &account.id,
+            "refresh-old",
+            "refresh_token_invalid:refresh_token_invalidated",
+        )
+        .expect("mark current token invalid again"));
+
+    token.refresh_token = "refresh-new".to_string();
+    storage.insert_token(&token).expect("replace refresh token");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list after token replacement");
+    assert_eq!(rows[0].refresh_token_invalid_reason, None);
+    assert!(!storage
+        .mark_account_refresh_token_invalid_if_current(
+            &account.id,
+            "refresh-old",
+            "refresh_token_invalid:refresh_token_invalidated",
+        )
+        .expect("ignore stale refresh failure"));
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            &account.id,
+            "refresh-new",
+            "refresh_token_invalid:refresh_token_expired",
+        )
+        .expect("mark replacement token invalid"));
+    token.refresh_token = String::new();
+    storage
+        .insert_token(&token)
+        .expect("persist token without refresh credential");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list after empty refresh token import");
+    assert_eq!(
+        rows[0].refresh_token_invalid_reason.as_deref(),
+        Some("refresh_token_invalid:refresh_token_expired")
+    );
+    assert!(storage
+        .clear_account_refresh_token_invalid(&account.id)
+        .expect("clear refresh token invalid reason"));
+}
+
+#[test]
+fn stale_verified_refresh_result_does_not_replace_new_credentials_or_clear_incident() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    let account = sample_account("acc-stale-refresh-success", "disabled", now);
+    storage.insert_account(&account).expect("insert account");
+
+    let mut old_token = sample_token(&account.id, now);
+    old_token.refresh_token = "refresh-old".to_string();
+    storage.insert_token(&old_token).expect("insert old token");
+
+    let mut new_token = old_token.clone();
+    new_token.access_token = "access-new".to_string();
+    new_token.refresh_token = "refresh-new".to_string();
+    new_token.last_refresh = now.saturating_add(1);
+    storage.insert_token(&new_token).expect("import new token");
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            &account.id,
+            "refresh-new",
+            "refresh_token_invalid:refresh_token_expired",
+        )
+        .expect("mark new token invalid"));
+
+    let mut stale_result = old_token;
+    stale_result.access_token = "access-from-stale-refresh".to_string();
+    stale_result.refresh_token = "refresh-rotated-by-stale-request".to_string();
+    stale_result.last_refresh = now.saturating_add(2);
+    assert!(!storage
+        .persist_verified_token_if_current(&stale_result, "refresh-old")
+        .expect("reject stale refresh result"));
+
+    let persisted = storage
+        .find_token_by_account_id(&account.id)
+        .expect("find current token")
+        .expect("current token exists");
+    assert_eq!(persisted.access_token, "access-new");
+    assert_eq!(persisted.refresh_token, "refresh-new");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list account summary rows");
+    assert_eq!(
+        rows[0].refresh_token_invalid_reason.as_deref(),
+        Some("refresh_token_invalid:refresh_token_expired")
+    );
+}
+
+#[test]
 fn upsert_imported_account_bundle_merges_metadata_and_token_in_one_call() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -183,6 +323,17 @@ fn upsert_imported_account_bundle_merges_metadata_and_token_in_one_call() {
     let mut account = sample_account("acc-import-bundle", "active", now);
     account.label = "Original".to_string();
     storage.insert_account(&account).expect("insert account");
+    let original_token = sample_token(&account.id, now);
+    storage
+        .insert_token(&original_token)
+        .expect("insert original token");
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            &account.id,
+            &original_token.refresh_token,
+            "refresh_token_invalid:refresh_token_invalidated",
+        )
+        .expect("mark original token invalid"));
     storage
         .upsert_account_metadata(&account.id, Some("keep note"), Some("old tag"))
         .expect("insert metadata");
@@ -215,6 +366,10 @@ fn upsert_imported_account_bundle_merges_metadata_and_token_in_one_call() {
         .expect("token exists");
     assert_eq!(found_token.access_token, "imported-access");
     assert_eq!(found_token.refresh_token, "imported-refresh");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list summary after credential replacement");
+    assert_eq!(rows[0].refresh_token_invalid_reason, None);
 }
 
 #[test]
@@ -954,11 +1109,13 @@ fn list_account_summary_rows_reads_only_list_fields() {
     assert_eq!(rows[0].label, "Second Summary");
     assert_eq!(rows[0].group_name, None);
     assert_eq!(rows[0].warranty_expires_on, None);
+    assert_eq!(rows[0].refresh_token_invalid_reason, None);
     assert_eq!(rows[0].sort, 0);
     assert_eq!(rows[0].status, "disabled");
     assert_eq!(rows[1].id, "acc-first-summary-row");
     assert_eq!(rows[1].group_name.as_deref(), Some("team-a"));
     assert_eq!(rows[1].warranty_expires_on, None);
+    assert_eq!(rows[1].refresh_token_invalid_reason, None);
     assert_eq!(rows[1].status, "active");
 }
 

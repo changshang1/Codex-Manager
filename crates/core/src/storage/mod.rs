@@ -184,6 +184,7 @@ pub struct AccountListSummaryRow {
     pub label: String,
     pub group_name: Option<String>,
     pub warranty_expires_on: Option<String>,
+    pub refresh_token_invalid_reason: Option<String>,
     pub sort: i64,
     pub status: String,
 }
@@ -2343,6 +2344,11 @@ impl Storage {
             "133_accounts_warranty_expires_on",
             include_str!("../../migrations/133_accounts_warranty_expires_on.sql"),
             |s| s.ensure_account_warranty_expires_on_column(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "134_accounts_refresh_token_invalid_reason",
+            include_str!("../../migrations/134_accounts_refresh_token_invalid_reason.sql"),
+            |s| s.ensure_account_refresh_token_invalid_reason_column(),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

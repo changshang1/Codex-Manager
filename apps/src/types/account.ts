@@ -48,6 +48,7 @@ export interface Account {
   sort: number;
   status: string;
   statusReason: string;
+  refreshTokenInvalidReason: string | null;
   hasToken: boolean;
   planType: string | null;
   planTypeRaw: string | null;

@@ -183,6 +183,20 @@ impl Storage {
         }
 
         tx.execute(
+            "UPDATE accounts
+             SET refresh_token_invalid_reason = NULL
+             WHERE id = ?1
+               AND refresh_token_invalid_reason IS NOT NULL
+               AND TRIM(?2) <> ''
+               AND NOT EXISTS (
+                    SELECT 1
+                    FROM tokens
+                    WHERE account_id = ?1
+                      AND refresh_token = ?2
+               )",
+            (&token.account_id, &token.refresh_token),
+        )?;
+        tx.execute(
             "INSERT INTO tokens (account_id, id_token, access_token, refresh_token, api_key_access_token, last_refresh)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(account_id) DO UPDATE SET
@@ -690,8 +704,9 @@ impl Storage {
                 label: row.get(1)?,
                 group_name: row.get(2)?,
                 warranty_expires_on: row.get(3)?,
-                sort: row.get(4)?,
-                status: row.get(5)?,
+                refresh_token_invalid_reason: row.get(4)?,
+                sort: row.get(5)?,
+                status: row.get(6)?,
             })
         })?;
         rows.collect()
@@ -1163,6 +1178,39 @@ impl Storage {
         Ok(())
     }
 
+    pub fn mark_account_refresh_token_invalid_if_current(
+        &self,
+        account_id: &str,
+        attempted_refresh_token: &str,
+        reason: &str,
+    ) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE accounts
+             SET refresh_token_invalid_reason = ?1
+             WHERE id = ?2
+               AND refresh_token_invalid_reason IS NOT ?1
+               AND EXISTS (
+                    SELECT 1
+                    FROM tokens
+                    WHERE account_id = accounts.id
+                      AND refresh_token = ?3
+               )",
+            (reason, account_id, attempted_refresh_token),
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn clear_account_refresh_token_invalid(&self, account_id: &str) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE accounts
+             SET refresh_token_invalid_reason = NULL
+             WHERE id = ?1
+               AND refresh_token_invalid_reason IS NOT NULL",
+            [account_id],
+        )?;
+        Ok(changed > 0)
+    }
+
     pub fn update_account_workspace_identity(
         &self,
         account_id: &str,
@@ -1347,6 +1395,10 @@ impl Storage {
 
     pub(super) fn ensure_account_warranty_expires_on_column(&self) -> Result<()> {
         self.ensure_column("accounts", "warranty_expires_on", "TEXT")
+    }
+
+    pub(super) fn ensure_account_refresh_token_invalid_reason_column(&self) -> Result<()> {
+        self.ensure_column("accounts", "refresh_token_invalid_reason", "TEXT")
     }
 
     pub(super) fn ensure_accounts_list_order_index(&self) -> Result<()> {

@@ -21,7 +21,84 @@ impl Storage {
     /// # 返回
     /// 返回函数执行结果
     pub fn insert_token(&self, token: &Token) -> Result<()> {
-        self.conn.execute(
+        self.insert_token_with_refresh_verification(token, false)
+    }
+
+    pub fn insert_verified_token(&self, token: &Token) -> Result<()> {
+        self.insert_token_with_refresh_verification(token, true)
+    }
+
+    pub fn persist_verified_token_if_current(
+        &self,
+        token: &Token,
+        attempted_refresh_token: &str,
+    ) -> Result<bool> {
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE tokens
+             SET id_token = ?2,
+                 access_token = ?3,
+                 refresh_token = ?4,
+                 api_key_access_token = ?5,
+                 last_refresh = ?6
+             WHERE account_id = ?1
+               AND refresh_token = ?7",
+            rusqlite::params![
+                &token.account_id,
+                &token.id_token,
+                &token.access_token,
+                &token.refresh_token,
+                &token.api_key_access_token,
+                token.last_refresh,
+                attempted_refresh_token,
+            ],
+        )?;
+        if changed == 0 {
+            tx.commit()?;
+            return Ok(false);
+        }
+        tx.execute(
+            "UPDATE accounts
+             SET refresh_token_invalid_reason = NULL
+             WHERE id = ?1
+               AND refresh_token_invalid_reason IS NOT NULL",
+            [&token.account_id],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn insert_token_with_refresh_verification(
+        &self,
+        token: &Token,
+        refresh_verified: bool,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        if refresh_verified {
+            tx.execute(
+                "UPDATE accounts
+                 SET refresh_token_invalid_reason = NULL
+                 WHERE id = ?1
+                   AND refresh_token_invalid_reason IS NOT NULL",
+                [&token.account_id],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE accounts
+                 SET refresh_token_invalid_reason = NULL
+                 WHERE id = ?1
+                   AND refresh_token_invalid_reason IS NOT NULL
+                   AND TRIM(?2) <> ''
+                   AND NOT EXISTS (
+                        SELECT 1
+                        FROM tokens
+                        WHERE account_id = ?1
+                          AND refresh_token = ?2
+                   )",
+                (&token.account_id, &token.refresh_token),
+            )?;
+        }
+        tx.execute(
             "INSERT INTO tokens (account_id, id_token, access_token, refresh_token, api_key_access_token, last_refresh)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(account_id) DO UPDATE SET
@@ -39,6 +116,7 @@ impl Storage {
                 token.last_refresh,
             ),
         )?;
+        tx.commit()?;
         Ok(())
     }
 

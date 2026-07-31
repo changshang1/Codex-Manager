@@ -102,6 +102,61 @@ fn start_region_blocked_refresh_server() -> (
     (url, rx, handle)
 }
 
+fn start_invalidated_refresh_server() -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    let server = Server::http("127.0.0.1:0").expect("start refresh mock server");
+    let url = format!("http://{}/oauth/token", server.server_addr());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let mut request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("refresh mock timeout")
+            .expect("receive refresh request");
+        let mut body = String::new();
+        request
+            .as_reader()
+            .read_to_string(&mut body)
+            .expect("read refresh request body");
+        tx.send(body).expect("send refresh request body");
+        request
+            .respond(
+                Response::from_string("{\"error\":\"refresh_token_invalidated\"}")
+                    .with_status_code(TinyStatusCode(401)),
+            )
+            .expect("respond refresh request");
+    });
+    (url, rx, handle)
+}
+
+fn start_successful_refresh_server() -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    thread::JoinHandle<()>,
+) {
+    let server = Server::http("127.0.0.1:0").expect("start refresh mock server");
+    let url = format!("http://{}/oauth/token", server.server_addr());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let mut request = server
+            .recv_timeout(Duration::from_secs(5))
+            .expect("refresh mock timeout")
+            .expect("receive refresh request");
+        let mut body = String::new();
+        request
+            .as_reader()
+            .read_to_string(&mut body)
+            .expect("read refresh request body");
+        tx.send(body).expect("send refresh request body");
+        request
+            .respond(Response::from_string("{\"access_token\":\"access-new\"}"))
+            .expect("respond refresh request");
+    });
+    (url, rx, handle)
+}
+
 #[test]
 fn recover_refresh_race_uses_latest_token_when_refresh_token_changed() {
     let storage = Storage::open_in_memory().expect("open");
@@ -143,6 +198,89 @@ fn recover_refresh_race_keeps_error_when_refresh_token_unchanged() {
 
     assert!(!recovered);
     assert_eq!(token.refresh_token, "refresh-old");
+}
+
+#[test]
+fn refresh_failure_persists_invalid_reason_without_changing_manual_status() {
+    let _guard = crate::test_env_guard();
+    let _ = crate::usage_http::usage_http_client();
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    insert_account(&storage, "acc-invalidated");
+    storage
+        .update_account_status_if_changed("acc-invalidated", "disabled")
+        .expect("disable account");
+    let mut token = token_with_refresh("acc-invalidated", "refresh-revoked");
+    storage.insert_token(&token).expect("insert token");
+    let (url, rx, handle) = start_invalidated_refresh_server();
+    let _restore = EnvVarRestore::set("CODEX_REFRESH_TOKEN_URL_OVERRIDE", &url);
+
+    let err = refresh_and_persist_access_token(
+        &storage,
+        &mut token,
+        "https://auth.openai.com",
+        "client-id",
+        token_refresh_ahead_secs(),
+    )
+    .expect_err("invalidated refresh should fail");
+    let body = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("receive refresh request body");
+    handle.join().expect("join refresh mock server");
+
+    assert!(body.contains("refresh_token=refresh-revoked"));
+    assert!(err.contains("refresh token was revoked"));
+    let account = storage
+        .find_account_by_id("acc-invalidated")
+        .expect("find account")
+        .expect("account exists");
+    assert_eq!(account.status, "disabled");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list account summaries");
+    assert_eq!(
+        rows[0].refresh_token_invalid_reason.as_deref(),
+        Some("refresh_token_invalid:refresh_token_invalidated")
+    );
+}
+
+#[test]
+fn successful_refresh_clears_invalid_reason_when_refresh_token_is_not_rotated() {
+    let _guard = crate::test_env_guard();
+    let _ = crate::usage_http::usage_http_client();
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    insert_account(&storage, "acc-refresh-recovered");
+    let mut token = token_with_refresh("acc-refresh-recovered", "refresh-same");
+    storage.insert_token(&token).expect("insert token");
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            "acc-refresh-recovered",
+            "refresh-same",
+            "refresh_token_invalid:refresh_token_invalidated",
+        )
+        .expect("mark token invalid"));
+    let (url, rx, handle) = start_successful_refresh_server();
+    let _restore = EnvVarRestore::set("CODEX_REFRESH_TOKEN_URL_OVERRIDE", &url);
+
+    refresh_and_persist_access_token(
+        &storage,
+        &mut token,
+        "https://auth.openai.com",
+        "client-id",
+        token_refresh_ahead_secs(),
+    )
+    .expect("refresh succeeds");
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("receive refresh request body");
+    handle.join().expect("join refresh mock server");
+
+    assert_eq!(token.access_token, "access-new");
+    assert_eq!(token.refresh_token, "refresh-same");
+    let rows = storage
+        .list_account_summary_rows()
+        .expect("list account summaries");
+    assert_eq!(rows[0].refresh_token_invalid_reason, None);
 }
 
 #[test]

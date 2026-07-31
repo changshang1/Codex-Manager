@@ -26,6 +26,7 @@ struct AccountSummaryParts {
     label: String,
     group_name: Option<String>,
     warranty_expires_on: Option<String>,
+    refresh_token_invalid_reason: Option<String>,
     sort: i64,
     status: String,
 }
@@ -37,6 +38,7 @@ impl From<Account> for AccountSummaryParts {
             label: account.label,
             group_name: account.group_name,
             warranty_expires_on: None,
+            refresh_token_invalid_reason: None,
             sort: account.sort,
             status: account.status,
         }
@@ -50,6 +52,7 @@ impl From<AccountListSummaryRow> for AccountSummaryParts {
             label: account.label,
             group_name: account.group_name,
             warranty_expires_on: account.warranty_expires_on,
+            refresh_token_invalid_reason: account.refresh_token_invalid_reason,
             sort: account.sort,
             status: account.status,
         }
@@ -76,6 +79,7 @@ impl From<&Account> for AccountSummaryParts {
             label: account.label.clone(),
             group_name: account.group_name.clone(),
             warranty_expires_on: None,
+            refresh_token_invalid_reason: None,
             sort: account.sort,
             status: account.status.clone(),
         }
@@ -194,6 +198,7 @@ fn to_account_summary_with_reason(
         sort: parts.sort,
         status: parts.status,
         status_reason,
+        refresh_token_invalid_reason: parts.refresh_token_invalid_reason,
         has_token,
         plan_type,
         plan_type_raw,
@@ -441,6 +446,7 @@ where
         label,
         group_name,
         warranty_expires_on,
+        refresh_token_invalid_reason,
         sort,
         status,
     } = account;
@@ -468,6 +474,7 @@ where
             label,
             group_name,
             warranty_expires_on,
+            refresh_token_invalid_reason,
             sort,
             status,
         },

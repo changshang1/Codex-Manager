@@ -6,7 +6,7 @@ interface AccountOrderItem {
   priority?: number;
   isAvailable: boolean;
   status?: string;
-  statusReason?: string;
+  refreshTokenInvalidReason?: string | null;
   warrantyExpiresOn?: string | null;
 }
 
@@ -72,11 +72,15 @@ export function isAccountWarrantyIncident(
   today = getLocalDateKey(),
 ): boolean {
   const warrantyExpiresOn = String(account.warrantyExpiresOn || "").trim();
-  const statusReason = String(account.statusReason || "").trim().toLowerCase();
+  const refreshTokenInvalidReason = String(
+    account.refreshTokenInvalidReason || "",
+  )
+    .trim()
+    .toLowerCase();
   return (
     /^\d{4}-\d{2}-\d{2}$/.test(warrantyExpiresOn) &&
     warrantyExpiresOn >= today &&
-    statusReason.startsWith("refresh_token_invalid:")
+    refreshTokenInvalidReason.startsWith("refresh_token_invalid:")
   );
 }
 

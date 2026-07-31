@@ -51,6 +51,7 @@ pub(crate) fn refresh_and_persist_access_token(
         }
         *token = latest;
     }
+    let attempted_refresh_token = token.refresh_token.clone();
 
     let refresh_client_id = token_refresh_client_id(token, client_id);
     let proxy_mode = crate::account_proxy::resolve_account_proxy_mode(token.account_id.as_str());
@@ -86,6 +87,12 @@ pub(crate) fn refresh_and_persist_access_token(
             )? {
                 return Ok(());
             }
+            mark_refresh_token_invalid_if_current(
+                storage,
+                &token.account_id,
+                &attempted_refresh_token,
+                &err,
+            );
             return Err(err);
         }
     };
@@ -104,11 +111,50 @@ pub(crate) fn refresh_and_persist_access_token(
     }
 
     token.last_refresh = now_ts();
-    storage.insert_token(token).map_err(|err| err.to_string())?;
+    let persisted = storage
+        .persist_verified_token_if_current(token, &attempted_refresh_token)
+        .map_err(|err| err.to_string())?;
+    if !persisted {
+        let latest = storage
+            .find_token_by_account_id(&token.account_id)
+            .map_err(|err| err.to_string())?
+            .ok_or_else(|| {
+                "account token was removed while refresh request was in flight".to_string()
+            })?;
+        *token = latest;
+        return Ok(());
+    }
     let access_exp = extract_token_exp(&token.access_token);
     let next_refresh_at = next_refresh_at_from_token(token, refresh_ahead_secs);
     let _ = storage.update_token_refresh_schedule(&token.account_id, access_exp, next_refresh_at);
     Ok(())
+}
+
+pub(crate) fn mark_refresh_token_invalid_if_current(
+    storage: &Storage,
+    account_id: &str,
+    attempted_refresh_token: &str,
+    err: &str,
+) -> bool {
+    let Some(reason) = refresh_token_auth_error_reason_from_message(err) else {
+        return false;
+    };
+    let status_reason = format!("refresh_token_invalid:{}", reason.as_code());
+    match storage.mark_account_refresh_token_invalid_if_current(
+        account_id,
+        attempted_refresh_token,
+        &status_reason,
+    ) {
+        Ok(marked) => marked,
+        Err(storage_err) => {
+            log::warn!(
+                "persist refresh token invalid reason failed: account_id={} error={}",
+                account_id,
+                storage_err
+            );
+            false
+        }
+    }
 }
 
 pub(crate) fn token_refresh_ahead_secs() -> i64 {

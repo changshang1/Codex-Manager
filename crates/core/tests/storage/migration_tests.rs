@@ -724,6 +724,18 @@ fn init_tracks_schema_migrations_and_is_idempotent() {
     assert!(storage
         .has_column("accounts", "warranty_expires_on")
         .expect("check accounts.warranty_expires_on"));
+    let applied_134: i64 = storage
+        .conn
+        .query_row(
+            "SELECT COUNT(1) FROM schema_migrations WHERE version = '134_accounts_refresh_token_invalid_reason'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count 134 migration");
+    assert_eq!(applied_134, 1);
+    assert!(storage
+        .has_column("accounts", "refresh_token_invalid_reason")
+        .expect("check accounts.refresh_token_invalid_reason"));
     for column in [
         "auto_toggle_enabled",
         "consecutive_failures",
@@ -907,6 +919,86 @@ fn sql_migration_can_fallback_to_compat_when_schema_already_exists() {
         )
         .expect("count 004 migration");
     assert_eq!(applied_004, 1);
+}
+
+#[test]
+fn refresh_token_invalid_reason_migration_backfills_unresolved_legacy_events() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage
+        .conn
+        .execute_batch(
+            "CREATE TABLE accounts (id TEXT PRIMARY KEY);
+             CREATE TABLE tokens (
+               account_id TEXT PRIMARY KEY,
+               refresh_token TEXT NOT NULL,
+               last_refresh INTEGER NOT NULL
+             );
+             CREATE TABLE events (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               account_id TEXT,
+               type TEXT NOT NULL,
+               message TEXT NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+             INSERT INTO accounts (id)
+             VALUES ('acc-unresolved'), ('acc-disabled-only'), ('acc-recovered');
+             INSERT INTO tokens (account_id, refresh_token, last_refresh)
+             VALUES
+               ('acc-unresolved', 'refresh-a', 100),
+               ('acc-disabled-only', 'refresh-c', 100),
+               ('acc-recovered', 'refresh-b', 300);
+             INSERT INTO events (account_id, type, message, created_at) VALUES
+               ('acc-unresolved', 'account_status_update',
+                'status=unavailable reason=refresh_token_invalid:refresh_token_invalidated', 200),
+               ('acc-unresolved', 'account_status_update',
+                'status=disabled reason=manual_disable', 201),
+               ('acc-disabled-only', 'usage_refresh_failed',
+                'refresh token failed with status 401 Unauthorized: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.', 200),
+               ('acc-recovered', 'account_status_update',
+                'status=unavailable reason=refresh_token_invalid:refresh_token_expired', 200);",
+        )
+        .expect("create legacy refresh token health schema");
+
+    storage
+        .conn
+        .execute_batch(include_str!(
+            "../../migrations/134_accounts_refresh_token_invalid_reason.sql"
+        ))
+        .expect("apply refresh token invalid reason migration");
+
+    let unresolved: Option<String> = storage
+        .conn
+        .query_row(
+            "SELECT refresh_token_invalid_reason FROM accounts WHERE id = 'acc-unresolved'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read unresolved reason");
+    let recovered: Option<String> = storage
+        .conn
+        .query_row(
+            "SELECT refresh_token_invalid_reason FROM accounts WHERE id = 'acc-recovered'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read recovered reason");
+    let disabled_only: Option<String> = storage
+        .conn
+        .query_row(
+            "SELECT refresh_token_invalid_reason FROM accounts WHERE id = 'acc-disabled-only'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read disabled-only reason");
+    assert_eq!(
+        unresolved.as_deref(),
+        Some("refresh_token_invalid:refresh_token_invalidated")
+    );
+    assert_eq!(
+        disabled_only.as_deref(),
+        Some("refresh_token_invalid:refresh_token_invalidated")
+    );
+    assert_eq!(recovered, None);
 }
 
 #[test]

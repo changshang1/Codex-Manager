@@ -64,8 +64,9 @@ test("in-warranty refresh-token incidents are placed before every display group"
     {
       id: "warranty-incident",
       sort: 5,
-      status: "unavailable",
-      statusReason: "refresh_token_invalid:expired",
+      status: "disabled",
+      statusReason: "manual_disable",
+      refreshTokenInvalidReason: "refresh_token_invalid:refresh_token_expired",
       warrantyExpiresOn: "2999-08-06",
       isAvailable: false,
     },
@@ -90,8 +91,9 @@ test("warranty incidents require an unexpired date and explicit refresh-token in
   const base = {
     id: "account",
     sort: 0,
-    status: "unavailable",
-    statusReason: "refresh_token_invalid:expired",
+    status: "disabled",
+    statusReason: "manual_disable",
+    refreshTokenInvalidReason: "refresh_token_invalid:refresh_token_expired",
     warrantyExpiresOn: "2026-08-06",
     isAvailable: false,
   };
@@ -100,17 +102,21 @@ test("warranty incidents require an unexpired date and explicit refresh-token in
   assert.equal(ordering.isAccountWarrantyIncident(base, "2026-08-07"), false);
   assert.equal(
     ordering.isAccountWarrantyIncident(
-      { ...base, statusReason: "usage_http_401" },
+      { ...base, refreshTokenInvalidReason: "usage_http_401" },
       "2026-08-01",
     ),
     false,
   );
   assert.equal(
     ordering.isAccountWarrantyIncident(
-      { ...base, status: "disabled" },
+      {
+        ...base,
+        refreshTokenInvalidReason: null,
+        statusReason: "refresh_token_invalid:refresh_token_expired",
+      },
       "2026-08-01",
     ),
-    true,
+    false,
   );
 });
 

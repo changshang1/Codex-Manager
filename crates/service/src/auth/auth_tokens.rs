@@ -1441,7 +1441,7 @@ pub(crate) fn complete_login_with_redirect(
             last_refresh: now,
         };
         storage
-            .insert_token(&token)
+            .insert_verified_token(&token)
             .map_err(|err| err.to_string())?;
 
         let db_path =

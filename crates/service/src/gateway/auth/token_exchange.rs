@@ -9,6 +9,7 @@ use crate::auth_tokens;
 use crate::usage_http::{
     log_account_data_route, refresh_access_token, refresh_access_token_with_explicit_proxy,
 };
+use crate::usage_token_refresh::mark_refresh_token_invalid_if_current;
 
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_TTL_SECS: i64 = 30 * 60;
 const ACCOUNT_TOKEN_EXCHANGE_LOCK_CLEANUP_INTERVAL_SECS: i64 = 60;
@@ -268,6 +269,7 @@ pub(super) fn resolve_openai_bearer_token(
         Ok(token) => return Ok(token),
         Err(exchange_err) => {
             if !token.refresh_token.trim().is_empty() {
+                let attempted_refresh_token = token.refresh_token.clone();
                 let proxy_mode =
                     crate::account_proxy::resolve_account_proxy_mode(account.id.as_str());
                 log_account_data_route(
@@ -302,7 +304,35 @@ pub(super) fn resolve_openai_bearer_token(
                         if let Some(id_token) = refreshed.id_token {
                             token.id_token = id_token;
                         }
-                        let _ = storage.insert_token(token);
+                        token.last_refresh = now_ts();
+                        match storage
+                            .persist_verified_token_if_current(token, &attempted_refresh_token)
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                let latest = storage
+                                    .find_token_by_account_id(&account.id)
+                                    .map_err(|err| err.to_string())?
+                                    .ok_or_else(|| {
+                                        "account token was removed while refresh request was in flight"
+                                            .to_string()
+                                    })?;
+                                *token = latest;
+                                if let Some(existing) = token
+                                    .api_key_access_token
+                                    .as_deref()
+                                    .and_then(usable_api_key_access_token)
+                                {
+                                    return Ok(existing);
+                                }
+                            }
+                            Err(err) => {
+                                log::warn!(
+                                    "persist refreshed token before bearer exchange failed: {}",
+                                    err
+                                );
+                            }
+                        }
 
                         if !token.id_token.trim().is_empty() {
                             let refreshed_client_id =
@@ -320,6 +350,12 @@ pub(super) fn resolve_openai_bearer_token(
                         }
                     }
                     Err(refresh_err) => {
+                        mark_refresh_token_invalid_if_current(
+                            storage,
+                            &account.id,
+                            &attempted_refresh_token,
+                            &refresh_err,
+                        );
                         if should_mark_account_unavailable_after_refresh_failure_for_bearer_exchange(
                             token,
                         ) && mark_account_unavailable_for_auth_error(
