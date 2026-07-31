@@ -19,6 +19,7 @@
 /apps/.turbo/
 # Build outputs
 /portable/
+/artifacts/
 
 # Worktrees
 /.worktrees/
