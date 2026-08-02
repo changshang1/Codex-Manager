@@ -30,6 +30,7 @@ struct GeminiSseState {
     created_at: Option<i64>,
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_write_tokens: i64,
     output_tokens: i64,
     total_tokens: Option<i64>,
     reasoning_output_tokens: i64,
@@ -483,6 +484,24 @@ impl GeminiSseReader {
                     .and_then(Value::as_i64)
                     .or_else(|| usage.get("cached_input_tokens").and_then(Value::as_i64))
                     .unwrap_or(self.state.cached_input_tokens);
+                self.state.cache_write_tokens = usage
+                    .get("input_tokens_details")
+                    .and_then(Value::as_object)
+                    .and_then(|details| details.get("cache_write_tokens"))
+                    .and_then(Value::as_i64)
+                    .or_else(|| {
+                        usage
+                            .get("prompt_tokens_details")
+                            .and_then(Value::as_object)
+                            .and_then(|details| details.get("cache_write_tokens"))
+                            .and_then(Value::as_i64)
+                    })
+                    .or_else(|| {
+                        usage
+                            .get("cache_write_input_tokens")
+                            .and_then(Value::as_i64)
+                    })
+                    .unwrap_or(self.state.cache_write_tokens);
                 self.state.output_tokens = usage
                     .get("output_tokens")
                     .and_then(Value::as_i64)
@@ -597,6 +616,7 @@ impl GeminiSseReader {
         if let Ok(mut collector) = self.usage_collector.lock() {
             collector.usage.input_tokens = Some(self.state.input_tokens.max(0));
             collector.usage.cached_input_tokens = Some(self.state.cached_input_tokens.max(0));
+            collector.usage.cache_write_tokens = Some(self.state.cache_write_tokens.max(0));
             collector.usage.output_tokens = Some(self.state.output_tokens.max(0));
             collector.usage.total_tokens = self.state.total_tokens.map(|value| value.max(0));
             collector.usage.reasoning_output_tokens =

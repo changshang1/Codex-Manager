@@ -1,7 +1,8 @@
 use super::{
     clear_candidate_cache_for_tests, collect_gateway_candidates,
-    collect_gateway_candidates_with_low_quota_mode, LowQuotaCandidateMode, CANDIDATE_CACHE_TTL_ENV,
-    LOW_QUOTA_THRESHOLD_ENV, QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV,
+    collect_gateway_candidates_with_low_quota_mode, is_low_quota_snapshot_at,
+    LowQuotaCandidateMode, QuotaGuardConfig, CANDIDATE_CACHE_TTL_ENV, LOW_QUOTA_THRESHOLD_ENV,
+    QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK_ENV,
 };
 use crate::account_status::mark_account_unavailable_for_gateway_error;
 use codexmanager_core::storage::{now_ts, Account, Storage, Token, UsageSnapshotRecord};
@@ -18,6 +19,36 @@ fn isolated_test_db_path(name: &str) -> String {
         std::process::id()
     ));
     path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn quota_guard_matches_thresholds_by_window_duration() {
+    let config = QuotaGuardConfig {
+        enabled: true,
+        primary_min_remaining_percent: 15.0,
+        secondary_min_remaining_percent: 5.0,
+        allow_all_low_quota_fallback: false,
+    };
+    let swapped_windows = UsageSnapshotRecord {
+        account_id: "acc-swapped".to_string(),
+        used_percent: Some(90.0),
+        window_minutes: Some(10_080),
+        resets_at: None,
+        secondary_used_percent: Some(90.0),
+        secondary_window_minutes: Some(300),
+        secondary_resets_at: None,
+        credits_json: None,
+        captured_at: now_ts(),
+    };
+    let long_window_only = UsageSnapshotRecord {
+        account_id: "acc-long-only".to_string(),
+        secondary_used_percent: None,
+        secondary_window_minutes: None,
+        ..swapped_windows.clone()
+    };
+
+    assert!(is_low_quota_snapshot_at(&swapped_windows, config));
+    assert!(!is_low_quota_snapshot_at(&long_window_only, config));
 }
 
 /// 函数 `candidate_snapshot_cache_reuses_recent_snapshot`

@@ -65,6 +65,10 @@
 
 ## 赞助商
 
+本项目现开放赞助合作，费用为 **500 元/月**。赞助方可在 README 及项目内的赞助展示区域展示品牌 Logo、简介及官方链接；具体文案、展示位置、展示周期与上线时间由双方协商确认。为保持项目调性与用户体验，合作内容需与开发者或 AI 工具生态相关，并符合相关法律法规。
+
+**合作洽谈：**可通过微信、Telegram 或邮箱 `18272669457@163.com` 联系，添加好友时请备注“赞助合作”。
+
 感谢以下朋友与伙伴对 CodexManager 的支持。
 
 <table>
@@ -75,7 +79,7 @@
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=sponsor_text">AIXiamo（独立 AI 订阅服务）</a></strong>：提供 <a href="https://www.aixiamo.com/articles/codex-quota-not-enough-plus-pro-api-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=developer_codex_quota">ChatGPT Plus / Pro 国内充值与 Codex 额度选择</a>，也覆盖 Claude Max 5x / 20x、Google AI Pro（Gemini）和 SuperGrok；支持支付宝，无需海外银行卡，订单状态可查询。
+      <strong><a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_owner">AIXiamo（独立 AI 订阅服务）</a></strong>：提供 ChatGPT Plus / Pro 国内充值；高频 Codex、深度研究和长任务用户可先<a href="https://www.aixiamo.com/tools/chatgpt-pro-plan-calculator?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_calculator">比较 Pro 5x / 20x 并用用量选择器判断档位</a>。也覆盖 Claude Max、Google AI Pro（Gemini）和 SuperGrok；支持支付宝，无需海外银行卡，订单状态可查询。
     </td>
   </tr>
   <tr>

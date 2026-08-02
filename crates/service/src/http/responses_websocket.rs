@@ -2375,6 +2375,21 @@ fn parse_ws_usage(value: &Value) -> crate::gateway::RequestLogUsage {
                     .and_then(|map| map.get("cached_input_tokens"))
                     .and_then(Value::as_i64)
             }),
+        cache_write_tokens: usage
+            .and_then(|map| map.get("input_tokens_details"))
+            .and_then(|details| details.get("cache_write_tokens"))
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                usage
+                    .and_then(|map| map.get("prompt_tokens_details"))
+                    .and_then(|details| details.get("cache_write_tokens"))
+                    .and_then(Value::as_i64)
+            })
+            .or_else(|| {
+                usage
+                    .and_then(|map| map.get("cache_write_input_tokens"))
+                    .and_then(Value::as_i64)
+            }),
         output_tokens: usage
             .and_then(|map| map.get("output_tokens"))
             .and_then(Value::as_i64)

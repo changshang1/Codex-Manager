@@ -21,6 +21,18 @@
 - 修复纯账号池使用官方 Codex 模型目录时仍被本地 V2 可见性、instructions policy 和默认 route 阻断的问题；非分发模式按官方模型直通，聚合/混合策略和分发计费模式继续执行严格 V2 校验。
 - 修复上游合入后的桌面主布局、语言切换器和 Header 在窄窗口中的重叠；账号管理增加“移到顶部”。
 
+## [0.5.2] - 2026-07-31
+
+### Changed
+
+- 发布版本提升到 `0.5.2`，同步更新 workspace、前端包、Tauri 桌面端与锁文件。
+- 模型目录与请求计费支持缓存写入 Token 价格，并补齐 Anthropic、Gemini 与 OpenAI 风格响应中的缓存写入用量采集。
+- 适当增大宽屏侧栏菜单的纵向间距，低高度窗口继续使用紧凑布局以避免溢出。
+
+### Fixed
+
+- 非 `2xx` 失败请求不再计入 Token 与预估费用汇总；客户端取消的 `499` 仍保留可能已产生的实际钱包扣费，但不会进入成功用量统计。
+
 ## [0.5.1] - 2026-07-26
 
 ### Added
@@ -463,7 +475,8 @@
 ### Changed
 - 账号管理页操作区整合为单一“账号操作”下拉菜单，替代右侧多按钮堆叠，界面更简洁。
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.3...v0.4.4

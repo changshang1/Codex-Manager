@@ -335,7 +335,10 @@ fn parse_ws_usage_reads_chat_completion_compat_details() {
         "response": {
             "usage": {
                 "prompt_tokens": 100,
-                "prompt_tokens_details": { "cached_tokens": 75 },
+                "prompt_tokens_details": {
+                    "cached_tokens": 75,
+                    "cache_write_tokens": 7
+                },
                 "completion_tokens": 20,
                 "total_tokens": 120,
                 "completion_tokens_details": { "reasoning_tokens": 9 }
@@ -347,6 +350,7 @@ fn parse_ws_usage_reads_chat_completion_compat_details() {
 
     assert_eq!(usage.input_tokens, Some(100));
     assert_eq!(usage.cached_input_tokens, Some(75));
+    assert_eq!(usage.cache_write_tokens, Some(7));
     assert_eq!(usage.output_tokens, Some(20));
     assert_eq!(usage.total_tokens, Some(120));
     assert_eq!(usage.reasoning_output_tokens, Some(9));

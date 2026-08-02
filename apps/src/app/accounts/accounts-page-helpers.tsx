@@ -466,8 +466,11 @@ export function AccountStatusCell({ account }: { account: Account }) {
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<div />} className="block min-w-0 cursor-help">
-        <div className="flex min-w-0 flex-col gap-1">
+      <TooltipTrigger
+        render={<div />}
+        className="block min-w-0 max-w-full cursor-help overflow-hidden"
+      >
+        <div className="flex min-w-0 max-w-full flex-col gap-1">
           <div className="flex min-w-0 items-center gap-1.5">
             <div
               className={cn(
@@ -477,7 +480,7 @@ export function AccountStatusCell({ account }: { account: Account }) {
             />
             <span
               className={cn(
-                "text-xs font-semibold leading-4",
+                "min-w-0 max-w-full break-words whitespace-normal text-xs font-semibold leading-4",
                 account.isAvailable
                   ? "text-green-600 dark:text-green-400"
                   : "text-red-600 dark:text-red-400",
@@ -490,7 +493,7 @@ export function AccountStatusCell({ account }: { account: Account }) {
             <span
               className={fitLongTextClassName(
                 statusReasonLabel,
-                "block max-w-[180px] whitespace-normal break-words text-muted-foreground [overflow-wrap:anywhere]",
+                "block min-w-0 max-w-full whitespace-normal break-words text-muted-foreground [overflow-wrap:anywhere]",
                 "text-[11px] leading-4",
               )}
               title={statusReasonLabel}

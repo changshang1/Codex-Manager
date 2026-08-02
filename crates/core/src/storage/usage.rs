@@ -7,6 +7,7 @@ use super::{
 };
 
 const DEFAULT_USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT: usize = 1;
+const LONG_USAGE_WINDOW_MINUTES: i64 = 24 * 60 + 3;
 const USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT_ENV: &str =
     "CODEXMANAGER_USAGE_SNAPSHOTS_RETAIN_PER_ACCOUNT";
 
@@ -627,9 +628,13 @@ fn low_quota_account_ids_for_accounts_chunk(
     let sql = low_quota_account_ids_for_accounts_chunk_sql(&condition);
     let mut values = params;
     values.extend([
+        rusqlite::types::Value::Real(secondary_min_remaining_percent),
+        rusqlite::types::Value::Real(primary_min_remaining_percent),
+        rusqlite::types::Value::Real(secondary_min_remaining_percent),
         rusqlite::types::Value::Real(primary_min_remaining_percent),
         rusqlite::types::Value::Real(primary_min_remaining_percent),
         rusqlite::types::Value::Real(secondary_min_remaining_percent),
+        rusqlite::types::Value::Real(primary_min_remaining_percent),
         rusqlite::types::Value::Real(secondary_min_remaining_percent),
     ]);
     let mut stmt = storage.conn.prepare(&sql)?;
@@ -644,15 +649,40 @@ fn low_quota_account_ids_for_accounts_chunk_sql(account_condition: &str) -> Stri
         FROM ranked
         WHERE rn = 1
           AND (
-                (? > 0.0 AND used_percent IS NOT NULL AND (100.0 - used_percent) <= ?)
-                OR (? > 0.0 AND secondary_used_percent IS NOT NULL AND (100.0 - secondary_used_percent) <= ?)
+                (
+                    used_percent IS NOT NULL
+                    AND CASE
+                        WHEN window_minutes > {long_window_minutes} THEN ?
+                        ELSE ?
+                    END > 0.0
+                    AND (100.0 - used_percent) <= CASE
+                        WHEN window_minutes > {long_window_minutes} THEN ?
+                        ELSE ?
+                    END
+                )
+                OR (
+                    secondary_used_percent IS NOT NULL
+                    AND CASE
+                        WHEN secondary_window_minutes IS NOT NULL
+                             AND secondary_window_minutes <= {long_window_minutes} THEN ?
+                        ELSE ?
+                    END > 0.0
+                    AND (100.0 - secondary_used_percent) <= CASE
+                        WHEN secondary_window_minutes IS NOT NULL
+                             AND secondary_window_minutes <= {long_window_minutes} THEN ?
+                        ELSE ?
+                    END
+                )
           )",
         cte = latest_usage_ranked_cte_sql(
             "account_id,
                 used_percent,
-                secondary_used_percent",
+                window_minutes,
+                secondary_used_percent,
+                secondary_window_minutes",
             Some(account_condition),
         ),
+        long_window_minutes = LONG_USAGE_WINDOW_MINUTES,
     )
 }
 

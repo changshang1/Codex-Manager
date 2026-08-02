@@ -1,5 +1,6 @@
 "use client";
 
+import { useLayoutEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   ArrowDown,
@@ -407,6 +408,245 @@ export function AccountsPageView(props: AccountsPageViewProps) {
   );
   const statusMutationBusy =
     isUpdatingManyStatuses || Boolean(isUpdatingStatusAccountId);
+  const accountPoolLayoutRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const layout = accountPoolLayoutRef.current;
+    if (!layout) return;
+
+    const mainRows = Array.from(
+      layout.querySelectorAll<HTMLElement>("[data-account-pool-main-row]"),
+    );
+    const actionRows = Array.from(
+      layout.querySelectorAll<HTMLElement>("[data-account-pool-action-row]"),
+    );
+    const syncRowHeights = () => {
+      actionRows.forEach((actionRow, index) => {
+        const mainRow = mainRows[index];
+        actionRow.style.height = mainRow
+          ? `${mainRow.getBoundingClientRect().height}px`
+          : "";
+      });
+    };
+
+    syncRowHeights();
+    if (typeof ResizeObserver === "undefined") {
+      return () => {
+        actionRows.forEach((row) => row.style.removeProperty("height"));
+      };
+    }
+
+    const observer = new ResizeObserver(syncRowHeights);
+    mainRows.forEach((row) => observer.observe(row));
+    return () => {
+      observer.disconnect();
+      actionRows.forEach((row) => row.style.removeProperty("height"));
+    };
+  }, [isLoading, visibleAccounts]);
+
+  const accountAccessEnabled = (account: Account) =>
+    String(account.status || "").trim().toLowerCase() !== "disabled";
+
+  const renderAccountAccess = (account: Account) => {
+    const accessEnabled = accountAccessEnabled(account);
+
+    return (
+      <Tooltip>
+        <TooltipTrigger render={<span />} className="inline-flex">
+          <Switch
+            checked={accessEnabled}
+            disabled={
+              !isServiceReady ||
+              isUpdatingManyStatuses ||
+              isUpdatingStatusAccountId === account.id
+            }
+            onCheckedChange={(enabled) =>
+              toggleAccountStatus(account.id, enabled)
+            }
+            aria-label={t("允许接入")}
+          />
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">
+          {t(
+            "开启允许接入时会先刷新验证账号；验证成功后才会启用，验证失败则保持停止接入。",
+          )}
+        </TooltipContent>
+      </Tooltip>
+    );
+  };
+
+  const renderAccountActions = (account: Account) => {
+    const isRefreshingCurrentAccount =
+      isRefreshingAccountId === account.id;
+    const isRefreshingCurrentRt = isRefreshingRtAccountId === account.id;
+    const displayGroup = accounts.filter(
+      (item) =>
+        getAccountDisplayGroup(item, displayOrderMode) ===
+        getAccountDisplayGroup(account, displayOrderMode),
+    );
+    const isAtListTop = displayGroup[0]?.id === account.id;
+    const isAtListBottom =
+      displayGroup[displayGroup.length - 1]?.id === account.id;
+    const accessEnabled = accountAccessEnabled(account);
+    const canRecoverInactive =
+      String(account.status || "").trim().toLowerCase() === "inactive";
+
+    return (
+      <div className="table-action-cell gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground transition-colors hover:text-primary"
+          disabled={!isServiceReady}
+          onClick={() => openUsage(account)}
+          title={t("用量详情")}
+          aria-label={t("用量详情")}
+        >
+          <BarChart3 className="h-4 w-4" />
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              render={<span />}
+              nativeButton={false}
+              disabled={!isServiceReady}
+              title={t("更多账号操作")}
+              aria-label={t("更多账号操作")}
+            >
+              <MoreVertical className="h-4 w-4" />
+              <span className="sr-only">{t("更多账号操作")}</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">
+                {t("排序")}
+              </DropdownMenuLabel>
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={
+                  !isServiceReady || isReorderingAccounts || isAtListTop
+                }
+                onClick={() => void handleMoveAccount(account, "top")}
+              >
+                <ArrowUpToLine className="h-4 w-4" />
+                {t("移到顶部")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={
+                  !isServiceReady || isReorderingAccounts || isAtListBottom
+                }
+                onClick={() => void handleMoveAccount(account, "bottom")}
+              >
+                <ArrowDownToLine className="h-4 w-4" />
+                {t("移到底部")}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              {!accessEnabled ? (
+                <>
+                  <DropdownMenuItem
+                    className="gap-2"
+                    disabled={
+                      !isServiceReady ||
+                      isUpdatingManyStatuses ||
+                      isUpdatingStatusAccountId === account.id
+                    }
+                    onClick={() => forceEnableAccount(account.id)}
+                  >
+                    <Power className="h-4 w-4" />
+                    {t("强制允许接入")}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              ) : null}
+              {canRecoverInactive ? (
+                <>
+                  <DropdownMenuItem
+                    className="gap-2"
+                    disabled={
+                      !isServiceReady ||
+                      isUpdatingManyStatuses ||
+                      isUpdatingStatusAccountId === account.id
+                    }
+                    onClick={() => toggleAccountStatus(account.id, true)}
+                  >
+                    <Power className="h-4 w-4" />
+                    {t("开启账号")}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              ) : null}
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={
+                  !isServiceReady ||
+                  isRefreshingAllAccounts ||
+                  isRefreshingCurrentAccount
+                }
+                onClick={() => refreshAccount(account.id)}
+              >
+                <RefreshCw
+                  className={cn(
+                    "h-4 w-4",
+                    isRefreshingCurrentAccount && "animate-spin",
+                  )}
+                />
+                {t("刷新用量")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={!isServiceReady || isRefreshingCurrentRt}
+                onClick={() => refreshAccountRt(account.id)}
+              >
+                <KeyRound
+                  className={cn(
+                    "h-4 w-4",
+                    isRefreshingCurrentRt && "animate-pulse",
+                  )}
+                />
+                {t("刷新 AT/RT")}
+                <DropdownMenuShortcut>RT</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={!isServiceReady || isUpdatingPreferred}
+                onClick={() =>
+                  account.preferred
+                    ? clearPreferredAccount(account.id)
+                    : setPreferredAccount(account.id)
+                }
+              >
+                <Pin className="h-4 w-4" />
+                {account.preferred ? t("取消优先") : t("设为优先")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="gap-2"
+                disabled={!isServiceReady}
+                onClick={() => void openProxyDialog(account)}
+              >
+                <Network className="h-4 w-4" />
+                {t("账号代理")}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="gap-2 text-red-500"
+                disabled={!isServiceReady}
+                onClick={() => handleDeleteSingle(account)}
+              >
+                <Trash2 className="h-4 w-4" /> {t("删除")}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -920,41 +1160,49 @@ export function AccountsPageView(props: AccountsPageViewProps) {
 
       <Card className="glass-card mission-panel overflow-hidden py-0 shadow-sm">
         <CardContent className="p-0">
-          <Table className="min-w-[1164px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12 text-center">
-                  <Checkbox
-                    checked={
-                      visibleAccounts.length > 0 &&
-                      visibleAccounts.every((account) =>
-                        effectiveSelectedIds.includes(account.id),
-                      )
-                    }
-                    onCheckedChange={toggleSelectAllVisible}
-                  />
-                </TableHead>
-                <TableHead className="w-[clamp(280px,34vw,440px)] min-w-[280px] max-w-[440px] whitespace-normal">
-                  {t("账号信息")}
-                </TableHead>
-                <TableHead className="min-w-[300px] text-center">
-                  {t("额度详情")}
-                </TableHead>
-                <TableHead className="w-[132px]">{t("顺序")}</TableHead>
-                <TableHead className="min-w-[180px]">{t("账号代理")}</TableHead>
-                <TableHead className="w-[112px]">{t("状态")}</TableHead>
-                <TableHead className="table-sticky-access-head w-[104px] min-w-[104px] text-center">
-                  {t("允许接入")}
-                </TableHead>
-                <TableHead className="table-sticky-action-head w-[112px] min-w-[112px] text-center">
-                  {t("操作")}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                Array.from({ length: 5 }).map((_, index) => (
-                  <TableRow key={index}>
+          <div ref={accountPoolLayoutRef} className="account-pool-layout">
+            <div className="account-pool-main-pane">
+              <Table className="account-pool-main-table">
+                <colgroup>
+                  <col className="account-pool-col-select" />
+                  <col className="account-pool-col-info" />
+                  <col />
+                  <col className="account-pool-col-order" />
+                  <col className="account-pool-col-proxy" />
+                  <col className="account-pool-col-status" />
+                </colgroup>
+                <TableHeader>
+                  <TableRow data-account-pool-main-row>
+                    <TableHead className="w-12 text-center">
+                      <Checkbox
+                        checked={
+                          visibleAccounts.length > 0 &&
+                          visibleAccounts.every((account) =>
+                            effectiveSelectedIds.includes(account.id),
+                          )
+                        }
+                        onCheckedChange={toggleSelectAllVisible}
+                      />
+                    </TableHead>
+                    <TableHead className="w-[clamp(280px,34vw,440px)] min-w-[280px] max-w-[440px] whitespace-normal">
+                      {t("账号信息")}
+                    </TableHead>
+                    <TableHead className="min-w-[300px] text-center">
+                      {t("额度详情")}
+                    </TableHead>
+                    <TableHead className="w-[132px]">{t("顺序")}</TableHead>
+                    <TableHead className="min-w-[180px]">
+                      {t("账号代理")}
+                    </TableHead>
+                    <TableHead className="account-pool-status-head whitespace-normal">
+                      {t("状态")}
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isLoading ? (
+                    Array.from({ length: 5 }).map((_, index) => (
+                      <TableRow key={index} data-account-pool-main-row>
                     <TableCell>
                       <Skeleton className="mx-auto h-4 w-4" />
                     </TableCell>
@@ -974,20 +1222,14 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     <TableCell>
                       <Skeleton className="h-8 w-28" />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="account-pool-status-cell align-top">
                       <Skeleton className="h-6 w-16 rounded-full" />
-                    </TableCell>
-                    <TableCell className="table-sticky-access-cell w-[104px] min-w-[104px]">
-                      <Skeleton className="mx-auto h-5 w-9 rounded-full" />
-                    </TableCell>
-                    <TableCell className="table-sticky-action-cell w-[112px] min-w-[112px]">
-                      <Skeleton className="mx-auto h-8 w-24" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : visibleAccounts.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-48 text-center">
+                <TableRow data-account-pool-main-row>
+                  <TableCell colSpan={6} className="h-48 text-center">
                     <div className="flex w-[calc(100dvw-6rem)] flex-col items-center justify-center gap-2 text-muted-foreground sm:w-auto">
                       <Search className="h-8 w-8 opacity-20" />
                       <p>{t("未找到符合条件的账号")}</p>
@@ -997,10 +1239,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               ) : (
                 visibleAccounts.map((account) => {
                   const quotaItems = buildQuotaSummaryItems(account, t);
-                  const isRefreshingCurrentAccount =
-                    isRefreshingAccountId === account.id;
-                  const isRefreshingCurrentRt =
-                    isRefreshingRtAccountId === account.id;
                   const filteredIndex =
                     filteredAccountIndexMap.get(account.id) ?? -1;
                   const canMoveUp = filteredIndex > 0;
@@ -1021,22 +1259,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     getAccountDisplayGroup(
                       filteredAccounts[filteredIndex + 1],
                       displayOrderMode,
-                    ) ===
-                      getAccountDisplayGroup(account, displayOrderMode);
-                  const displayGroup = accounts.filter(
-                    (item) =>
-                      getAccountDisplayGroup(item, displayOrderMode) ===
-                      getAccountDisplayGroup(account, displayOrderMode),
-                  );
-                  const isAtListTop = displayGroup[0]?.id === account.id;
-                  const isAtListBottom =
-                    displayGroup[displayGroup.length - 1]?.id === account.id;
-                  const accessEnabled =
-                    String(account.status || "").trim().toLowerCase() !==
-                    "disabled";
-                  const canRecoverInactive =
-                    String(account.status || "").trim().toLowerCase() ===
-                    "inactive";
+                    ) === getAccountDisplayGroup(account, displayOrderMode);
                   return (
                     <TableRow
                       key={account.id}
@@ -1045,6 +1268,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                         isAccountWarrantyIncident(account) &&
                           "bg-destructive/10 hover:bg-destructive/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-destructive",
                       )}
+                      data-account-pool-main-row
                     >
                       <TableCell className="text-center">
                         <Checkbox
@@ -1150,208 +1374,84 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       <TableCell>
                         <AccountProxyCell account={account} />
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="account-pool-status-cell align-top">
                         <AccountStatusCell account={account} />
-                      </TableCell>
-                      <TableCell className="table-sticky-access-cell w-[104px] min-w-[104px] text-center">
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={<span />}
-                            className="inline-flex"
-                          >
-                            <Switch
-                              checked={accessEnabled}
-                              disabled={
-                                !isServiceReady ||
-                                isUpdatingManyStatuses ||
-                                isUpdatingStatusAccountId === account.id
-                              }
-                              onCheckedChange={(enabled) =>
-                                toggleAccountStatus(account.id, enabled)
-                              }
-                              aria-label={t("允许接入")}
-                            />
-                          </TooltipTrigger>
-                          <TooltipContent className="max-w-xs">
-                            {t(
-                              "开启允许接入时会先刷新验证账号；验证成功后才会启用，验证失败则保持停止接入。",
-                            )}
-                          </TooltipContent>
-                        </Tooltip>
-                      </TableCell>
-                      <TableCell className="table-sticky-action-cell w-[112px] min-w-[112px]">
-                        <div className="table-action-cell gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground transition-colors hover:text-primary"
-                            disabled={!isServiceReady}
-                            onClick={() => openUsage(account)}
-                            title={t("用量详情")}
-                            aria-label={t("用量详情")}
-                          >
-                            <BarChart3 className="h-4 w-4" />
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                render={<span />}
-                                nativeButton={false}
-                                disabled={!isServiceReady}
-                                title={t("更多账号操作")}
-                                aria-label={t("更多账号操作")}
-                              >
-                                <MoreVertical className="h-4 w-4" />
-                                <span className="sr-only">
-                                  {t("更多账号操作")}
-                                </span>
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuGroup>
-                                <DropdownMenuLabel className="px-2 py-1 text-[11px] uppercase tracking-[0.16em] text-muted-foreground/80">
-                                  {t("排序")}
-                                </DropdownMenuLabel>
-                                <DropdownMenuItem
-                                  className="gap-2"
-                                  disabled={
-                                    !isServiceReady ||
-                                    isReorderingAccounts ||
-                                    isAtListTop
-                                  }
-                                  onClick={() =>
-                                    void handleMoveAccount(account, "top")
-                                  }
-                                >
-                                  <ArrowUpToLine className="h-4 w-4" />
-                                  {t("移到顶部")}
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  className="gap-2"
-                                  disabled={
-                                    !isServiceReady ||
-                                    isReorderingAccounts ||
-                                    isAtListBottom
-                                  }
-                                  onClick={() =>
-                                    void handleMoveAccount(account, "bottom")
-                                  }
-                                >
-                                  <ArrowDownToLine className="h-4 w-4" />
-                                  {t("移到底部")}
-                                </DropdownMenuItem>
-                              </DropdownMenuGroup>
-                              <DropdownMenuSeparator />
-                                  <DropdownMenuGroup>
-                              {!accessEnabled && (
-                                <>
-                                  <DropdownMenuItem
-                                    className="gap-2"
-                                    disabled={
-                                      !isServiceReady ||
-                                      isUpdatingManyStatuses ||
-                                      isUpdatingStatusAccountId === account.id
-                                    }
-                                    onClick={() => forceEnableAccount(account.id)}
-                                  >
-                                    <Power className="h-4 w-4" />
-                                    {t("强制允许接入")}
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                </>
-                              )}
-                              {canRecoverInactive && (
-                                <>
-                                  <DropdownMenuItem
-                                    className="gap-2"
-                                    disabled={
-                                      !isServiceReady ||
-                                      isUpdatingManyStatuses ||
-                                      isUpdatingStatusAccountId === account.id
-                                    }
-                                    onClick={() =>
-                                      toggleAccountStatus(account.id, true)
-                                    }
-                                  >
-                                    <Power className="h-4 w-4" />
-                                    {t("开启账号")}
-                                  </DropdownMenuItem>
-                                  <DropdownMenuSeparator />
-                                </>
-                              )}
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={
-                                  !isServiceReady ||
-                                  isRefreshingAllAccounts ||
-                                  isRefreshingCurrentAccount
-                                }
-                                onClick={() => refreshAccount(account.id)}
-                              >
-                                <RefreshCw
-                                  className={cn(
-                                    "h-4 w-4",
-                                    isRefreshingCurrentAccount && "animate-spin",
-                                  )}
-                                />
-                                {t("刷新用量")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={!isServiceReady || isRefreshingCurrentRt}
-                                onClick={() => refreshAccountRt(account.id)}
-                              >
-                                <KeyRound
-                                  className={cn(
-                                    "h-4 w-4",
-                                    isRefreshingCurrentRt && "animate-pulse",
-                                  )}
-                                />
-                                {t("刷新 AT/RT")}
-                                <DropdownMenuShortcut>RT</DropdownMenuShortcut>
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={!isServiceReady || isUpdatingPreferred}
-                                onClick={() =>
-                                  account.preferred
-                                    ? clearPreferredAccount(account.id)
-                                    : setPreferredAccount(account.id)
-                                }
-                              >
-                                <Pin className="h-4 w-4" />
-                                {account.preferred ? t("取消优先") : t("设为优先")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="gap-2"
-                                disabled={!isServiceReady}
-                                onClick={() => void openProxyDialog(account)}
-                              >
-                                <Network className="h-4 w-4" />
-                                {t("账号代理")}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="gap-2 text-red-500"
-                                disabled={!isServiceReady}
-                                onClick={() => handleDeleteSingle(account)}
-                              >
-                                <Trash2 className="h-4 w-4" /> {t("删除")}
-                              </DropdownMenuItem>
-                              </DropdownMenuGroup>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
                       </TableCell>
                     </TableRow>
                   );
-                })
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+            <div
+              className="account-pool-action-rail"
+              role="table"
+              aria-label={`${t("允许接入")} / ${t("操作")}`}
+            >
+              <div
+                className="account-pool-action-rail-head"
+                role="row"
+                data-account-pool-action-row
+              >
+                <div
+                  className="account-pool-access-rail-cell"
+                  role="columnheader"
+                >
+                  {t("允许接入")}
+                </div>
+                <div
+                  className="account-pool-actions-rail-cell"
+                  role="columnheader"
+                >
+                  {t("操作")}
+                </div>
+              </div>
+              {isLoading ? (
+                Array.from({ length: 5 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="account-pool-action-rail-row"
+                    role="row"
+                    data-account-pool-action-row
+                  >
+                    <div className="account-pool-access-rail-cell" role="cell">
+                      <Skeleton className="mx-auto h-5 w-9 rounded-full" />
+                    </div>
+                    <div className="account-pool-actions-rail-cell" role="cell">
+                      <Skeleton className="mx-auto h-8 w-20" />
+                    </div>
+                  </div>
+                ))
+              ) : visibleAccounts.length === 0 ? (
+                <div
+                  className="account-pool-action-rail-row"
+                  aria-hidden="true"
+                  data-account-pool-action-row
+                />
+              ) : (
+                visibleAccounts.map((account) => (
+                  <div
+                    key={account.id}
+                    className={cn(
+                      "account-pool-action-rail-row",
+                      isAccountWarrantyIncident(account) &&
+                        "account-pool-action-rail-row-warranty",
+                    )}
+                    role="row"
+                    data-account-pool-action-row
+                  >
+                    <div className="account-pool-access-rail-cell" role="cell">
+                      {renderAccountAccess(account)}
+                    </div>
+                    <div className="account-pool-actions-rail-cell" role="cell">
+                      {renderAccountActions(account)}
+                    </div>
+                  </div>
+                ))
               )}
-            </TableBody>
-          </Table>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

@@ -4295,6 +4295,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         1,
         0,
         0,
+        0,
         None,
         true,
     )
@@ -4412,6 +4413,7 @@ fn rpc_account_manager_assigns_key_and_bills_wallet() {
         None,
         "actual",
         333_333,
+        0,
         0,
         0,
         Some(r#"{"test":true}"#.to_string()),

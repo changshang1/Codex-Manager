@@ -220,12 +220,15 @@ function PriceBadge({ model }: { model: ManagedModelV2 }) {
   }
   const input = microusdToUsdPerMillion(model.price.inputMicrousdPer1m);
   const cached = microusdToUsdPerMillion(model.price.cachedInputMicrousdPer1m);
+  const cacheWrite = microusdToUsdPerMillion(
+    model.price.cacheWriteMicrousdPer1m ?? model.price.inputMicrousdPer1m,
+  );
   const output = microusdToUsdPerMillion(model.price.outputMicrousdPer1m);
   return (
     <div className="space-y-1">
       <Badge variant="secondary">{priceStatusLabel(model.price.priceStatus, t)}</Badge>
       <div className="font-mono text-[10px] text-muted-foreground">
-        {input} / {cached} / {output}
+        {input} / {cached} / {cacheWrite} / {output}
       </div>
     </div>
   );

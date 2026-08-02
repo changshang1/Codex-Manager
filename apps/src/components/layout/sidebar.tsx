@@ -86,10 +86,10 @@ const NavItem = memo(({
     aria-label={itemName}
     title={itemName}
     className={cn(
-      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-xl px-3.5 py-1.5 text-dense font-medium transition-[background-color,color,box-shadow] duration-300 ease-out hover:bg-primary/6 hover:text-primary xl:min-h-11 xl:gap-3.5 xl:rounded-xl xl:px-4 xl:py-2 [@media(max-height:800px)]:min-h-9 [@media(max-height:800px)]:gap-2.5 [@media(max-height:800px)]:px-3.5 [@media(max-height:800px)]:py-1",
+      "group/nav relative flex min-h-10 items-center gap-3 overflow-hidden rounded-xl px-3.5 py-1.5 text-dense font-medium transition-[background-color,color] duration-300 ease-out hover:bg-primary/6 hover:text-primary xl:min-h-11 xl:gap-3.5 xl:rounded-xl xl:px-4 xl:py-2 [@media(max-height:800px)]:min-h-9 [@media(max-height:800px)]:gap-2.5 [@media(max-height:800px)]:px-3.5 [@media(max-height:800px)]:py-1",
       !isSidebarOpen && "justify-center px-0",
       isActive
-        ? "bg-primary/10 text-primary shadow-[inset_0_1px_0_rgb(255_255_255/0.5),0_14px_28px_-24px_rgb(var(--primary-rgb)/0.55)]"
+        ? "min-h-12 bg-primary/10 text-primary shadow-none xl:min-h-[52px] [@media(max-height:800px)]:min-h-11"
         : "text-muted-foreground",
     )}
   >
@@ -100,7 +100,7 @@ const NavItem = memo(({
     ) : null}
     <item.icon className="h-[18px] w-[18px] shrink-0 xl:h-[22px] xl:w-[22px]" />
     {isSidebarOpen && (
-      <span className="truncate">{itemName}</span>
+      <span className="min-w-0 truncate">{itemName}</span>
     )}
   </a>
 ));
@@ -172,7 +172,14 @@ export function Sidebar() {
     );
 
     return (
-      <div className="grid gap-1">
+      <div
+        className={cn(
+          "grid",
+          isDesktopRuntime
+            ? "gap-2 xl:gap-2.5 [@media(max-height:800px)]:gap-2"
+            : "gap-1.5 xl:gap-2 [@media(max-height:800px)]:gap-1",
+        )}
+      >
         {items.map((item) => {
           const itemName = t(getTopLevelRouteLabel(item.href, routeAccess));
           return (
@@ -188,7 +195,7 @@ export function Sidebar() {
         })}
       </div>
     );
-  }, [currentShellPath, handleNavigate, isSidebarOpen, routeAccess, t]);
+  }, [currentShellPath, handleNavigate, isDesktopRuntime, isSidebarOpen, routeAccess, t]);
 
   return (
     <div

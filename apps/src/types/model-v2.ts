@@ -10,6 +10,7 @@ export interface ModelPriceTierV2 {
   minInputTokens: number;
   inputMicrousdPer1m: number;
   cachedInputMicrousdPer1m: number;
+  cacheWriteMicrousdPer1m: number | null;
   outputMicrousdPer1m: number;
 }
 
@@ -18,6 +19,7 @@ export interface ModelPriceV2 {
   priceSource: string | null;
   inputMicrousdPer1m: number | null;
   cachedInputMicrousdPer1m: number | null;
+  cacheWriteMicrousdPer1m: number | null;
   outputMicrousdPer1m: number | null;
 }
 

@@ -86,8 +86,8 @@ type MockState = {
 
 const PRICED_MODELS: Record<string, [number, number, number]> = {
   "gpt-5.6-sol": [5_000_000, 500_000, 30_000_000],
-  "gpt-5.6-terra": [2_500_000, 250_000, 15_000_000],
-  "gpt-5.6-luna": [1_000_000, 100_000, 6_000_000],
+  "gpt-5.6-terra": [2_000_000, 200_000, 12_000_000],
+  "gpt-5.6-luna": [200_000, 20_000, 1_200_000],
   "gpt-5.5": [5_000_000, 500_000, 30_000_000],
   "gpt-5.4": [2_500_000, 250_000, 15_000_000],
   "gpt-5.4-mini": [750_000, 75_000, 4_500_000],
@@ -112,6 +112,9 @@ function builtinModel(
             : "seed-2026-05-11",
         inputMicrousdPer1m: rates[0],
         cachedInputMicrousdPer1m: rates[1],
+        cacheWriteMicrousdPer1m: slug.startsWith("gpt-5.6")
+          ? rates[0] * 1.25
+          : null,
         outputMicrousdPer1m: rates[2],
       }
     : {
@@ -119,6 +122,7 @@ function builtinModel(
         priceSource: null,
         inputMicrousdPer1m: null,
         cachedInputMicrousdPer1m: null,
+        cacheWriteMicrousdPer1m: null,
         outputMicrousdPer1m: null,
       };
   return {
@@ -172,7 +176,7 @@ function builtinModel(
         },
     instructionsMode: "passthrough",
     instructionsText: null,
-    builtinRevision: isImageModel ? 5 : slug.startsWith("gpt-5.6") ? 4 : 2,
+    builtinRevision: isImageModel ? 7 : slug.startsWith("gpt-5.6") ? 7 : 2,
     userEdited: false,
     price,
     priceTiers: rates
@@ -181,14 +185,18 @@ function builtinModel(
             minInputTokens: 0,
             inputMicrousdPer1m: rates[0],
             cachedInputMicrousdPer1m: rates[1],
+            cacheWriteMicrousdPer1m: slug.startsWith("gpt-5.6")
+              ? rates[0] * 1.25
+              : null,
             outputMicrousdPer1m: rates[2],
           },
           ...(slug.startsWith("gpt-5.6")
             ? [
                 {
-                  minInputTokens: 272_000,
+                  minInputTokens: 272_001,
                   inputMicrousdPer1m: rates[0] * 2,
                   cachedInputMicrousdPer1m: rates[1] * 2,
+                  cacheWriteMicrousdPer1m: rates[0] * 2.5,
                   outputMicrousdPer1m: (rates[2] * 3) / 2,
                 },
               ]
@@ -260,6 +268,7 @@ function importedModel(): JsonObject {
       priceSource: "local-import",
       inputMicrousdPer1m: 1_000_000,
       cachedInputMicrousdPer1m: 100_000,
+      cacheWriteMicrousdPer1m: null,
       outputMicrousdPer1m: 5_000_000,
     },
     permissionGroupIds: [],
@@ -1291,11 +1300,11 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
   await expect(rows).toHaveCount(8);
   const solRow = page.locator("tr", { hasText: "gpt-5.6-sol" });
   await expect(solRow).toContainText("官方价格");
-  await expect(solRow).toContainText("5 / 0.5 / 30");
+  await expect(solRow).toContainText("5 / 0.5 / 6.25 / 30");
   const imageRow = page.locator("tr", { hasText: "gpt-image-2" });
   await expect(imageRow).toContainText("先进的图像生成和编辑模型。");
   await expect(imageRow).toContainText("官方价格");
-  await expect(imageRow).toContainText("8 / 2 / 30");
+  await expect(imageRow).toContainText("8 / 2 / 8 / 30");
   await expect(page.getByText("codex-auto-review", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "远端并入" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "清理远端旧模型" })).toHaveCount(0);
@@ -1311,10 +1320,12 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
   await page.getByRole("tab", { name: "价格" }).click();
   await page.locator("#price-input").fill("2.5");
   await page.locator("#price-cached").fill("0.25");
+  await page.locator("#price-cache-write").fill("3.125");
   await page.locator("#price-output").fill("15");
   await page.locator("#price-long-threshold").fill("272000");
   await page.locator("#price-long-input").fill("5");
   await page.locator("#price-long-cached").fill("0.5");
+  await page.locator("#price-long-cache-write").fill("6.25");
   await page.locator("#price-long-output").fill("22.5");
 
   await page.getByRole("tab", { name: "路由" }).click();
@@ -1342,6 +1353,7 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
     priceSource: "local-ui",
     inputMicrousdPer1m: 2_500_000,
     cachedInputMicrousdPer1m: 250_000,
+    cacheWriteMicrousdPer1m: 3_125_000,
     outputMicrousdPer1m: 15_000_000,
   });
   expect(savedModel.priceTiers).toEqual([
@@ -1349,12 +1361,14 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
       minInputTokens: 0,
       inputMicrousdPer1m: 2_500_000,
       cachedInputMicrousdPer1m: 250_000,
+      cacheWriteMicrousdPer1m: 3_125_000,
       outputMicrousdPer1m: 15_000_000,
     },
     {
       minInputTokens: 272_000,
       inputMicrousdPer1m: 5_000_000,
       cachedInputMicrousdPer1m: 500_000,
+      cacheWriteMicrousdPer1m: 6_250_000,
       outputMicrousdPer1m: 22_500_000,
     },
   ]);

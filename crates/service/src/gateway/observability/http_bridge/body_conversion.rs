@@ -22,6 +22,11 @@ fn anthropic_usage_from_responses(value: &Value) -> Value {
         .and_then(Value::as_object)
         .and_then(|details| details.get("cached_tokens"))
         .and_then(Value::as_i64);
+    let cache_creation_input_tokens = usage
+        .get("input_tokens_details")
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(Value::as_i64);
     let reasoning_output_tokens = usage
         .get("output_tokens_details")
         .and_then(Value::as_object)
@@ -33,6 +38,12 @@ fn anthropic_usage_from_responses(value: &Value) -> Value {
     obj.insert("output_tokens".to_string(), Value::from(output_tokens));
     if let Some(value) = cache_read_input_tokens {
         obj.insert("cache_read_input_tokens".to_string(), Value::from(value));
+    }
+    if let Some(value) = cache_creation_input_tokens {
+        obj.insert(
+            "cache_creation_input_tokens".to_string(),
+            Value::from(value),
+        );
     }
     if let Some(value) = reasoning_output_tokens {
         obj.insert("reasoning_output_tokens".to_string(), Value::from(value));
@@ -54,6 +65,10 @@ fn responses_usage_from_anthropic(value: &Value) -> Value {
         .get("cache_read_input_tokens")
         .and_then(Value::as_i64)
         .unwrap_or_default();
+    let cache_write_tokens = usage
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
     let reasoning_tokens = usage
         .get("reasoning_output_tokens")
         .and_then(Value::as_i64)
@@ -62,7 +77,10 @@ fn responses_usage_from_anthropic(value: &Value) -> Value {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
-        "input_tokens_details": { "cached_tokens": cached_tokens },
+        "input_tokens_details": {
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
         "output_tokens_details": { "reasoning_tokens": reasoning_tokens },
     })
 }

@@ -11,9 +11,7 @@ use tauri::{
 #[cfg(debug_assertions)]
 use tauri::Url;
 
-use super::state::{
-    APP_EXIT_REQUESTED, KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE, KEEP_WINDOW_UI_MOUNTED,
-};
+use super::state::{APP_EXIT_REQUESTED, KEEP_ALIVE_FOR_LIGHTWEIGHT_CLOSE, KEEP_WINDOW_UI_MOUNTED};
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 pub(crate) const TRAY_PREVIEW_WINDOW_LABEL: &str = "tray-preview";
@@ -55,7 +53,7 @@ fn show_main_window(app: &tauri::AppHandle) -> bool {
         main_window.created,
         main_window.created_after_initial,
     ) {
-        navigate_created_main_window_to_app(&main_window.window);
+        navigate_main_window_to_app(&main_window.window);
     }
     reveal_main_window(&main_window.window)
 }
@@ -240,7 +238,10 @@ fn ensure_main_window(app: &tauri::AppHandle) -> Option<MainWindowHandle> {
             if window.label() != MAIN_WINDOW_LABEL {
                 return;
             }
-            log::info!("main window page loaded");
+            log::info!("main window page loaded: {}", payload.url());
+            if should_navigate_loaded_main_window_to_app(payload.url().path()) {
+                navigate_main_window_to_app(&window);
+            }
         })
         .build()
     {
@@ -271,10 +272,14 @@ fn should_navigate_created_main_window_to_app(created: bool, created_after_initi
     cfg!(debug_assertions) && created && created_after_initial
 }
 
-fn navigate_created_main_window_to_app(window: &tauri::WebviewWindow) {
+fn should_navigate_loaded_main_window_to_app(path: &str) -> bool {
+    cfg!(debug_assertions) && path == "/startup.html"
+}
+
+fn navigate_main_window_to_app(window: &tauri::WebviewWindow) {
     if let Err(err) = navigate_window_to_app_url(window) {
         log::warn!(
-            "navigate recreated main window from startup page to app failed: {}",
+            "navigate main window from startup page to app failed: {}",
             err
         );
     }
@@ -431,7 +436,10 @@ fn resolve_tray_preview_position(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_tray_preview_position, should_navigate_created_main_window_to_app};
+    use super::{
+        resolve_tray_preview_position, should_navigate_created_main_window_to_app,
+        should_navigate_loaded_main_window_to_app,
+    };
     use tauri::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalRect, PhysicalSize, Rect};
 
     #[test]
@@ -476,5 +484,17 @@ mod tests {
         assert!(should_navigate_created_main_window_to_app(true, true));
         #[cfg(not(debug_assertions))]
         assert!(!should_navigate_created_main_window_to_app(true, true));
+    }
+
+    #[test]
+    fn loaded_startup_page_navigates_to_the_dev_app() {
+        #[cfg(debug_assertions)]
+        {
+            assert!(should_navigate_loaded_main_window_to_app("/startup.html"));
+            assert!(!should_navigate_loaded_main_window_to_app("/"));
+            assert!(!should_navigate_loaded_main_window_to_app("/tray-preview/"));
+        }
+        #[cfg(not(debug_assertions))]
+        assert!(!should_navigate_loaded_main_window_to_app("/startup.html"));
     }
 }

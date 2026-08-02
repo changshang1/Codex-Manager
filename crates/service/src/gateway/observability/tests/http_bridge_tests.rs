@@ -198,7 +198,10 @@ fn parse_usage_from_json_reads_cached_and_reasoning_details() {
     let payload = json!({
         "usage": {
             "input_tokens": 321,
-            "input_tokens_details": { "cached_tokens": 280 },
+            "input_tokens_details": {
+                "cached_tokens": 280,
+                "cache_write_tokens": 30
+            },
             "output_tokens": 55,
             "total_tokens": 376,
             "output_tokens_details": { "reasoning_tokens": 21 }
@@ -207,6 +210,7 @@ fn parse_usage_from_json_reads_cached_and_reasoning_details() {
     let usage = parse_usage_from_json(&payload);
     assert_eq!(usage.input_tokens, Some(321));
     assert_eq!(usage.cached_input_tokens, Some(280));
+    assert_eq!(usage.cache_write_tokens, Some(30));
     assert_eq!(usage.output_tokens, Some(55));
     assert_eq!(usage.total_tokens, Some(376));
     assert_eq!(usage.reasoning_output_tokens, Some(21));
@@ -230,7 +234,10 @@ fn parse_usage_from_json_reads_response_usage_compat_fields() {
         "response": {
             "usage": {
                 "prompt_tokens": 100,
-                "prompt_tokens_details": { "cached_tokens": 75 },
+                "prompt_tokens_details": {
+                    "cached_tokens": 75,
+                    "cache_write_tokens": 7
+                },
                 "completion_tokens": 20,
                 "total_tokens": 120,
                 "completion_tokens_details": { "reasoning_tokens": 9 }
@@ -240,6 +247,7 @@ fn parse_usage_from_json_reads_response_usage_compat_fields() {
     let usage = parse_usage_from_json(&payload);
     assert_eq!(usage.input_tokens, Some(100));
     assert_eq!(usage.cached_input_tokens, Some(75));
+    assert_eq!(usage.cache_write_tokens, Some(7));
     assert_eq!(usage.output_tokens, Some(20));
     assert_eq!(usage.total_tokens, Some(120));
     assert_eq!(usage.reasoning_output_tokens, Some(9));
@@ -349,13 +357,14 @@ fn parse_usage_from_json_prefers_output_text_over_duplicate_output() {
 fn parse_usage_from_sse_frame_reads_response_completed_usage() {
     let frame_lines = vec![
         "event: message\n".to_string(),
-        r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":88,"input_tokens_details":{"cached_tokens":61},"output_tokens":17,"total_tokens":105,"output_tokens_details":{"reasoning_tokens":6}}}}"#
+        r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":88,"input_tokens_details":{"cached_tokens":61,"cache_write_tokens":13},"output_tokens":17,"total_tokens":105,"output_tokens_details":{"reasoning_tokens":6}}}}"#
             .to_string(),
         "\n".to_string(),
     ];
     let usage = parse_usage_from_sse_frame(&frame_lines).expect("extract usage from sse frame");
     assert_eq!(usage.input_tokens, Some(88));
     assert_eq!(usage.cached_input_tokens, Some(61));
+    assert_eq!(usage.cache_write_tokens, Some(13));
     assert_eq!(usage.output_tokens, Some(17));
     assert_eq!(usage.total_tokens, Some(105));
     assert_eq!(usage.reasoning_output_tokens, Some(6));
@@ -376,13 +385,14 @@ fn parse_usage_from_sse_frame_reads_response_completed_usage() {
 fn parse_usage_from_sse_frame_reads_top_level_and_response_usage() {
     let frame_lines = vec![
         "event: message\n".to_string(),
-        r#"data: {"type":"response.completed","usage":{"input_tokens":22,"input_tokens_details":{"cached_tokens":10},"output_tokens":11,"total_tokens":33,"output_tokens_details":{"reasoning_tokens":3}},"response":{"usage":{"prompt_tokens":26,"prompt_tokens_details":{"cached_tokens":12},"completion_tokens":15,"total_tokens":41,"completion_tokens_details":{"reasoning_tokens":4}}}}"#
+        r#"data: {"type":"response.completed","usage":{"input_tokens":22,"input_tokens_details":{"cached_tokens":10,"cache_write_tokens":4},"output_tokens":11,"total_tokens":33,"output_tokens_details":{"reasoning_tokens":3}},"response":{"usage":{"prompt_tokens":26,"prompt_tokens_details":{"cached_tokens":12,"cache_write_tokens":6},"completion_tokens":15,"total_tokens":41,"completion_tokens_details":{"reasoning_tokens":4}}}}"#
             .to_string(),
         "\n".to_string(),
     ];
     let usage = parse_usage_from_sse_frame(&frame_lines).expect("extract usage from sse frame");
     assert_eq!(usage.input_tokens, Some(26));
     assert_eq!(usage.cached_input_tokens, Some(12));
+    assert_eq!(usage.cache_write_tokens, Some(6));
     assert_eq!(usage.output_tokens, Some(15));
     assert_eq!(usage.total_tokens, Some(41));
     assert_eq!(usage.reasoning_output_tokens, Some(4));

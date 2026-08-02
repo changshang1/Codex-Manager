@@ -54,6 +54,34 @@ No actionable P0, P1, or P2 differences remain.
 
 final result: passed
 
+# Sidebar Navigation Spacing Design QA
+
+## Evidence
+
+- Source visual truth: `C:/Users/qxnm/AppData/Local/Temp/codex-clipboard-912dfd64-564f-463c-a260-8b226e3d45a7.png`.
+- Browser-rendered implementation: `C:/Users/qxnm/AppData/Local/Temp/codex-manager-sidebar-spacing-admin-after.png`.
+- Side-by-side comparison: `C:/Users/qxnm/AppData/Local/Temp/codex-manager-sidebar-spacing-comparison.png`.
+- Viewport: 1920 x 1260 CSS pixels for the reference comparison and 1920 x 800 CSS pixels for the low-height fallback.
+- State: real `codexmanager-web` runtime, administrator navigation, Simplified Chinese, expanded sidebar.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain for the requested spacing change.
+
+- Web mode keeps its existing 6px / 8px navigation-row gaps.
+- Desktop mode now uses 8px / 10px gaps on normal-height windows and 6px at 800px viewport height, while keeping the existing compact item treatment. All currently allowed administrator routes remain reachable without page overflow.
+- Sidebar width, item padding, icon sizing, typography, active state, and collapse control are unchanged.
+- The reference includes one additional mode-dependent route (`项目启动`); route visibility remains controlled by the existing permission/mode logic and was not altered for this visual adjustment.
+
+## Implementation Checklist
+
+- [x] Add a small amount of vertical breathing room between navigation items.
+- [x] Preserve the existing dense fallback for short windows.
+- [x] Verify the real administrator navigation at both target heights.
+- [x] Confirm no horizontal or vertical page overflow.
+
+final result: passed
+
 # Dashboard Pool, Header Controls, and 90% Scale Design QA
 
 ## Evidence

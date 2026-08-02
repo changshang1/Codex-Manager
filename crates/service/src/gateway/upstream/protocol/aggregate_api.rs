@@ -2335,6 +2335,7 @@ pub(in super::super) fn proxy_aggregate_request(
                 RequestLogUsage {
                     input_tokens: usage.input_tokens,
                     cached_input_tokens: usage.cached_input_tokens,
+                    cache_write_tokens: usage.cache_write_tokens,
                     output_tokens: usage.output_tokens,
                     total_tokens: usage.total_tokens,
                     reasoning_output_tokens: usage.reasoning_output_tokens,

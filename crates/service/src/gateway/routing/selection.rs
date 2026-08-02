@@ -18,6 +18,8 @@ static QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK: AtomicBool =
     AtomicBool::new(DEFAULT_QUOTA_GUARD_ALLOW_ALL_LOW_FALLBACK);
 static CURRENT_DB_PATH: OnceLock<RwLock<String>> = OnceLock::new();
 const DEFAULT_CANDIDATE_CACHE_TTL_MS: u64 = 500;
+const MINUTES_PER_DAY: i64 = 24 * 60;
+const WINDOW_ROUNDING_BIAS_MINUTES: i64 = 3;
 const CANDIDATE_CACHE_TTL_ENV: &str = "CODEXMANAGER_CANDIDATE_CACHE_TTL_MS";
 // OpenAI 在 used_percent 未到 100 时就会触发 usage limit（常见于 ChatGPT Plus OAuth
 // 账号的 5 小时窗口）。将快要耗尽的账号移出正常候选，必要时按兜底开关使用低额度账号。
@@ -273,15 +275,43 @@ pub(crate) fn is_low_quota_snapshot(snap: &UsageSnapshotRecord) -> bool {
 }
 
 fn is_low_quota_snapshot_at(snap: &UsageSnapshotRecord, config: QuotaGuardConfig) -> bool {
-    let primary_low = config.primary_min_remaining_percent > 0.0
+    let primary_threshold = quota_guard_threshold_for_window(
+        snap.window_minutes,
+        config.primary_min_remaining_percent,
+        config.secondary_min_remaining_percent,
+        false,
+    );
+    let secondary_threshold = quota_guard_threshold_for_window(
+        snap.secondary_window_minutes,
+        config.primary_min_remaining_percent,
+        config.secondary_min_remaining_percent,
+        true,
+    );
+    let primary_low = primary_threshold > 0.0
         && snap
             .used_percent
-            .is_some_and(|pct| remaining_percent(pct) <= config.primary_min_remaining_percent);
-    let secondary_low = config.secondary_min_remaining_percent > 0.0
+            .is_some_and(|pct| remaining_percent(pct) <= primary_threshold);
+    let secondary_low = secondary_threshold > 0.0
         && snap
             .secondary_used_percent
-            .is_some_and(|pct| remaining_percent(pct) <= config.secondary_min_remaining_percent);
+            .is_some_and(|pct| remaining_percent(pct) <= secondary_threshold);
     primary_low || secondary_low
+}
+
+fn quota_guard_threshold_for_window(
+    window_minutes: Option<i64>,
+    five_hour_threshold: f64,
+    weekly_threshold: f64,
+    secondary_field: bool,
+) -> f64 {
+    match window_minutes {
+        Some(minutes) if minutes > MINUTES_PER_DAY + WINDOW_ROUNDING_BIAS_MINUTES => {
+            weekly_threshold
+        }
+        Some(_) => five_hour_threshold,
+        None if secondary_field => weekly_threshold,
+        None => five_hour_threshold,
+    }
 }
 
 fn remaining_percent(used_percent: f64) -> f64 {

@@ -5,6 +5,18 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-31
+
+### Changed
+
+- Bumped the release version to `0.5.2` and synchronized the workspace, frontend package, Tauri desktop metadata, and lockfiles.
+- Added cache-write token pricing to the model catalog and request billing, including cache-write usage extraction from Anthropic, Gemini, and OpenAI-style responses.
+- Increased wide-screen sidebar navigation spacing while retaining the compact layout for short viewports to prevent overflow.
+
+### Fixed
+
+- Excluded non-`2xx` failed requests from token and estimated-cost rollups. Client-cancelled `499` requests can still debit the wallet when upstream work may already have incurred a cost, but remain excluded from successful usage totals.
+
 ## [0.5.1] - 2026-07-26
 
 ### Added
@@ -440,7 +452,8 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 ### Changed
 - The operation area of ​​the account management page is integrated into a single "Account Operation" drop-down menu, replacing the stack of multiple buttons on the right, making the interface more concise.
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.3...v0.4.4

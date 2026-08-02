@@ -79,16 +79,44 @@ test("mobile management toolbars wrap without hidden page overflow", async () =>
 });
 
 test("wide tables retain reachable actions and visible empty states", async () => {
-  const [accountsSource, apiKeysSource, modelsSource] = await Promise.all([
-    readSource("src/app/accounts/accounts-page-view.tsx"),
-    readSource("src/app/apikeys/page.tsx"),
-    readSource("src/app/models/page.tsx"),
-  ]);
+  const [accountsSource, apiKeysSource, modelsSource, stylesSource] =
+    await Promise.all([
+      readSource("src/app/accounts/accounts-page-view.tsx"),
+      readSource("src/app/apikeys/page.tsx"),
+      readSource("src/app/models/page.tsx"),
+      readSource("src/app/globals.css"),
+    ]);
 
   assert.match(accountsSource, /w-\[calc\(100dvw-6rem\)\]/);
   assert.match(apiKeysSource, /w-\[calc\(100dvw-6rem\)\]/);
   assert.match(modelsSource, /table-sticky-action-head/);
   assert.match(modelsSource, /table-sticky-action-cell/);
+  assert.match(
+    accountsSource,
+    /account-pool-layout[\s\S]*account-pool-main-pane[\s\S]*account-pool-main-table[\s\S]*account-pool-col-status[\s\S]*account-pool-action-rail/,
+  );
+  assert.doesNotMatch(accountsSource, /table-sticky-action-(?:head|cell)/);
+  assert.match(accountsSource, /new ResizeObserver\(syncRowHeights\)/);
+  assert.match(accountsSource, /data-account-pool-main-row/);
+  assert.match(accountsSource, /data-account-pool-action-row/);
+  assert.match(accountsSource, /renderAccountAccess\(account\)/);
+  assert.match(accountsSource, /renderAccountActions\(account\)/);
+  assert.match(
+    stylesSource,
+    /\.account-pool-layout[\s\S]*--account-pool-action-width: 216px;[\s\S]*grid-template-columns: minmax\(0, 1fr\) var\(--account-pool-action-width\);/,
+  );
+  assert.match(
+    stylesSource,
+    /\.account-pool-main-table[\s\S]*table-layout: fixed;[\s\S]*width: 100%;[\s\S]*min-width: 1280px;/,
+  );
+  assert.match(
+    stylesSource,
+    /\.account-pool-action-rail[\s\S]*position: relative;[\s\S]*z-index: 5;[\s\S]*width: var\(--account-pool-action-width\);/,
+  );
+  assert.match(
+    stylesSource,
+    /\.account-pool-action-rail-head,[\s\S]*grid-template-columns: 104px 112px;/,
+  );
 });
 
 test("primary and theme buttons expose clear interaction state", async () => {
@@ -114,7 +142,8 @@ test("dense management tables keep readable content and reachable row actions", 
 
   assert.match(accountHelpersSource, /text-\[15px\][^\"]*leading-5/);
   assert.match(accountHelpersSource, /h-5 shrink-0 px-2 text-\[10px\]/);
-  assert.match(accountHelpersSource, /mt-1\.5 text-\[11px\] leading-4/);
+  assert.match(accountHelpersSource, /text-\[11px\] leading-4 text-muted-foreground/);
+  assert.match(accountHelpersSource, /warrantyExpiresOn \? "mt-1" : "mt-1\.5"/);
   assert.match(accountsViewSource, /h-8 w-8 text-muted-foreground[\s\S]*<ArrowUp className="h-4 w-4"/);
   assert.match(proxyCellSource, /text-\[13px\] font-medium leading-5/);
   assert.match(apiKeysSource, /h-8 w-8 text-muted-foreground[\s\S]*<Eye className="h-4 w-4"/);

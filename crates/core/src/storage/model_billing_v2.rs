@@ -14,6 +14,8 @@ pub struct ModelPriceTierV2 {
     pub input_microusd_per_1m: i64,
     #[serde(alias = "cached_input_microusd_per_1m")]
     pub cached_input_microusd_per_1m: i64,
+    #[serde(default, alias = "cache_write_microusd_per_1m")]
+    pub cache_write_microusd_per_1m: Option<i64>,
     #[serde(alias = "output_microusd_per_1m")]
     pub output_microusd_per_1m: i64,
 }
@@ -22,6 +24,8 @@ pub struct ModelPriceTierV2 {
 #[serde(rename_all = "camelCase")]
 pub struct ChargeComputationV2 {
     pub uncached_input_tokens: i64,
+    pub normal_input_tokens: i64,
+    pub cache_write_tokens: i64,
     pub numerator: i128,
     pub base_cost_microusd: i64,
     pub charged_cost_microusd: i64,
@@ -35,6 +39,8 @@ pub struct ChargeSnapshotInputV2 {
     pub usage_source: String,
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    #[serde(default)]
+    pub cache_write_tokens: i64,
     pub output_tokens: i64,
     pub rate_multiplier_millis: i64,
     #[serde(default)]
@@ -59,9 +65,11 @@ pub struct ChargeSnapshotV2 {
     pub usage_source: String,
     pub input_tokens: i64,
     pub cached_input_tokens: i64,
+    pub cache_write_tokens: i64,
     pub output_tokens: i64,
     pub input_microusd_per_1m: i64,
     pub cached_input_microusd_per_1m: i64,
+    pub cache_write_microusd_per_1m: i64,
     pub output_microusd_per_1m: i64,
     pub rate_multiplier_millis: i64,
     pub base_cost_microusd: i64,
@@ -87,15 +95,20 @@ fn ceil_div(value: i128, divisor: i128) -> i128 {
 pub fn compute_charge_v2(
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_write_tokens: i64,
     output_tokens: i64,
     tier: &ModelPriceTierV2,
     rate_multiplier_millis: i64,
 ) -> Result<ChargeComputationV2> {
     if input_tokens < 0
         || cached_input_tokens < 0
+        || cache_write_tokens < 0
         || output_tokens < 0
         || tier.input_microusd_per_1m < 0
         || tier.cached_input_microusd_per_1m < 0
+        || tier
+            .cache_write_microusd_per_1m
+            .is_some_and(|rate| rate < 0)
         || tier.output_microusd_per_1m < 0
         || rate_multiplier_millis < 0
     {
@@ -103,9 +116,11 @@ pub fn compute_charge_v2(
             "tokens, rates, and multiplier must be non-negative".to_string(),
         ));
     }
-    let uncached_input_tokens = input_tokens.saturating_sub(cached_input_tokens).max(0);
     let cached_tokens_for_charge = cached_input_tokens.min(input_tokens);
-    let input_part = i128::from(uncached_input_tokens)
+    let uncached_input_tokens = input_tokens.saturating_sub(cached_tokens_for_charge);
+    let cache_write_tokens_for_charge = cache_write_tokens.min(uncached_input_tokens);
+    let normal_input_tokens = uncached_input_tokens.saturating_sub(cache_write_tokens_for_charge);
+    let input_part = i128::from(normal_input_tokens)
         .checked_mul(i128::from(tier.input_microusd_per_1m))
         .ok_or_else(|| {
             rusqlite::Error::InvalidParameterName("input charge overflow".to_string())
@@ -115,6 +130,14 @@ pub fn compute_charge_v2(
         .ok_or_else(|| {
             rusqlite::Error::InvalidParameterName("cached charge overflow".to_string())
         })?;
+    let cache_write_part = i128::from(cache_write_tokens_for_charge)
+        .checked_mul(i128::from(
+            tier.cache_write_microusd_per_1m
+                .unwrap_or(tier.input_microusd_per_1m),
+        ))
+        .ok_or_else(|| {
+            rusqlite::Error::InvalidParameterName("cache write charge overflow".to_string())
+        })?;
     let output_part = i128::from(output_tokens)
         .checked_mul(i128::from(tier.output_microusd_per_1m))
         .ok_or_else(|| {
@@ -122,6 +145,7 @@ pub fn compute_charge_v2(
         })?;
     let numerator = input_part
         .checked_add(cached_part)
+        .and_then(|value| value.checked_add(cache_write_part))
         .and_then(|value| value.checked_add(output_part))
         .ok_or_else(|| rusqlite::Error::InvalidParameterName("charge overflow".to_string()))?;
     let charged_numerator = numerator
@@ -131,6 +155,8 @@ pub fn compute_charge_v2(
         })?;
     Ok(ChargeComputationV2 {
         uncached_input_tokens,
+        normal_input_tokens,
+        cache_write_tokens: cache_write_tokens_for_charge,
         numerator,
         base_cost_microusd: checked_i64(ceil_div(numerator, 1_000_000), "base cost")?,
         charged_cost_microusd: checked_i64(
@@ -149,21 +175,24 @@ fn map_snapshot(row: &rusqlite::Row<'_>) -> Result<ChargeSnapshotV2> {
         usage_source: row.get(4)?,
         input_tokens: row.get(5)?,
         cached_input_tokens: row.get(6)?,
-        output_tokens: row.get(7)?,
-        input_microusd_per_1m: row.get(8)?,
-        cached_input_microusd_per_1m: row.get(9)?,
-        output_microusd_per_1m: row.get(10)?,
-        rate_multiplier_millis: row.get(11)?,
-        base_cost_microusd: row.get(12)?,
-        charged_cost_microusd: row.get(13)?,
-        currency: row.get(14)?,
-        created_at: row.get(15)?,
+        cache_write_tokens: row.get(7)?,
+        output_tokens: row.get(8)?,
+        input_microusd_per_1m: row.get(9)?,
+        cached_input_microusd_per_1m: row.get(10)?,
+        cache_write_microusd_per_1m: row.get(11)?,
+        output_microusd_per_1m: row.get(12)?,
+        rate_multiplier_millis: row.get(13)?,
+        base_cost_microusd: row.get(14)?,
+        charged_cost_microusd: row.get(15)?,
+        currency: row.get(16)?,
+        created_at: row.get(17)?,
     })
 }
 
 const SNAPSHOT_SELECT: &str = "SELECT request_log_id,model_id,model_slug,tier_min_input_tokens,
-    usage_source,input_tokens,cached_input_tokens,output_tokens,input_microusd_per_1m,
-    cached_input_microusd_per_1m,output_microusd_per_1m,rate_multiplier_millis,
+    usage_source,input_tokens,cached_input_tokens,cache_write_tokens,output_tokens,
+    input_microusd_per_1m,cached_input_microusd_per_1m,cache_write_microusd_per_1m,
+    output_microusd_per_1m,rate_multiplier_millis,
     base_cost_microusd,charged_cost_microusd,currency,created_at
   FROM request_charge_snapshots";
 
@@ -218,7 +247,8 @@ impl Storage {
         self.conn
             .query_row(
                 "SELECT m.id,t.min_input_tokens,t.input_microusd_per_1m,
-                        t.cached_input_microusd_per_1m,t.output_microusd_per_1m
+                        t.cached_input_microusd_per_1m,t.cache_write_microusd_per_1m,
+                        t.output_microusd_per_1m
                  FROM models m
                  JOIN model_prices p ON p.model_id=m.id AND p.price_status<>'missing'
                  JOIN model_price_tiers t ON t.model_id=m.id AND t.min_input_tokens<=?2
@@ -232,7 +262,8 @@ impl Storage {
                             min_input_tokens: row.get(1)?,
                             input_microusd_per_1m: row.get(2)?,
                             cached_input_microusd_per_1m: row.get(3)?,
-                            output_microusd_per_1m: row.get(4)?,
+                            cache_write_microusd_per_1m: row.get(4)?,
+                            output_microusd_per_1m: row.get(5)?,
                         },
                     ))
                 },
@@ -296,7 +327,8 @@ impl Storage {
         }
         let (model_id, tier) = tx.query_row(
             "SELECT m.id,t.min_input_tokens,t.input_microusd_per_1m,
-                    t.cached_input_microusd_per_1m,t.output_microusd_per_1m
+                    t.cached_input_microusd_per_1m,t.cache_write_microusd_per_1m,
+                    t.output_microusd_per_1m
              FROM models m JOIN model_price_tiers t ON t.model_id=m.id AND t.min_input_tokens<=?2
              WHERE m.slug=?1 COLLATE NOCASE ORDER BY t.min_input_tokens DESC LIMIT 1",
             params![input.model_slug.trim(), input.input_tokens],
@@ -307,7 +339,8 @@ impl Storage {
                         min_input_tokens: row.get(1)?,
                         input_microusd_per_1m: row.get(2)?,
                         cached_input_microusd_per_1m: row.get(3)?,
-                        output_microusd_per_1m: row.get(4)?,
+                        cache_write_microusd_per_1m: row.get(4)?,
+                        output_microusd_per_1m: row.get(5)?,
                     },
                 ))
             },
@@ -315,18 +348,26 @@ impl Storage {
         let computation = compute_charge_v2(
             input.input_tokens,
             input.cached_input_tokens,
+            input.cache_write_tokens,
             input.output_tokens,
             &tier,
             input.rate_multiplier_millis,
         )?;
         let cached_input_tokens = input.cached_input_tokens.min(input.input_tokens);
+        let cache_write_tokens = input
+            .cache_write_tokens
+            .min(input.input_tokens.saturating_sub(cached_input_tokens));
+        let cache_write_microusd_per_1m = tier
+            .cache_write_microusd_per_1m
+            .unwrap_or(tier.input_microusd_per_1m);
         let now = now_ts();
         tx.execute(
             "INSERT INTO request_charge_snapshots(request_log_id,model_id,model_slug,
-               tier_min_input_tokens,usage_source,input_tokens,cached_input_tokens,output_tokens,
-               input_microusd_per_1m,cached_input_microusd_per_1m,output_microusd_per_1m,
+               tier_min_input_tokens,usage_source,input_tokens,cached_input_tokens,cache_write_tokens,
+               output_tokens,input_microusd_per_1m,cached_input_microusd_per_1m,
+               cache_write_microusd_per_1m,output_microusd_per_1m,
                rate_multiplier_millis,base_cost_microusd,charged_cost_microusd,currency,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'USD',?15)",
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,'USD',?17)",
             params![
                 input.request_log_id,
                 model_id,
@@ -335,9 +376,11 @@ impl Storage {
                 input.usage_source,
                 input.input_tokens,
                 cached_input_tokens,
+                cache_write_tokens,
                 input.output_tokens,
                 tier.input_microusd_per_1m,
                 tier.cached_input_microusd_per_1m,
+                cache_write_microusd_per_1m,
                 tier.output_microusd_per_1m,
                 input.rate_multiplier_millis,
                 computation.base_cost_microusd,
@@ -416,21 +459,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn integer_formula_charges_cached_subset_once() {
+    fn integer_formula_charges_read_write_and_normal_input_once() {
         let tier = ModelPriceTierV2 {
             min_input_tokens: 0,
             input_microusd_per_1m: 2_000_000,
             cached_input_microusd_per_1m: 200_000,
+            cache_write_microusd_per_1m: Some(2_500_000),
             output_microusd_per_1m: 10_000_000,
         };
-        let result = compute_charge_v2(100, 40, 10, &tier, 1_500).unwrap();
+        let result = compute_charge_v2(100, 40, 20, 10, &tier, 1_500).unwrap();
         assert_eq!(result.uncached_input_tokens, 60);
-        assert_eq!(result.numerator, 228_000_000);
-        assert_eq!(result.base_cost_microusd, 228);
-        assert_eq!(result.charged_cost_microusd, 342);
-        let free = compute_charge_v2(100, 40, 10, &tier, 0).unwrap();
-        assert_eq!(free.base_cost_microusd, 228);
+        assert_eq!(result.normal_input_tokens, 40);
+        assert_eq!(result.cache_write_tokens, 20);
+        assert_eq!(result.numerator, 238_000_000);
+        assert_eq!(result.base_cost_microusd, 238);
+        assert_eq!(result.charged_cost_microusd, 357);
+        let free = compute_charge_v2(100, 40, 20, 10, &tier, 0).unwrap();
+        assert_eq!(free.base_cost_microusd, 238);
         assert_eq!(free.charged_cost_microusd, 0);
+    }
+
+    #[test]
+    fn missing_cache_write_rate_falls_back_to_input_rate() {
+        let tier = ModelPriceTierV2 {
+            min_input_tokens: 0,
+            input_microusd_per_1m: 2_000_000,
+            cached_input_microusd_per_1m: 200_000,
+            cache_write_microusd_per_1m: None,
+            output_microusd_per_1m: 10_000_000,
+        };
+        let result = compute_charge_v2(100, 40, 20, 10, &tier, 1_000).unwrap();
+        assert_eq!(result.numerator, 228_000_000);
+    }
+
+    #[test]
+    fn gpt56_cache_write_prices_apply_at_the_long_context_boundary() {
+        let storage = Storage::open_in_memory().unwrap();
+        storage.init().unwrap();
+        let (_, short) = storage
+            .select_model_price_tier_v2("gpt-5.6-sol", 272_000)
+            .unwrap()
+            .unwrap();
+        let (_, long) = storage
+            .select_model_price_tier_v2("gpt-5.6-sol", 272_001)
+            .unwrap()
+            .unwrap();
+        assert_eq!(short.cache_write_microusd_per_1m, Some(6_250_000));
+        assert_eq!(long.cache_write_microusd_per_1m, Some(12_500_000));
+
+        storage.conn.execute("INSERT INTO request_logs(request_path,method,created_at) VALUES('/v1/responses','POST',1)",[]).unwrap();
+        let snapshot = storage
+            .record_charge_snapshot_v2(&ChargeSnapshotInputV2 {
+                request_log_id: storage.conn.last_insert_rowid(),
+                model_slug: "gpt-5.6-sol".into(),
+                usage_source: "actual".into(),
+                input_tokens: 100,
+                cached_input_tokens: 40,
+                cache_write_tokens: 20,
+                output_tokens: 10,
+                rate_multiplier_millis: 1_000,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(snapshot.cache_write_tokens, 20);
+        assert_eq!(snapshot.cache_write_microusd_per_1m, 6_250_000);
+        assert_eq!(snapshot.base_cost_microusd, 645);
     }
 
     #[test]
@@ -439,9 +532,10 @@ mod tests {
             min_input_tokens: 0,
             input_microusd_per_1m: i64::MAX,
             cached_input_microusd_per_1m: i64::MAX,
+            cache_write_microusd_per_1m: None,
             output_microusd_per_1m: i64::MAX,
         };
-        let error = compute_charge_v2(i64::MAX, 0, i64::MAX, &tier, i64::MAX)
+        let error = compute_charge_v2(i64::MAX, 0, 0, i64::MAX, &tier, i64::MAX)
             .expect_err("overflow must be rejected");
         assert!(error.to_string().contains("overflow"));
     }
@@ -460,8 +554,9 @@ mod tests {
             .unwrap();
         assert_eq!(low.min_input_tokens, 0);
         assert_eq!(high.min_input_tokens, 272_000);
-        let result = compute_charge_v2(10, 20, 0, &low, 1_000).unwrap();
+        let result = compute_charge_v2(10, 20, 20, 0, &low, 1_000).unwrap();
         assert_eq!(result.uncached_input_tokens, 0);
+        assert_eq!(result.cache_write_tokens, 0);
         assert_eq!(
             result.numerator,
             10_i128 * i128::from(low.cached_input_microusd_per_1m)

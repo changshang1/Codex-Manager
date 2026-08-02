@@ -169,6 +169,10 @@ function warmupDesktopHomePageInBackground() {
   }, 0);
 }
 
+function isExpectedDesktopDevProxyDisconnect(error) {
+  return ["ECONNABORTED", "ECONNRESET", "EPIPE", "ERR_STREAM_DESTROYED"].includes(error?.code);
+}
+
 function createDesktopDevProxy() {
   const server = http.createServer((request, response) => {
     const proxyRequest = http.request(
@@ -183,17 +187,63 @@ function createDesktopDevProxy() {
         },
       },
       (proxyResponse) => {
+        if (response.destroyed) {
+          proxyResponse.destroy();
+          return;
+        }
         response.writeHead(proxyResponse.statusCode ?? 502, proxyResponse.headers);
+        proxyResponse.on("error", (error) => {
+          response.destroy();
+          if (!isExpectedDesktopDevProxyDisconnect(error)) {
+            console.warn(`Next dev proxy response failed: ${error.message}`);
+          }
+        });
         proxyResponse.pipe(response);
       },
     );
 
     proxyRequest.on("error", (error) => {
+      if (response.destroyed || isExpectedDesktopDevProxyDisconnect(error)) {
+        response.destroy();
+        return;
+      }
+      if (response.headersSent) {
+        console.warn(`Next dev proxy failed after sending headers: ${error.message}`);
+        response.destroy();
+        return;
+      }
       response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
       response.end(`Next dev proxy error: ${error.message}`);
     });
 
+    request.on("aborted", () => {
+      proxyRequest.destroy();
+    });
+    request.on("error", (error) => {
+      proxyRequest.destroy();
+      if (!isExpectedDesktopDevProxyDisconnect(error)) {
+        console.warn(`Desktop dev proxy request failed: ${error.message}`);
+      }
+    });
+    response.on("error", (error) => {
+      proxyRequest.destroy();
+      if (!isExpectedDesktopDevProxyDisconnect(error)) {
+        console.warn(`Desktop dev proxy client response failed: ${error.message}`);
+      }
+    });
+
     request.pipe(proxyRequest);
+  });
+
+  // Reloading a WebView closes its HTTP/HMR sockets immediately. On Windows
+  // this commonly surfaces as ECONNABORTED on the raw client socket; consume
+  // that expected disconnect so it does not terminate beforeDevCommand.
+  server.on("connection", (socket) => {
+    socket.on("error", (error) => {
+      if (!isExpectedDesktopDevProxyDisconnect(error)) {
+        console.warn(`Desktop dev proxy client socket failed: ${error.message}`);
+      }
+    });
   });
 
   server.on("upgrade", (request, socket, head) => {
@@ -218,6 +268,9 @@ function createDesktopDevProxy() {
 
     upstream.on("error", () => {
       socket.destroy();
+    });
+    socket.on("close", () => {
+      upstream.destroy();
     });
   });
 

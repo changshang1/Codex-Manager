@@ -334,6 +334,55 @@ fn low_quota_account_ids_for_accounts_filters_latest_snapshot_in_sql() {
 }
 
 #[test]
+fn low_quota_account_ids_match_thresholds_by_window_duration() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+
+    for account_id in ["acc-swapped", "acc-long-only"] {
+        storage
+            .insert_account(&sample_account(account_id, now))
+            .expect("insert account");
+    }
+    storage
+        .insert_usage_snapshot(&UsageSnapshotRecord {
+            account_id: "acc-swapped".to_string(),
+            used_percent: Some(90.0),
+            window_minutes: Some(10_080),
+            resets_at: None,
+            secondary_used_percent: Some(90.0),
+            secondary_window_minutes: Some(300),
+            secondary_resets_at: None,
+            credits_json: None,
+            captured_at: now,
+        })
+        .expect("insert swapped windows");
+    storage
+        .insert_usage_snapshot(&UsageSnapshotRecord {
+            account_id: "acc-long-only".to_string(),
+            used_percent: Some(90.0),
+            window_minutes: Some(10_080),
+            resets_at: None,
+            secondary_used_percent: None,
+            secondary_window_minutes: None,
+            secondary_resets_at: None,
+            credits_json: None,
+            captured_at: now,
+        })
+        .expect("insert long-only window");
+
+    let low_quota = storage
+        .low_quota_account_ids_for_accounts(
+            &["acc-swapped".to_string(), "acc-long-only".to_string()],
+            15.0,
+            5.0,
+        )
+        .expect("list low quota accounts");
+
+    assert_eq!(low_quota, vec!["acc-swapped".to_string()]);
+}
+
+#[test]
 fn low_quota_account_ids_for_accounts_returns_empty_when_thresholds_disabled() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
@@ -392,12 +441,7 @@ fn usage_account_chunk_queries_defer_final_ordering_to_rust() {
     let low_quota_plan = collect_query_plan_with_params(
         &storage,
         &format!("EXPLAIN QUERY PLAN {low_quota_sql}"),
-        vec![
-            rusqlite::types::Value::Real(5.0),
-            rusqlite::types::Value::Real(5.0),
-            rusqlite::types::Value::Real(10.0),
-            rusqlite::types::Value::Real(10.0),
-        ],
+        vec![rusqlite::types::Value::Real(5.0); 8],
     );
 
     for (label, plan) in [

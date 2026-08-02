@@ -1,6 +1,6 @@
 {
-  "revision": 5,
-  "source_sha256": "4914710f243f67c3b32895bfc91e51798cddd2f4020f4c82230fef2798eb0076",
+  "revision": 7,
+  "source_sha256": "bd20b8f4dca9c2408ad3b1f41723689d03e98d450beef29549d08a550512e64a",
   "models": [
     {
       "slug": "gpt-5.6-sol",
@@ -15,8 +15,8 @@
       "price_status": "official",
       "price_source": "https://developers.openai.com/api/docs/models/compare",
       "price_tiers": [
-        {"min_input_tokens":0,"input_microusd_per_1m":5000000,"cached_input_microusd_per_1m":500000,"output_microusd_per_1m":30000000},
-        {"min_input_tokens":272000,"input_microusd_per_1m":10000000,"cached_input_microusd_per_1m":1000000,"output_microusd_per_1m":45000000}
+        {"min_input_tokens":0,"input_microusd_per_1m":5000000,"cached_input_microusd_per_1m":500000,"cache_write_microusd_per_1m":6250000,"output_microusd_per_1m":30000000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":10000000,"cached_input_microusd_per_1m":1000000,"cache_write_microusd_per_1m":12500000,"output_microusd_per_1m":45000000}
       ]
     },
     {
@@ -32,8 +32,8 @@
       "price_status": "official",
       "price_source": "https://developers.openai.com/api/docs/models/compare",
       "price_tiers": [
-        {"min_input_tokens":0,"input_microusd_per_1m":2500000,"cached_input_microusd_per_1m":250000,"output_microusd_per_1m":15000000},
-        {"min_input_tokens":272000,"input_microusd_per_1m":5000000,"cached_input_microusd_per_1m":500000,"output_microusd_per_1m":22500000}
+        {"min_input_tokens":0,"input_microusd_per_1m":2000000,"cached_input_microusd_per_1m":200000,"cache_write_microusd_per_1m":2500000,"output_microusd_per_1m":12000000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":4000000,"cached_input_microusd_per_1m":400000,"cache_write_microusd_per_1m":5000000,"output_microusd_per_1m":18000000}
       ]
     },
     {
@@ -49,8 +49,8 @@
       "price_status": "official",
       "price_source": "https://developers.openai.com/api/docs/models/compare",
       "price_tiers": [
-        {"min_input_tokens":0,"input_microusd_per_1m":1000000,"cached_input_microusd_per_1m":100000,"output_microusd_per_1m":6000000},
-        {"min_input_tokens":272000,"input_microusd_per_1m":2000000,"cached_input_microusd_per_1m":200000,"output_microusd_per_1m":9000000}
+        {"min_input_tokens":0,"input_microusd_per_1m":200000,"cached_input_microusd_per_1m":20000,"cache_write_microusd_per_1m":250000,"output_microusd_per_1m":1200000},
+        {"min_input_tokens":272001,"input_microusd_per_1m":400000,"cached_input_microusd_per_1m":40000,"cache_write_microusd_per_1m":500000,"output_microusd_per_1m":1800000}
       ]
     },
     {

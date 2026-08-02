@@ -28,6 +28,7 @@ struct ResponsesFromAnthropicState {
     output_text: String,
     input_tokens: i64,
     cached_input_tokens: i64,
+    cache_write_tokens: i64,
     output_tokens: i64,
     total_tokens: Option<i64>,
     reasoning_output_tokens: i64,
@@ -237,6 +238,17 @@ impl ResponsesFromAnthropicSseReader {
         ) {
             self.state.cached_input_tokens = value;
         }
+        if let Some(value) = usage_i64(
+            usage,
+            &[
+                "cache_creation_input_tokens",
+                "cache_write_input_tokens",
+                "input_tokens_details.cache_write_tokens",
+                "prompt_tokens_details.cache_write_tokens",
+            ],
+        ) {
+            self.state.cache_write_tokens = value;
+        }
         if let Some(value) = usage_i64(usage, &["output_tokens", "completion_tokens"]) {
             self.state.output_tokens = value;
         }
@@ -252,7 +264,10 @@ impl ResponsesFromAnthropicSseReader {
         }
         self.state.total_tokens = usage_i64(usage, &["total_tokens"]).or_else(|| {
             Some(
-                self.state.input_tokens + self.state.cached_input_tokens + self.state.output_tokens,
+                self.state.input_tokens
+                    + self.state.cached_input_tokens
+                    + self.state.cache_write_tokens
+                    + self.state.output_tokens,
             )
         });
     }
@@ -490,6 +505,7 @@ impl ResponsesFromAnthropicSseReader {
         if let Ok(mut usage) = self.usage_collector.lock() {
             usage.input_tokens = Some(self.state.input_tokens);
             usage.cached_input_tokens = Some(self.state.cached_input_tokens);
+            usage.cache_write_tokens = Some(self.state.cache_write_tokens);
             usage.output_tokens = Some(self.state.output_tokens);
             usage.total_tokens = self.state.total_tokens;
             usage.reasoning_output_tokens = Some(self.state.reasoning_output_tokens);
@@ -538,7 +554,10 @@ impl ResponsesFromAnthropicSseReader {
                 .state
                 .total_tokens
                 .unwrap_or(self.state.input_tokens + self.state.output_tokens),
-            "input_tokens_details": { "cached_tokens": self.state.cached_input_tokens },
+            "input_tokens_details": {
+                "cached_tokens": self.state.cached_input_tokens,
+                "cache_write_tokens": self.state.cache_write_tokens,
+            },
             "output_tokens_details": { "reasoning_tokens": self.state.reasoning_output_tokens },
         })
     }

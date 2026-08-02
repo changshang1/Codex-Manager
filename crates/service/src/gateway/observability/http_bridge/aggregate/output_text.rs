@@ -14,6 +14,7 @@ const STREAM_INCOMPLETE_FALLBACK_MESSAGE: &str = "连接中断（可能是网络
 pub(crate) struct UpstreamResponseUsage {
     pub input_tokens: Option<i64>,
     pub cached_input_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub reasoning_output_tokens: Option<i64>,
@@ -116,6 +117,9 @@ pub(in super::super) fn merge_usage(
     if source.cached_input_tokens.is_some() {
         target.cached_input_tokens = source.cached_input_tokens;
     }
+    if source.cache_write_tokens.is_some() {
+        target.cache_write_tokens = source.cache_write_tokens;
+    }
     if source.output_tokens.is_some() {
         target.output_tokens = source.output_tokens;
     }
@@ -148,6 +152,7 @@ pub(in super::super) fn merge_usage(
 pub(in super::super) fn usage_has_signal(usage: &UpstreamResponseUsage) -> bool {
     usage.input_tokens.is_some()
         || usage.cached_input_tokens.is_some()
+        || usage.cache_write_tokens.is_some()
         || usage.output_tokens.is_some()
         || usage.total_tokens.is_some()
         || usage.reasoning_output_tokens.is_some()
@@ -192,6 +197,27 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
                 .and_then(|details| details.get("cached_tokens"))
                 .and_then(Value::as_i64)
         });
+    let cache_write_tokens = usage
+        .and_then(|map| map.get("input_tokens_details"))
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            usage
+                .and_then(|map| map.get("prompt_tokens_details"))
+                .and_then(Value::as_object)
+                .and_then(|details| details.get("cache_write_tokens"))
+                .and_then(Value::as_i64)
+        })
+        .or_else(|| {
+            usage.and_then(|map| map.get("cache_write_input_tokens").and_then(Value::as_i64))
+        })
+        .or_else(|| {
+            usage.and_then(|map| {
+                map.get("cache_creation_input_tokens")
+                    .and_then(Value::as_i64)
+            })
+        });
     let reasoning_output_tokens = usage
         .and_then(|map| map.get("output_tokens_details"))
         .and_then(Value::as_object)
@@ -210,6 +236,7 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
     UpstreamResponseUsage {
         input_tokens,
         cached_input_tokens,
+        cache_write_tokens,
         output_tokens,
         total_tokens,
         reasoning_output_tokens,

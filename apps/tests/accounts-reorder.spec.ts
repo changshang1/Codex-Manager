@@ -161,8 +161,11 @@ test("account row menu moves an account to the top of the pool", async ({
   const openMenuItem = (name: string) =>
     page.getByRole("menuitem", { name }).filter({ visible: true });
 
-  const lastRow = page.locator("tbody tr").last();
-  await lastRow.getByLabel("更多账号操作").click();
+  const actionCells = page
+    .getByRole("table", { name: "账号操作" })
+    .getByRole("cell");
+  await expect(actionCells).toHaveCount(ACCOUNT_ITEMS.length);
+  await actionCells.last().getByLabel("更多账号操作").click();
 
   const moveToTopItem = openMenuItem("移到顶部");
   await expect(moveToTopItem).toBeVisible();
@@ -184,8 +187,7 @@ test("account row menu moves an account to the top of the pool", async ({
   await expect(page.getByText("账号顺序已调整（3 项）")).toBeVisible();
   await expect(openMenuItem("移到顶部")).toHaveCount(0);
 
-  const firstRow = page.locator("tbody tr").first();
-  await firstRow.getByLabel("更多账号操作").click();
+  await actionCells.first().getByLabel("更多账号操作").click();
   await expect(openMenuItem("移到顶部")).toHaveAttribute(
     "aria-disabled",
     "true",
