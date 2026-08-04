@@ -34,14 +34,14 @@
 
 聚合 API 是一个可转发的上游供应商记录，包含：
 
-- 供应商类型：`codex`、`claude`、`gemini`。
+- 供应商类型：`codex`、`claude`、`gemini`、`compatible`、`responses`。
 - 上游基础地址：例如 `https://api.openai.com` 或带供应商前缀的 `https://open.bigmodel.cn/api/anthropic`。
 - 认证方式：API Key 或用户名密码。
 - 自定义鉴权参数。
 - 自定义 action path。
 - 可选余额查询配置。
 
-聚合 API 连接本身不再维护固定模型、模型白名单、供应商模型池或发现结果。
+聚合 API 连接不维护对外平台模型，但可以缓存按需访问供应商 `/models` 得到的上游模型列表；发现结果只辅助填写 V2 route，不会自动创建平台模型。
 
 ### 模型目录 V2 route
 
@@ -54,7 +54,7 @@ V2 route 用于把平台模型绑定到具体聚合 API 来源和上游模型。
 - 来源 ID：`ag_xxx`
 - 上游模型：`gpt-5.4-mini`
 
-命中该平台模型时，Gateway 只读取 `model_routes` 构建对应聚合候选，并把该候选请求 JSON body 中的 `model` 改写为 route 的上游模型。route 在模型管理页手工保存，不访问供应商 `/models`。
+命中该平台模型时，Gateway 读取 `model_routes` 构建对应聚合候选，并把该候选请求 JSON body 中的 `model` 改写为 route 的上游模型。模型管理页可手工输入上游模型，也可点击刷新按钮按需访问供应商 `/models`。
 
 ## 请求入口
 
@@ -123,6 +123,7 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 | --- | --- |
 | `anthropic_native` | `claude` |
 | `gemini_native` | `gemini` |
+| 客户端 `/v1/responses` | `codex`、`responses` |
 | 其他 | `codex` |
 
 `providerType = compatible` 会同时进入 `codex` 和 `claude` 候选，但不会进入 `gemini` 候选。它适合共用同一 URL 和密钥、并原生提供 `/v1/responses`、`/v1/chat/completions` 与 `/v1/messages` 的聚合供应商。
@@ -154,6 +155,7 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 | `balanceQueryAccessToken` | 否 | provider secret | 余额查询专用 access token，单独存储。 |
 | `balanceQueryUserId` | 否 | 无 | New API 查询时作为 `New-Api-User` header。 |
 | `balanceQueryConfigJson` | custom 模板时是 | 无 | 自定义余额 JSON 配置。 |
+| `compatibilityConfigJson` | Responses 类型时否 | `{}` | Responses 内置档案、声明式字段规则、静态请求头和模型发现配置。 |
 | `autoToggleEnabled` | 否 | `false` | 是否启用该连接的按日额度自动熔断与次日恢复。 |
 | `consecutiveFailures` | 响应只读 | `0` | 连续命中明确 daily quota 错误的独立业务请求数。 |
 | `autoDisabled` | 响应只读 | `false` | 当前是否被系统自动熔断；与人工 `status` 分开。 |
@@ -178,6 +180,7 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 | `claude` | `claude`、`anthropic`、`anthropic_native`、`claude_code` |
 | `gemini` | `gemini`、`gemini_native`、`google`、`google_ai`、`google_gemini` |
 | `compatible` | `compatible` |
+| `responses` | `responses`、`response`、`responses_api`、`openai_responses` |
 
 默认 URL：
 
@@ -187,6 +190,7 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 | `claude` | `https://api.anthropic.com/v1` |
 | `gemini` | `https://generativelanguage.googleapis.com` |
 | `compatible` | `https://api.openai.com/v1` |
+| `responses` | `https://api.openai.com/v1` |
 
 `compatible` 会按客户端当前请求路径和请求体原样选择协议，不触发 Codex 专用传输改写，也不会把 Responses 请求桥接成 Claude Messages。为确保不同协议都能保留各自路径，使用该类型时应关闭自定义 action。
 
@@ -231,9 +235,14 @@ route 的调度状态按“平台 Key + 平台模型 + 来源类型 + 优先级�
 只有上游明确表达“每日额度已耗尽”时才计数。HTTP 状态码本身永远不足以触发计数；可分析的响应
 范围是 2xx 或 4xx（排除 408），并且 body/SSE 中还必须出现以下明确语义之一：
 
-- 结构化错误的 `code`、`type`、`status` 或 `reason` 等于 `DAILY_LIMIT_EXCEEDED`；大小写不敏感，
-  空格或连字符会规范为下划线。
-- `message` 或 `detail` 明确包含 `daily usage limit exceeded`。
+- 结构化错误的 `code`、`type`、`status` 或 `reason` 等于明确的周期额度耗尽代码；当前支持
+  `DAILY_LIMIT_EXCEEDED`、`WEEKLY_LIMIT_EXCEEDED`、`MONTHLY_LIMIT_EXCEEDED` 及对应的
+  `*_USAGE_LIMIT_EXCEEDED` 形式。大小写不敏感，空格或连字符会规范为下划线。
+- `message` 或 `detail` 明确包含 `daily usage limit exceeded`、`weekly usage limit exceeded` 或
+  `monthly usage limit exceeded`。
+- 余额查询在最近 30 分钟内成功确认 `remaining <= 0`，同时上游返回通用
+  `code=upstream_error / Upstream request failed`。零余额只作为该明确应用层失败的辅助证据，
+  不会单独触发熔断。
 - OpenAI Responses envelope 的 `error`、`response.error`、`response.status_details.error`，或 SSE
   根级/错误事件包含上述信号。
 - Anthropic、Gemini 或兼容供应商的结构化错误，只要能从上述字段确认同一 daily quota 语义。
@@ -446,6 +455,8 @@ Accept: text/event-stream
 - 平台 Key 默认模型、推理等级、service tier 会写入请求。
 - 非原生 Codex 客户端访问 `/v1/responses` 且没有显式 stream 时，会默认补 `stream=true`。
 - 如果命中聚合 API V2 route，会使用该 route 的 `upstreamModel` 改写当前候选 JSON body 顶层 `model` 字段。
+- `responses` 供应商只承接客户端 `/v1/responses`，要求上游直接输出标准 Responses JSON 或 SSE；网关不做响应协议转换。
+- Responses 请求按“内置档案 < 聚合 API 配置 < 模型 route 覆盖”合并声明式兼容配置。
 - 会执行文本输入长度检查。
 
 不会做的处理：
@@ -453,6 +464,151 @@ Accept: text/event-stream
 - 不把 OpenAI chat 自动深度转换成官方 Codex Responses 账号池请求。
 - 不使用账号池的 AT/RT、会话绑定、账号健康预检。
 - 不使用账号池计费归属。
+
+## 通用 Responses API 兼容框架
+
+`providerType = responses` 用于原生支持 OpenAI Responses API 格式的第三方供应商。它只接收客户端 `/v1/responses`，上游必须直接返回标准 Responses 非流式 JSON 或 SSE 事件；当前实现不会把供应商私有响应转换成 Responses。
+
+### 配置优先级
+
+兼容配置按以下顺序合并，后者覆盖前者；对象字段使用递归合并：
+
+1. 内置只读档案。
+2. 聚合 API 的 `compatibilityConfigJson`。
+3. 模型 V2 route 的 `compatibilityOverrideJson`。
+
+内置档案名称：
+
+| profile | 用途 |
+| --- | --- |
+| `openai_standard` | 标准 OpenAI Responses 行为。 |
+| `deepseek` | DeepSeek Responses；当前会拒绝 thinking 模式不支持的 `tool_choice=required`，提示改用 `auto`。 |
+| `generic_responses` | 其它标准 Responses 供应商的保守默认档案。 |
+
+内置档案本身不可编辑。每条聚合 API 和每条模型 route 只保存自己的覆盖 JSON，因此以后新增 `deepseek-v4-pro` 时，通常只需新增或修改模型 route 的 `upstreamModel`，无需修改网关核心代码。只有 Pro 的请求字段约束与 Flash 不同，才需要在该 route 增加局部覆盖。
+
+### 字段规则
+
+`fieldPolicies`（兼容别名 `requestFields`）是以字段路径为键的对象。字段路径支持点号，例如 `reasoning.effort`、`text.verbosity`。
+
+| strategy | 行为 |
+| --- | --- |
+| `pass` | 保持原值。 |
+| `drop` | 字段存在时删除。 |
+| `reject` | 字段存在时拒绝请求并返回明确错误。 |
+| `replace` | 使用规则中的 `value` 替换；父对象不存在时会创建。 |
+| `map` | 当前值为字符串时，使用规则 `value` 对象进行枚举映射。 |
+
+示例：
+
+```json
+{
+  "profile": "deepseek",
+  "fieldPolicies": {
+    "reasoning.effort": {
+      "strategy": "map",
+      "value": {
+        "max": "high"
+      }
+    },
+    "metadata.private": "drop",
+    "tool_choice": "pass"
+  }
+}
+```
+
+字段删除、替换、映射和拒绝会写入网关日志，日志只记录字段路径和动作，不记录密钥或静态 header 值。
+
+### 静态请求头
+
+`staticHeaders` 支持字符串值和以下有限占位符：
+
+- `${secret}`：当前聚合 API secret。
+- `${model}`：route 解析后的上游模型。
+- `${supplier}`：供应商显示名。
+
+示例：
+
+```json
+{
+  "staticHeaders": {
+    "x-provider-model": "${model}",
+    "x-provider-name": "${supplier}"
+  }
+}
+```
+
+禁止通过兼容配置覆盖 `Authorization`、`x-api-key`、`api-key`、`Content-Length`、`Host`、`Connection` 和 `Transfer-Encoding` 等受管 header。鉴权仍应使用聚合 API 的认证配置。
+
+### 模型发现
+
+模型管理页的刷新按钮调用 `aggregateApi/discoverModels`。成功后提供可选列表，失败时保留手工输入；如果以前成功发现过模型，刷新失败会返回旧缓存并显示缓存时间。
+
+```json
+{
+  "modelDiscovery": {
+    "path": "/models",
+    "itemsPath": "data",
+    "idPath": "id",
+    "displayNamePath": "display_name",
+    "pagination": {
+      "enabled": true,
+      "pageParam": "page",
+      "cursorParam": "after",
+      "limitParam": "limit",
+      "pageSize": 100,
+      "maxPages": 10,
+      "hasMorePath": "has_more",
+      "lastIdPath": "last_id"
+    }
+  }
+}
+```
+
+`pagination.enabled` 默认是 `false`；启用后支持标准 `has_more` / `last_id` 游标，也会递增 `page`。单次刷新最多 100 页、10000 个去重模型。发现结果只填充 route 的上游模型选择，不自动创建对外平台模型。
+
+### DeepSeek Flash 配置
+
+聚合 API：
+
+```json
+{
+  "providerType": "responses",
+  "supplierName": "DeepSeek",
+  "url": "https://api.deepseek.com",
+  "authType": "apikey",
+  "compatibilityConfigJson": {
+    "profile": "deepseek",
+    "modelDiscovery": {
+      "path": "/models",
+      "itemsPath": "data",
+      "idPath": "id"
+    }
+  }
+}
+```
+
+模型 route：
+
+```json
+{
+  "sourceKind": "aggregate_api",
+  "sourceId": "选择上面的聚合 API",
+  "upstreamModel": "deepseek-v4-flash",
+  "compatibilityOverrideJson": null
+}
+```
+
+项目验证脚本和人工测试只从系统环境变量 `DEEPSEEK_API_KEY` 读取密钥，不应把真实 key 写入仓库、日志或示例配置。
+
+### previous_response_id 供应商亲和
+
+成功的标准 Responses 响应会持久化 `response.id` 与实际聚合 API 的绑定。后续请求带 `previous_response_id` 时只允许回到原聚合 API，并禁止跨供应商故障转移：
+
+- 找到绑定且供应商可用：只请求该供应商，允许同一供应商内部重试。
+- 绑定供应商当前不可用：返回冲突错误，不切换到其它供应商或账号池。
+- 没有历史绑定但只有一个候选，或平台 Key 显式指定聚合 API：固定该候选。
+- 没有历史绑定且存在多个候选：拒绝请求，避免把有状态上下文发给错误供应商。
 
 ## 重试与失败规则
 
@@ -752,7 +908,7 @@ https://open.bigmodel.cn/api/anthropic/v1/messages
 }
 ```
 
-Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通过聚合 API 做模型发现。
+Gemini 模型同样在模型目录 V2 中新增并配置 route；上游模型名可手工填写，也可在供应商提供兼容 `/models` 时使用按需发现。
 
 ## 模型目录 V2 与聚合 route
 
@@ -764,15 +920,16 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通
 
 1. 在模型管理页新增或编辑平台模型。
 2. 添加 `sourceKind=aggregate_api` 的 route。
-3. 选择聚合 API 的 source ID，手工填写供应商真实 `upstreamModel`。
+3. 选择聚合 API 的 source ID，手工填写供应商真实 `upstreamModel`，或点击刷新按钮读取发现列表。
 4. 一次保存原子提交 model、price tiers、routes、permission groups 和 instructions policy。
 
 运行规则：
 
-- 启动、连接编辑、route 测试和真实请求都不会访问供应商 `/models`。
+- 启动、连接编辑、route 测试和真实请求不会自动访问供应商 `/models`；只有模型管理页点击刷新按钮时才访问。
 - 如果平台模型没有 enabled route，会返回 `model_unavailable: <model>`。
 - 候选源只保留 enabled route 引用的 active 聚合 API。
 - 每个候选独立使用自己的 route `upstreamModel`，请求体不会在候选间泄漏。
+- route 可保存 `compatibilityOverrideJson`，只覆盖该模型到该供应商的 Responses 行为。
 - route 的 `priority` 越大越优先；同优先级用 `weight` 做平滑加权，当前优先级全部失败后才进入低优先级。
 - route 的 `sortOrder` 只控制页面显示，允许负数、`0` 和重复值，不参与真实请求。
 - 聚合连接的 `sort` 也只控制管理页和下拉列表显示；不要用它配置主备请求顺序。
@@ -792,9 +949,10 @@ Gemini 模型同样在模型目录 V2 中手工新增并配置 route；不会通
 | 读取 secret | `service_aggregate_api_read_secret` | `aggregateApi/readSecret` |
 | 删除 | `service_aggregate_api_delete` | `aggregateApi/delete` |
 | 测试连接 | `service_aggregate_api_test_connection` | `aggregateApi/testConnection` |
+| 发现模型 | `service_aggregate_api_discover_models` | `aggregateApi/discoverModels` |
 | 刷新余额 | `service_aggregate_api_refresh_balance` | `aggregateApi/refreshBalance` |
 
-模型目录 V2 使用独立的 `service_managed_model_*_v2` 命令和 `apikey/managedModel*V2` RPC；聚合 API 命令不提供模型发现或模板导入。
+模型目录 V2 使用独立的 `service_managed_model_*_v2` 命令和 `apikey/managedModel*V2` RPC；模型发现 RPC 只返回并缓存供应商模型，不创建平台模型或导入模板。
 
 前端 API 封装在：
 
@@ -875,7 +1033,8 @@ model_unavailable: gpt-5.5
 
 1. 该连接的 `autoToggleEnabled` 是否开启；旧记录和新建连接默认关闭。
 2. 平台 Key 是否使用三种包含聚合来源的轮转之一；纯账号池不会修改聚合计数。
-3. 上游错误是否包含明确 `DAILY_LIMIT_EXCEEDED` 或 `daily usage limit exceeded`，不要只看最终 429/502。
+3. 上游错误是否包含明确的 daily/weekly/monthly quota 信号；JOJO 当前可能返回
+   `reason=MONTHLY_LIMIT_EXCEEDED`。不要只看最终 429/502。
 4. `consecutiveFailures` 是否来自三个独立业务请求；同一请求内部重试只计一次。
 5. 中间是否出现成功请求；成功会立即把连续次数清零。
 6. `status` 是否被人工设为 disabled；人工关闭不会被“解除熔断”或次日恢复改为 active。
@@ -889,7 +1048,7 @@ model_unavailable: gpt-5.5
 4. 所有上游模型名都在模型目录 V2 route 中维护，不在连接记录上配置全局覆盖。
 5. New API 优先用 `balanceQueryTemplate = new_api`。
 6. Claude-compatible 供应商优先显式配置 `x-api-key` raw header。
-7. Codex、Claude 和 Gemini 都手工维护 V2 route，不依赖远端发现。
+7. Codex、Claude、Gemini 和 Responses 都由 V2 route 决定真实上游模型；远端发现只作为输入辅助。
 8. `sortOrder` 和聚合连接 `sort` 只用于页面整理；不要把它们当作运行时优先级。
 9. `CODEXMANAGER_ROUTE_STRATEGY=balanced` 只影响账号池 route 内的具体账号，不会均衡聚合 API route。
 10. 只对确实按日结算额度的连接开启 `autoToggleEnabled`；普通 429 和临时网络错误不会触发熔断。

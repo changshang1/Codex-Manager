@@ -1,9 +1,9 @@
 use codexmanager_core::rpc::types::{AggregateApiListResult, JsonRpcRequest, JsonRpcResponse};
 
 use crate::{
-    create_aggregate_api, delete_aggregate_api, list_aggregate_apis, read_aggregate_api_secret,
-    recover_aggregate_api, refresh_aggregate_api_balance, test_aggregate_api_connection,
-    update_aggregate_api, update_aggregate_api_sorts,
+    create_aggregate_api, delete_aggregate_api, discover_aggregate_api_models, list_aggregate_apis,
+    read_aggregate_api_secret, recover_aggregate_api, refresh_aggregate_api_balance,
+    test_aggregate_api_connection, update_aggregate_api, update_aggregate_api_sorts,
 };
 
 /// 函数 `api_id_param`
@@ -62,6 +62,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let balance_query_access_token = super::string_param(req, "balanceQueryAccessToken");
             let balance_query_user_id = super::string_param(req, "balanceQueryUserId");
             let balance_query_config_json = super::string_param(req, "balanceQueryConfigJson");
+            let compatibility_config_json = super::string_param(req, "compatibilityConfigJson");
             super::value_or_error(create_aggregate_api(
                 url,
                 key,
@@ -83,6 +84,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 balance_query_access_token,
                 balance_query_user_id,
                 balance_query_config_json,
+                compatibility_config_json,
             ))
         }
         "aggregateApi/update" => {
@@ -112,6 +114,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let balance_query_access_token = super::string_param(req, "balanceQueryAccessToken");
             let balance_query_user_id = super::string_param(req, "balanceQueryUserId");
             let balance_query_config_json = super::string_param(req, "balanceQueryConfigJson");
+            let compatibility_config_json = super::string_param(req, "compatibilityConfigJson");
             super::ok_or_error(update_aggregate_api(
                 api_id,
                 url,
@@ -135,6 +138,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 balance_query_access_token,
                 balance_query_user_id,
                 balance_query_config_json,
+                compatibility_config_json,
             ))
         }
         "aggregateApi/recover" => {
@@ -155,6 +159,10 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
         "aggregateApi/testConnection" => {
             let api_id = api_id_param(req).unwrap_or("");
             super::value_or_error(test_aggregate_api_connection(api_id))
+        }
+        "aggregateApi/discoverModels" => {
+            let api_id = api_id_param(req).unwrap_or("");
+            super::value_or_error(discover_aggregate_api_models(api_id))
         }
         "aggregateApi/refreshBalance" => {
             let api_id = api_id_param(req).unwrap_or("");

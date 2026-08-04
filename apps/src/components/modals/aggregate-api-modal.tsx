@@ -18,6 +18,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -39,12 +40,14 @@ const AGGREGATE_API_PROVIDER_LABELS: Record<string, string> = {
   codex: "Codex",
   claude: "Claude",
   compatible: "Codex + Claude",
+  responses: "Responses 兼容",
 };
 
 const AGGREGATE_API_URL_PLACEHOLDERS: Record<string, string> = {
   codex: "例如：https://api.openai.com/v1",
   claude: "例如：https://api.anthropic.com/v1",
   compatible: "例如：https://example.com/v1",
+  responses: "例如：https://api.deepseek.com",
 };
 
 type BalanceQueryTemplate = "generic" | "new_api" | "custom";
@@ -136,6 +139,7 @@ export function AggregateApiModal({
   const [password, setPassword] = useState("");
   const [actionCustomEnabled, setActionCustomEnabled] = useState(false);
   const [action, setAction] = useState("");
+  const [compatibilityConfigJson, setCompatibilityConfigJson] = useState("{}");
   const [autoToggleEnabled, setAutoToggleEnabled] = useState(false);
   const [balanceQueryEnabled, setBalanceQueryEnabled] = useState(false);
   const [balanceQueryTemplate, setBalanceQueryTemplate] =
@@ -229,6 +233,7 @@ export function AggregateApiModal({
     const nextAction = aggregateApi?.action ?? "";
     setAction(nextAction);
     setActionCustomEnabled(aggregateApi?.action !== null && aggregateApi?.action !== undefined);
+    setCompatibilityConfigJson(aggregateApi?.compatibilityConfigJson || "{}");
     setAutoToggleEnabled(Boolean(aggregateApi?.autoToggleEnabled));
     setBalanceQueryEnabled(Boolean(aggregateApi?.balanceQueryEnabled));
     const nextBalanceQueryTemplate =
@@ -427,6 +432,8 @@ export function AggregateApiModal({
           actionCustomEnabled: usesIncomingPath ? false : actionCustomEnabled,
           action:
             !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
+          compatibilityConfigJson:
+            providerType === "responses" ? compatibilityConfigJson.trim() || "{}" : null,
           username: authType === "userpass" ? username.trim() || null : null,
           password: authType === "userpass" ? password.trim() || null : null,
           autoToggleEnabled,
@@ -458,7 +465,9 @@ export function AggregateApiModal({
         authCustomEnabled,
         authParams,
         actionCustomEnabled: usesIncomingPath ? false : actionCustomEnabled,
-        action: !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
+          action: !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
+          compatibilityConfigJson:
+            providerType === "responses" ? compatibilityConfigJson.trim() || "{}" : null,
         username: authType === "userpass" ? username.trim() : null,
         password: authType === "userpass" ? password.trim() : null,
         autoToggleEnabled,
@@ -596,9 +605,11 @@ export function AggregateApiModal({
                     <SelectTrigger id="aggregate-api-provider" className="w-full">
                       <SelectValue>
                         {(value) =>
-                          String(value || "") === "compatible"
-                            ? t("通用兼容（Codex + Claude）")
-                            : AGGREGATE_API_PROVIDER_LABELS[
+                            String(value || "") === "compatible"
+                              ? t("通用兼容（Codex + Claude）")
+                              : String(value || "") === "responses"
+                                ? t("Responses 兼容")
+                              : AGGREGATE_API_PROVIDER_LABELS[
                                 String(value || "")
                               ] || "Codex"
                         }
@@ -611,6 +622,7 @@ export function AggregateApiModal({
                         <SelectItem value="compatible">
                           {t("通用兼容（Codex + Claude）")}
                         </SelectItem>
+                        <SelectItem value="responses">{t("Responses 兼容")}</SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>
@@ -927,6 +939,27 @@ export function AggregateApiModal({
                   ) : null}
                 </CardContent>
               </Card>
+
+              {providerType === "responses" ? (
+                <Card size="sm">
+                  <CardContent className="grid gap-3">
+                    <div>
+                      <Label className="text-sm">{t("Responses 高级配置")}</Label>
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("使用声明式 JSON 配置模型发现、请求头和字段处理规则。")}
+                      </p>
+                    </div>
+                    <Textarea
+                      rows={10}
+                      value={compatibilityConfigJson}
+                      disabled={!isServiceReady}
+                      spellCheck={false}
+                      className="font-mono text-xs"
+                      onChange={(event) => setCompatibilityConfigJson(event.target.value)}
+                    />
+                  </CardContent>
+                </Card>
+              ) : null}
 
               <Card size="sm">
                 <CardContent className="grid gap-3">

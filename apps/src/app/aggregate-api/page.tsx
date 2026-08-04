@@ -74,6 +74,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   claude: "Claude",
   gemini: "Gemini",
   compatible: "Codex + Claude",
+  responses: "Responses 兼容",
 };
 
 const AGGREGATE_API_SORT_STEP = 5;
@@ -451,7 +452,7 @@ export default function AggregateApiPage() {
                       const autoDisabledReason = String(api.autoDisabledReason || "").trim();
                       const autoDisabledReasonLabel = autoDisabledReason
                         ? autoDisabledReason === "daily_quota_exceeded"
-                          ? t("上游按日额度已耗尽")
+                          ? t("上游周期额度已耗尽")
                           : t("未知熔断原因：{reason}", { reason: autoDisabledReason })
                         : null;
                       const isAutoDisabled = api.autoToggleEnabled && api.autoDisabled;

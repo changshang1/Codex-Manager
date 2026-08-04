@@ -32,6 +32,7 @@ export interface ModelRouteV2 {
   sortOrder: number;
   priority: number;
   weight: number;
+  compatibilityOverrideJson: string | null;
 }
 
 export interface ModelRouteBatchTemplateV2 {

@@ -82,6 +82,8 @@ pub struct ModelRouteV2 {
     pub weight: i64,
     #[serde(default)]
     pub sort_order: i64,
+    #[serde(default)]
+    pub compatibility_override_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -431,7 +433,7 @@ fn list_routes(conn: &Connection, model_id: &str) -> Result<Vec<ModelRouteV2>> {
     )?;
     let sql = if has_aggregate_source_names {
         "SELECT r.id,r.source_kind,r.source_id,r.upstream_model,r.enabled,r.priority,r.weight,
-                r.sort_order
+                 r.sort_order,r.compatibility_override_json
          FROM model_routes r
          LEFT JOIN aggregate_apis a
            ON r.source_kind='aggregate_api' AND a.id=r.source_id
@@ -443,7 +445,8 @@ fn list_routes(conn: &Connection, model_id: &str) -> Result<Vec<ModelRouteV2>> {
            END COLLATE NOCASE ASC,
            r.id ASC"
     } else {
-        "SELECT id,source_kind,source_id,upstream_model,enabled,priority,weight,sort_order
+        "SELECT id,source_kind,source_id,upstream_model,enabled,priority,weight,sort_order,
+                 compatibility_override_json
          FROM model_routes
          WHERE model_id=?1
          ORDER BY sort_order ASC,source_kind ASC,source_id COLLATE NOCASE ASC,id ASC"
@@ -459,6 +462,7 @@ fn list_routes(conn: &Connection, model_id: &str) -> Result<Vec<ModelRouteV2>> {
             priority: row.get(5)?,
             weight: row.get(6)?,
             sort_order: row.get(7)?,
+            compatibility_override_json: row.get(8)?,
         })
     })?
     .collect()
@@ -882,8 +886,8 @@ fn migrate_legacy_routes(conn: &Connection) -> Result<()> {
         };
         conn.execute(
             "INSERT OR IGNORE INTO model_routes(id,model_id,source_kind,source_id,upstream_model,
-               enabled,priority,weight,sort_order,created_at,updated_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,?9,?9)",
+               enabled,priority,weight,sort_order,compatibility_override_json,created_at,updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,0,NULL,?9,?9)",
             params![
                 route_id(&model_id, &route),
                 model_id,
@@ -1080,8 +1084,8 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
         };
         tx.execute(
             "INSERT INTO model_routes(id,model_id,source_kind,source_id,upstream_model,
-            enabled,priority,weight,sort_order,created_at,updated_at)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+            enabled,priority,weight,sort_order,compatibility_override_json,created_at,updated_at)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)",
             params![
                 route_id,
                 id,
@@ -1092,6 +1096,7 @@ fn write_model(tx: &Transaction<'_>, input: &ManagedModelV2Upsert) -> Result<Str
                 route.priority,
                 route.weight,
                 route.sort_order,
+                route.compatibility_override_json,
                 now
             ],
         )?;

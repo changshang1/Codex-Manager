@@ -1294,6 +1294,7 @@ pub struct AggregateApi {
     pub auth_params_json: Option<String>,
     pub action: Option<String>,
     pub model_override: Option<String>,
+    pub compatibility_config_json: Option<String>,
     pub status: String,
     pub auto_toggle_enabled: bool,
     pub consecutive_failures: i64,
@@ -1334,6 +1335,7 @@ pub struct AggregateApiListSummary {
     pub auth_params_json: Option<String>,
     pub action: Option<String>,
     pub model_override: Option<String>,
+    pub compatibility_config_json: Option<String>,
     pub status: String,
     pub auto_toggle_enabled: bool,
     pub consecutive_failures: i64,
@@ -2354,6 +2356,11 @@ impl Storage {
             "134_accounts_refresh_token_invalid_reason",
             include_str!("../../migrations/134_accounts_refresh_token_invalid_reason.sql"),
             |s| s.ensure_account_refresh_token_invalid_reason_column(),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "135_responses_compatibility",
+            include_str!("../../migrations/135_responses_compatibility.sql"),
+            |_s| Ok(()),
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

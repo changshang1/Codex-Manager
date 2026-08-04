@@ -10,8 +10,10 @@ use super::super::response::GatewayStreamPrefetchTerminal;
 use super::super::GatewayUpstreamResponse;
 use crate::aggregate_api::{
     classify_aggregate_api_daily_limit_failure, classify_aggregate_api_daily_limit_hint,
-    AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_AUTH_USERPASS, AGGREGATE_API_PROVIDER_CLAUDE,
-    AGGREGATE_API_PROVIDER_CODEX, AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
+    classify_aggregate_api_daily_limit_hint_for_candidate, AGGREGATE_API_AUTH_APIKEY,
+    AGGREGATE_API_AUTH_USERPASS, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_CODEX,
+    AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
+    AGGREGATE_API_PROVIDER_RESPONSES,
 };
 use crate::gateway::protocol_adapter::adapt_openai_responses_to_anthropic_messages;
 use crate::gateway::request_log::RequestLogUsage;
@@ -179,6 +181,339 @@ fn rewrite_body_model_override(body: &Bytes, model_override: Option<&str>) -> By
     serde_json::to_vec(&value)
         .map(Bytes::from)
         .unwrap_or_else(|_| body.clone())
+}
+
+fn previous_response_id(body: &Bytes) -> Option<String> {
+    serde_json::from_slice::<Value>(body.as_ref())
+        .ok()
+        .and_then(|value| {
+            value
+                .get("previous_response_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        })
+}
+
+fn apply_previous_response_affinity(
+    storage: &Storage,
+    body: &Bytes,
+    candidates: &mut Vec<AggregateApi>,
+    explicit_candidate_selected: bool,
+) -> Result<(), String> {
+    let Some(previous_response_id) = previous_response_id(body) else {
+        return Ok(());
+    };
+    let bound_api_id = storage
+        .find_aggregate_api_id_for_response(previous_response_id.as_str())
+        .map_err(|err| format!("读取 previous_response_id 供应商绑定失败: {err}"))?;
+    if let Some(bound_api_id) = bound_api_id {
+        let Some(candidate) = candidates
+            .iter()
+            .find(|candidate| candidate.id == bound_api_id)
+            .cloned()
+        else {
+            return Err(format!(
+                "previous_response_id 绑定的聚合 API 当前不可用: {bound_api_id}"
+            ));
+        };
+        candidates.clear();
+        candidates.push(candidate);
+        return Ok(());
+    }
+    let unique_supplier_count = candidates
+        .iter()
+        .map(|candidate| candidate.id.as_str())
+        .collect::<HashSet<_>>()
+        .len();
+    if unique_supplier_count <= 1 || explicit_candidate_selected {
+        candidates.truncate(1);
+        return Ok(());
+    }
+    Err("previous_response_id 尚无供应商绑定，存在多个候选时禁止跨供应商路由".to_string())
+}
+
+fn compatibility_profile(candidate: &AggregateApi) -> String {
+    let configured = candidate
+        .compatibility_config_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("profile")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    configured.unwrap_or_else(|| {
+        if normalize_provider_type_value(candidate.provider_type.as_str())
+            == AGGREGATE_API_PROVIDER_CODEX
+        {
+            "openai_standard".to_string()
+        } else {
+            "generic_responses".to_string()
+        }
+    })
+}
+
+pub(crate) fn merge_compatibility_config_json(
+    base: Option<&str>,
+    override_config: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(raw_override) = override_config
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(base.map(str::to_string));
+    };
+    let mut merged = base
+        .map(|raw| serde_json::from_str::<Value>(raw))
+        .transpose()
+        .map_err(|err| format!("invalid aggregate compatibility config: {err}"))?
+        .unwrap_or_else(|| serde_json::json!({}));
+    let override_value = serde_json::from_str::<Value>(raw_override)
+        .map_err(|err| format!("invalid model route compatibility override: {err}"))?;
+    fn merge_values(base: &mut Value, overlay: Value) {
+        match (base, overlay) {
+            (Value::Object(base_map), Value::Object(overlay_map)) => {
+                for (key, value) in overlay_map {
+                    if let Some(existing) = base_map.get_mut(&key) {
+                        merge_values(existing, value);
+                    } else {
+                        base_map.insert(key, value);
+                    }
+                }
+            }
+            (base, overlay) => *base = overlay,
+        }
+    }
+    merge_values(&mut merged, override_value);
+    serde_json::to_string(&merged)
+        .map(Some)
+        .map_err(|err| format!("serialize merged compatibility config failed: {err}"))
+}
+
+fn compatibility_field_strategy(value: &Value) -> (&str, Option<&Value>) {
+    if let Some(strategy) = value.as_str() {
+        return (strategy, None);
+    }
+    let Some(obj) = value.as_object() else {
+        return ("pass", None);
+    };
+    (
+        obj.get("strategy")
+            .and_then(Value::as_str)
+            .unwrap_or("pass"),
+        obj.get("value"),
+    )
+}
+
+fn json_path_parts(path: &str) -> Vec<&str> {
+    path.split('.')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn json_path_get<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    json_path_parts(path)
+        .into_iter()
+        .try_fold(value, |current, part| current.as_object()?.get(part))
+}
+
+fn json_path_remove(value: &mut Value, path: &str) -> bool {
+    let parts = json_path_parts(path);
+    let Some((last, parents)) = parts.split_last() else {
+        return false;
+    };
+    let Some(parent) = parents.iter().try_fold(value, |current, part| {
+        current.as_object_mut()?.get_mut(*part)
+    }) else {
+        return false;
+    };
+    parent
+        .as_object_mut()
+        .is_some_and(|object| object.remove(*last).is_some())
+}
+
+fn json_path_set(value: &mut Value, path: &str, replacement: Value) -> Result<bool, String> {
+    let parts = json_path_parts(path);
+    let Some((last, parents)) = parts.split_last() else {
+        return Err("compatibility field path cannot be empty".to_string());
+    };
+    let mut current = value;
+    for part in parents {
+        let object = current
+            .as_object_mut()
+            .ok_or_else(|| format!("compatibility field parent is not an object: {path}"))?;
+        current = object
+            .entry((*part).to_string())
+            .or_insert_with(|| serde_json::json!({}));
+    }
+    let object = current
+        .as_object_mut()
+        .ok_or_else(|| format!("compatibility field parent is not an object: {path}"))?;
+    let changed = object.get(*last) != Some(&replacement);
+    object.insert((*last).to_string(), replacement);
+    Ok(changed)
+}
+
+fn rewrite_body_for_compatibility(body: &Bytes, candidate: &AggregateApi) -> Result<Bytes, String> {
+    let profile = compatibility_profile(candidate).to_ascii_lowercase();
+    let config = candidate
+        .compatibility_config_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut value = serde_json::from_slice::<Value>(body.as_ref())
+        .map_err(|err| format!("invalid responses request json: {err}"))?;
+    if !value.is_object() {
+        return Ok(body.clone());
+    }
+    let mut changed = false;
+    let mut actions = Vec::new();
+
+    if profile == "deepseek" || profile == "deepseek_responses" {
+        if value
+            .get("tool_choice")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.eq_ignore_ascii_case("required"))
+        {
+            return Err(
+                "DeepSeek thinking mode does not support tool_choice=required; use auto"
+                    .to_string(),
+            );
+        }
+    }
+
+    let policies = config
+        .get("fieldPolicies")
+        .or_else(|| config.get("requestFields"))
+        .and_then(Value::as_object);
+    if let Some(policies) = policies {
+        for (field, rule) in policies {
+            let (strategy, replacement) = compatibility_field_strategy(rule);
+            match strategy.to_ascii_lowercase().as_str() {
+                "drop" => {
+                    if json_path_remove(&mut value, field) {
+                        changed = true;
+                        actions.push(format!("drop:{field}"));
+                    }
+                }
+                "reject" if json_path_get(&value, field).is_some() => {
+                    log::warn!(
+                        "event=gateway_aggregate_compatibility_reject aggregate_api_id={} profile={} field={}",
+                        candidate.id,
+                        profile,
+                        field,
+                    );
+                    return Err(format!(
+                        "responses field is not supported by upstream: {field}"
+                    ));
+                }
+                "replace" => {
+                    if let Some(replacement) = replacement {
+                        if json_path_set(&mut value, field, replacement.clone())? {
+                            changed = true;
+                            actions.push(format!("replace:{field}"));
+                        }
+                    }
+                }
+                "map" => {
+                    if let (Some(current), Some(map)) = (
+                        json_path_get(&value, field).cloned(),
+                        replacement.and_then(Value::as_object),
+                    ) {
+                        if let Some(key) = current.as_str() {
+                            if let Some(mapped) = map.get(key) {
+                                if json_path_set(&mut value, field, mapped.clone())? {
+                                    changed = true;
+                                    actions.push(format!("map:{field}"));
+                                }
+                            }
+                        }
+                    }
+                }
+                "pass" | "reject" => {}
+                other => return Err(format!("unsupported compatibility field strategy: {other}")),
+            }
+        }
+    }
+
+    if !changed {
+        return Ok(body.clone());
+    }
+    log::info!(
+        "event=gateway_aggregate_compatibility_applied aggregate_api_id={} profile={} actions={}",
+        candidate.id,
+        profile,
+        actions.join(","),
+    );
+    serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .map_err(|err| format!("serialize compatibility request failed: {err}"))
+}
+
+fn apply_compatibility_static_headers(
+    mut builder: reqwest::blocking::RequestBuilder,
+    candidate: &AggregateApi,
+    secret: &str,
+    upstream_model: Option<&str>,
+) -> Result<reqwest::blocking::RequestBuilder, String> {
+    let Some(config) = candidate
+        .compatibility_config_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+    else {
+        return Ok(builder);
+    };
+    let Some(headers) = config.get("staticHeaders").and_then(Value::as_object) else {
+        return Ok(builder);
+    };
+    let mut applied_headers = Vec::new();
+    for (name, value) in headers {
+        let normalized_name = normalize_header_key(name);
+        if matches!(
+            normalized_name.as_str(),
+            "authorization"
+                | "x-api-key"
+                | "api-key"
+                | "content-length"
+                | "host"
+                | "connection"
+                | "transfer-encoding"
+        ) {
+            return Err(format!(
+                "compatibility header cannot override managed header: {name}"
+            ));
+        }
+        let Some(raw_value) = value.as_str() else {
+            return Err(format!(
+                "compatibility header value must be a string: {name}"
+            ));
+        };
+        let rendered = raw_value
+            .replace("${secret}", secret.trim())
+            .replace("${model}", upstream_model.unwrap_or_default())
+            .replace(
+                "${supplier}",
+                candidate.supplier_name.as_deref().unwrap_or_default(),
+            );
+        let header_name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("invalid compatibility header name: {name}"))?;
+        let header_value = HeaderValue::from_str(rendered.as_str())
+            .map_err(|_| format!("invalid compatibility header value: {name}"))?;
+        builder = builder.header(header_name, header_value);
+        applied_headers.push(normalized_name);
+    }
+    if !applied_headers.is_empty() {
+        log::info!(
+            "event=gateway_aggregate_compatibility_headers_applied aggregate_api_id={} headers={}",
+            candidate.id,
+            applied_headers.join(","),
+        );
+    }
+    Ok(builder)
 }
 
 fn rewrite_body_for_candidate_transport(
@@ -1628,19 +1963,31 @@ fn build_anthropic_bridge_aggregate_api_request(
 pub(crate) fn resolve_aggregate_api_rotation_candidates(
     storage: &Storage,
     protocol_type: &str,
+    request_path: &str,
     aggregate_api_id: Option<&str>,
 ) -> Result<Vec<AggregateApi>, String> {
-    let provider_type = match protocol_type {
-        "anthropic_native" => AGGREGATE_API_PROVIDER_CLAUDE,
-        "gemini_native" => AGGREGATE_API_PROVIDER_GEMINI,
-        _ => AGGREGATE_API_PROVIDER_CODEX,
+    let provider_types = match protocol_type {
+        "anthropic_native" => vec![AGGREGATE_API_PROVIDER_CLAUDE],
+        "gemini_native" => vec![AGGREGATE_API_PROVIDER_GEMINI],
+        _ if request_path == "/v1/responses" || request_path.starts_with("/v1/responses?") => {
+            vec![
+                AGGREGATE_API_PROVIDER_CODEX,
+                AGGREGATE_API_PROVIDER_RESPONSES,
+            ]
+        }
+        _ => vec![AGGREGATE_API_PROVIDER_CODEX],
     };
 
-    let mut candidates = storage
-        .list_active_aggregate_apis_by_provider_type(provider_type)
-        .map_err(|err| err.to_string())?
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for provider_type in &provider_types {
+        candidates.extend(
+            storage
+                .list_active_aggregate_apis_by_provider_type(provider_type)
+                .map_err(|err| err.to_string())?,
+        );
+    }
+    let mut seen_candidate_ids = HashSet::new();
+    candidates.retain(|candidate| seen_candidate_ids.insert(candidate.id.clone()));
     candidates = normalize_candidate_order(candidates);
 
     if let Some(api_id) = aggregate_api_id
@@ -1652,7 +1999,8 @@ pub(crate) fn resolve_aggregate_api_rotation_candidates(
 
     if candidates.is_empty() {
         Err(format!(
-            "aggregate api not found for provider {provider_type}"
+            "aggregate api not found for provider {}",
+            provider_types.join(",")
         ))
     } else {
         Ok(candidates)
@@ -1735,7 +2083,7 @@ pub(in super::super) fn proxy_aggregate_request(
         service_tier_for_log,
         effective_service_tier_for_log,
         service_tier_source_for_log,
-        aggregate_api_candidates,
+        mut aggregate_api_candidates,
         defer_exhaustion_response,
         request_deadline,
         started_at,
@@ -1762,6 +2110,27 @@ pub(in super::super) fn proxy_aggregate_request(
         let request = request;
         respond_error(request, 404, message.as_str(), Some(trace_id));
         return Ok(AggregateProxyResult::Handled);
+    }
+
+    if path.starts_with("/v1/responses") {
+        if let Err(message) = apply_previous_response_affinity(
+            storage,
+            body,
+            &mut aggregate_api_candidates,
+            route_source_for_log == Some("aggregate_api_preferred"),
+        ) {
+            super::super::super::record_gateway_request_outcome(path, 409, Some("aggregate_api"));
+            super::super::super::trace_log::log_request_final(
+                trace_id,
+                409,
+                Some(key_id),
+                None,
+                Some(message.as_str()),
+                started_at.elapsed().as_millis(),
+            );
+            respond_error(request, 409, message.as_str(), Some(trace_id));
+            return Ok(AggregateProxyResult::Handled);
+        }
     }
 
     let mut request = Some(request);
@@ -1860,6 +2229,16 @@ pub(in super::super) fn proxy_aggregate_request(
             candidate.supplier_name.as_deref(),
             path,
         );
+        let candidate_body = match rewrite_body_for_compatibility(&candidate_body, &candidate) {
+            Ok(body) => body,
+            Err(err) => {
+                last_attempt_url = Some(base_upstream_url.to_string());
+                last_attempt_supplier_name = candidate_supplier_name.clone();
+                last_attempt_error = Some(err);
+                last_failure_status = 400;
+                continue;
+            }
+        };
         let upstream_body = if bridge_responses_to_anthropic {
             match adapt_openai_responses_to_anthropic_messages(
                 candidate_body.as_ref(),
@@ -2016,6 +2395,21 @@ pub(in super::super) fn proxy_aggregate_request(
                     break;
                 }
             };
+            let builder = match apply_compatibility_static_headers(
+                builder,
+                &candidate,
+                secret.as_str(),
+                candidate_upstream_model.as_deref(),
+            ) {
+                Ok(builder) => builder,
+                Err(err) => {
+                    last_attempt_url = Some(url.as_str().to_string());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some(err);
+                    last_failure_status = 502;
+                    break;
+                }
+            };
 
             let attempt_started_at = Instant::now();
             let upstream = match builder.send() {
@@ -2072,14 +2466,11 @@ pub(in super::super) fn proxy_aggregate_request(
                         break;
                     }
                 };
-                if candidate.auto_toggle_enabled {
-                    if let Some(reason) = classify_aggregate_api_daily_limit_failure(
-                        status_code,
-                        upstream_body.as_ref(),
-                    ) {
-                        daily_limit_tracker.mark_failure(&candidate_id, reason);
-                    }
-                }
+                let explicit_daily_limit_reason = if candidate.auto_toggle_enabled {
+                    classify_aggregate_api_daily_limit_failure(status_code, upstream_body.as_ref())
+                } else {
+                    None
+                };
                 let message = aggregate_api_failure_message(
                     status_code,
                     upstream_body.as_ref(),
@@ -2088,6 +2479,16 @@ pub(in super::super) fn proxy_aggregate_request(
                     upstream_auth_error.as_deref(),
                     upstream_identity_error_code.as_deref(),
                 );
+                if candidate.auto_toggle_enabled {
+                    if let Some(reason) = explicit_daily_limit_reason.or_else(|| {
+                        classify_aggregate_api_daily_limit_hint_for_candidate(
+                            &candidate,
+                            message.as_str(),
+                        )
+                    }) {
+                        daily_limit_tracker.mark_failure(&candidate_id, reason);
+                    }
+                }
                 last_attempt_url = Some(url.as_str().to_string());
                 last_attempt_supplier_name = candidate_supplier_name.clone();
                 last_attempt_error = Some(message);
@@ -2123,6 +2524,14 @@ pub(in super::super) fn proxy_aggregate_request(
                                     break;
                                 }
                                 AggregateApiStreamPreflightOutcome::TransportFailure(message) => {
+                                    if let Some(reason) =
+                                        classify_aggregate_api_daily_limit_hint_for_candidate(
+                                            &candidate,
+                                            message.as_str(),
+                                        )
+                                    {
+                                        daily_limit_tracker.mark_failure(&candidate_id, reason);
+                                    }
                                     last_attempt_url = Some(url.as_str().to_string());
                                     last_attempt_supplier_name = candidate_supplier_name.clone();
                                     last_attempt_error = Some(message);
@@ -2163,6 +2572,12 @@ pub(in super::super) fn proxy_aggregate_request(
                         break;
                     }
                     AggregateApiStreamPreflightOutcome::TransportFailure(message) => {
+                        if let Some(reason) = classify_aggregate_api_daily_limit_hint_for_candidate(
+                            &candidate,
+                            message.as_str(),
+                        ) {
+                            daily_limit_tracker.mark_failure(&candidate_id, reason);
+                        }
                         last_attempt_url = Some(url.as_str().to_string());
                         last_attempt_supplier_name = candidate_supplier_name.clone();
                         last_attempt_error = Some(message);
@@ -2192,6 +2607,12 @@ pub(in super::super) fn proxy_aggregate_request(
                         break;
                     }
                     AggregateApiStreamPreflightOutcome::TransportFailure(message) => {
+                        if let Some(reason) = classify_aggregate_api_daily_limit_hint_for_candidate(
+                            &candidate,
+                            message.as_str(),
+                        ) {
+                            daily_limit_tracker.mark_failure(&candidate_id, reason);
+                        }
                         last_attempt_url = Some(url.as_str().to_string());
                         last_attempt_supplier_name = candidate_supplier_name.clone();
                         last_attempt_error = Some(message);
@@ -2273,13 +2694,29 @@ pub(in super::super) fn proxy_aggregate_request(
             } else {
                 status_code
             };
+            let response_id = bridge.usage.response_id.clone();
             let usage = bridge.usage;
 
-            let daily_limit_reason = final_error
-                .as_deref()
-                .and_then(classify_aggregate_api_daily_limit_hint);
+            let daily_limit_reason = final_error.as_deref().and_then(|hint| {
+                classify_aggregate_api_daily_limit_hint_for_candidate(&candidate, hint)
+            });
             if bridge_ok && final_error.is_none() {
                 daily_limit_tracker.mark_success(&candidate_id);
+                if path.starts_with("/v1/responses") {
+                    if let Some(response_id) = response_id.as_deref() {
+                        if let Err(err) = storage.upsert_aggregate_api_response_affinity(
+                            response_id,
+                            candidate_id.as_str(),
+                        ) {
+                            log::warn!(
+                                "event=gateway_aggregate_response_affinity_save_failed trace_id={} aggregate_api_id={} err={}",
+                                trace_id,
+                                candidate_id,
+                                err,
+                            );
+                        }
+                    }
+                }
             } else if candidate.auto_toggle_enabled {
                 if let Some(reason) = daily_limit_reason {
                     daily_limit_tracker.mark_failure(&candidate_id, reason);
@@ -2480,6 +2917,7 @@ mod bridge_tests {
             auth_params_json: None,
             action: None,
             model_override: None,
+            compatibility_config_json: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,

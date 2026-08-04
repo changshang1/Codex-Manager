@@ -39,6 +39,7 @@ fn insert_test_aggregate_api_with_provider(storage: &Storage, id: &str, provider
             auth_params_json: None,
             action: None,
             model_override: None,
+            compatibility_config_json: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,
@@ -76,6 +77,7 @@ fn insert_test_aggregate_api_with_model_override(storage: &Storage, id: &str, mo
             auth_params_json: None,
             action: None,
             model_override: Some(model.to_string()),
+            compatibility_config_json: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,
@@ -224,6 +226,7 @@ fn aggregate_candidate_filter_keeps_model_override_candidate_for_client_model() 
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         "key-route",
         Some("gpt-5.4"),
@@ -524,6 +527,7 @@ fn aggregate_route_model_filter_uses_v2_routes() {
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         "key-route",
         Some("vendor-batched"),
@@ -589,6 +593,7 @@ fn aggregate_model_routes_use_hard_priority_tiers() {
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         "key-priority",
         Some("vendor-priority"),
@@ -630,6 +635,7 @@ fn aggregate_model_routes_use_smooth_weighted_primary_selection() {
         let candidates = resolve_aggregate_candidates_for_route(
             &storage,
             "openai_responses",
+            "/v1/responses",
             None,
             "key-weight",
             Some("vendor-weight"),
@@ -673,6 +679,7 @@ fn aggregate_api_can_be_attempted_by_multiple_upstream_model_routes() {
     let candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         None,
         "key-multi-route",
         Some("vendor-multi-route"),
@@ -713,6 +720,7 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
     let openai_candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         Some("agg-claude-explicit"),
         "key-openai",
         Some("vendor-cross-provider"),
@@ -734,6 +742,7 @@ fn explicit_aggregate_route_candidate_precedes_provider_candidates() {
     let anthropic_candidates = resolve_aggregate_candidates_for_route(
         &storage,
         "anthropic_native",
+        "/v1/messages",
         Some("agg-codex-explicit"),
         "key-anthropic",
         Some("vendor-cross-provider"),
@@ -771,6 +780,7 @@ fn explicit_aggregate_route_cannot_bypass_auto_disable() {
     let err = resolve_aggregate_candidates_for_route(
         &storage,
         "openai_responses",
+        "/v1/responses",
         Some(api_id),
         "key-explicit-disabled",
         None,

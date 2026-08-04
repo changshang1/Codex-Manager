@@ -12,6 +12,35 @@ use super::{
 };
 
 impl Storage {
+    pub fn find_aggregate_api_id_for_response(&self, response_id: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT aggregate_api_id FROM aggregate_api_response_affinity
+                 WHERE response_id=?1 LIMIT 1",
+                [response_id.trim()],
+                |row| row.get(0),
+            )
+            .optional()
+    }
+
+    pub fn upsert_aggregate_api_response_affinity(
+        &self,
+        response_id: &str,
+        aggregate_api_id: &str,
+    ) -> Result<()> {
+        let now = now_ts();
+        self.conn.execute(
+            "INSERT INTO aggregate_api_response_affinity(
+               response_id,aggregate_api_id,created_at,updated_at
+             ) VALUES(?1,?2,?3,?3)
+             ON CONFLICT(response_id) DO UPDATE SET
+               aggregate_api_id=excluded.aggregate_api_id,
+               updated_at=excluded.updated_at",
+            params![response_id.trim(), aggregate_api_id.trim(), now],
+        )?;
+        Ok(())
+    }
+
     /// 函数 `insert_aggregate_api`
     ///
     /// 作者: gaohongshun
@@ -36,6 +65,7 @@ impl Storage {
                 auth_params_json,
                 action,
                 model_override,
+                compatibility_config_json,
                 status,
                 created_at,
                 updated_at,
@@ -56,7 +86,7 @@ impl Storage {
                 auto_disabled,
                 auto_disabled_at,
                 auto_disabled_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)
             ON CONFLICT(id) DO UPDATE SET
                 provider_type = excluded.provider_type,
                 supplier_name = excluded.supplier_name,
@@ -66,6 +96,7 @@ impl Storage {
                 auth_params_json = excluded.auth_params_json,
                 action = excluded.action,
                 model_override = excluded.model_override,
+                compatibility_config_json = excluded.compatibility_config_json,
                 status = excluded.status,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
@@ -91,6 +122,7 @@ impl Storage {
                 &api.auth_params_json,
                 &api.action,
                 &api.model_override,
+                &api.compatibility_config_json,
                 &api.status,
                 api.created_at,
                 api.updated_at,
@@ -699,6 +731,18 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_aggregate_api_compatibility_config(
+        &self,
+        api_id: &str,
+        config_json: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            update_aggregate_api_compatibility_config_sql(),
+            (config_json, now_ts(), api_id),
+        )?;
+        Ok(())
+    }
+
     pub fn update_aggregate_api_balance_query(
         &self,
         api_id: &str,
@@ -1225,34 +1269,35 @@ fn map_aggregate_api_row(row: &Row<'_>) -> Result<AggregateApi> {
         auth_params_json: row.get(6)?,
         action: row.get(7)?,
         model_override: row.get(8)?,
-        status: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        last_test_at: row.get(12)?,
-        last_test_status: row.get(13)?,
-        last_test_error: row.get(14)?,
-        balance_query_enabled: row.get(15)?,
-        balance_query_template: row.get(16)?,
-        balance_query_base_url: row.get(17)?,
-        balance_query_user_id: row.get(18)?,
-        balance_query_config_json: row.get(19)?,
-        last_balance_at: row.get(20)?,
-        last_balance_status: row.get(21)?,
-        last_balance_error: row.get(22)?,
-        last_balance_json: row.get(23)?,
-        auto_toggle_enabled: row.get(24)?,
-        consecutive_failures: row.get(25)?,
-        auto_disabled: row.get(26)?,
-        auto_disabled_at: row.get(27)?,
-        auto_disabled_reason: row.get(28)?,
+        compatibility_config_json: row.get(9)?,
+        status: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        last_test_at: row.get(13)?,
+        last_test_status: row.get(14)?,
+        last_test_error: row.get(15)?,
+        balance_query_enabled: row.get(16)?,
+        balance_query_template: row.get(17)?,
+        balance_query_base_url: row.get(18)?,
+        balance_query_user_id: row.get(19)?,
+        balance_query_config_json: row.get(20)?,
+        last_balance_at: row.get(21)?,
+        last_balance_status: row.get(22)?,
+        last_balance_error: row.get(23)?,
+        last_balance_json: row.get(24)?,
+        auto_toggle_enabled: row.get(25)?,
+        consecutive_failures: row.get(26)?,
+        auto_disabled: row.get(27)?,
+        auto_disabled_at: row.get(28)?,
+        auto_disabled_reason: row.get(29)?,
     })
 }
 
 fn map_aggregate_api_with_secrets_row(row: &Row<'_>) -> Result<AggregateApiWithSecrets> {
     Ok(AggregateApiWithSecrets {
         api: map_aggregate_api_row(row)?,
-        secret_value: row.get(29)?,
-        balance_access_token: row.get(30)?,
+        secret_value: row.get(30)?,
+        balance_access_token: row.get(31)?,
     })
 }
 
@@ -1267,26 +1312,27 @@ fn map_aggregate_api_list_summary_row(row: &Row<'_>) -> Result<AggregateApiListS
         auth_params_json: row.get(6)?,
         action: row.get(7)?,
         model_override: row.get(8)?,
-        status: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        last_test_at: row.get(12)?,
-        last_test_status: row.get(13)?,
-        last_test_error: row.get(14)?,
-        balance_query_enabled: row.get(15)?,
-        balance_query_template: row.get(16)?,
-        balance_query_base_url: row.get(17)?,
-        balance_query_user_id: row.get(18)?,
-        balance_query_config_json: row.get(19)?,
-        last_balance_at: row.get(20)?,
-        last_balance_status: row.get(21)?,
-        last_balance_error: row.get(22)?,
-        last_balance_json: row.get(23)?,
-        auto_toggle_enabled: row.get(24)?,
-        consecutive_failures: row.get(25)?,
-        auto_disabled: row.get(26)?,
-        auto_disabled_at: row.get(27)?,
-        auto_disabled_reason: row.get(28)?,
+        compatibility_config_json: row.get(9)?,
+        status: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        last_test_at: row.get(13)?,
+        last_test_status: row.get(14)?,
+        last_test_error: row.get(15)?,
+        balance_query_enabled: row.get(16)?,
+        balance_query_template: row.get(17)?,
+        balance_query_base_url: row.get(18)?,
+        balance_query_user_id: row.get(19)?,
+        balance_query_config_json: row.get(20)?,
+        last_balance_at: row.get(21)?,
+        last_balance_status: row.get(22)?,
+        last_balance_error: row.get(23)?,
+        last_balance_json: row.get(24)?,
+        auto_toggle_enabled: row.get(25)?,
+        consecutive_failures: row.get(26)?,
+        auto_disabled: row.get(27)?,
+        auto_disabled_at: row.get(28)?,
+        auto_disabled_reason: row.get(29)?,
     })
 }
 
@@ -1523,6 +1569,7 @@ fn aggregate_api_provider_type_condition(provider_type: &str) -> Option<(String,
     const CLAUDE_NATIVE_ALIASES: &[&str] =
         &["claude", "anthropic", "anthropic_native", "claude_code"];
     const COMPATIBLE_PROVIDER: &str = "compatible";
+    const RESPONSES_ALIASES: &[&str] = &["responses", "responses_api", "openai_responses"];
     const GEMINI_ALIASES: &[&str] = &[
         "gemini",
         "gemini_native",
@@ -1559,10 +1606,24 @@ fn aggregate_api_provider_type_condition(provider_type: &str) -> Option<(String,
             format!("{AGGREGATE_API_NORMALIZED_PROVIDER_SQL} = ?"),
             vec![Value::Text(COMPATIBLE_PROVIDER.to_string())],
         )),
+        "responses" | "responses_api" | "openai_responses" => {
+            let aliases = RESPONSES_ALIASES
+                .iter()
+                .copied()
+                .chain(std::iter::once(COMPATIBLE_PROVIDER))
+                .map(|value| Value::Text(value.to_string()))
+                .collect::<Vec<_>>();
+            let placeholders = vec!["?"; aliases.len()].join(", ");
+            Some((
+                format!("{AGGREGATE_API_NORMALIZED_PROVIDER_SQL} IN ({placeholders})"),
+                aliases,
+            ))
+        }
         _ => {
             let aliases = CLAUDE_NATIVE_ALIASES
                 .iter()
                 .chain(GEMINI_ALIASES.iter())
+                .chain(RESPONSES_ALIASES.iter())
                 .map(|value| Value::Text((*value).to_string()))
                 .collect::<Vec<_>>();
             let placeholders = vec!["?"; aliases.len()].join(", ");
@@ -1597,6 +1658,7 @@ mod supplier_model_tests {
             auth_params_json: None,
             action: None,
             model_override: None,
+            compatibility_config_json: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,

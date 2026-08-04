@@ -340,6 +340,7 @@ fn respond_model_route_error(
 fn resolve_aggregate_candidates_for_route(
     storage: &codexmanager_core::storage::Storage,
     protocol_type: &str,
+    request_path: &str,
     aggregate_api_id: Option<&str>,
     key_id: &str,
     model_for_log: Option<&str>,
@@ -353,6 +354,7 @@ fn resolve_aggregate_candidates_for_route(
         match super::protocol::aggregate_api::resolve_aggregate_api_rotation_candidates(
             storage,
             protocol_type,
+            request_path,
             aggregate_api_id,
         ) {
             Ok(candidates) => candidates,
@@ -414,11 +416,21 @@ fn apply_aggregate_model_filter(
     let mut routed_candidates = routes
         .into_iter()
         .filter_map(|route| {
-            let mut candidate = candidates_by_id.get(&route.source_id)?.clone();
-            candidate.model_override = Some(route.upstream_model);
-            Some(candidate)
+            candidates_by_id
+                .get(&route.source_id)
+                .cloned()
+                .map(|candidate| (route, candidate))
         })
-        .collect::<Vec<_>>();
+        .map(|(route, mut candidate)| {
+            candidate.model_override = Some(route.upstream_model);
+            candidate.compatibility_config_json =
+                super::protocol::aggregate_api::merge_compatibility_config_json(
+                    candidate.compatibility_config_json.as_deref(),
+                    route.compatibility_override_json.as_deref(),
+                )?;
+            Ok(candidate)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     if let Some(preferred_id) = aggregate_api_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -808,6 +820,7 @@ pub(in super::super) fn proxy_validated_request(
         match resolve_aggregate_candidates_for_route(
             &storage,
             protocol_type.as_str(),
+            original_path.as_str(),
             aggregate_api_id.as_deref(),
             key_id.as_str(),
             model_for_log.as_deref(),
@@ -954,6 +967,7 @@ pub(in super::super) fn proxy_validated_request(
             match resolve_aggregate_candidates_for_route(
                 &storage,
                 protocol_type.as_str(),
+                original_path.as_str(),
                 aggregate_api_id.as_deref(),
                 key_id.as_str(),
                 model_for_log.as_deref(),
@@ -1185,6 +1199,7 @@ pub(in super::super) fn proxy_validated_request(
         match resolve_aggregate_candidates_for_route(
             &storage,
             protocol_type.as_str(),
+            original_path.as_str(),
             aggregate_api_id.as_deref(),
             key_id.as_str(),
             model_for_log.as_deref(),

@@ -39,6 +39,9 @@ their tests/configuration.
 ## 4. Component Guidelines
 - Mark interactive components with `"use client"`. Prefer Server Components only
   where the surrounding route/layout can remain static.
+- User-visible product copy is Chinese-first. Chinese availability is sufficient
+  for this personal-use project; new Chinese UI text does not require an English
+  translation unless the user explicitly requests one.
 - Move new non-trivial business logic into hooks under `src/hooks/` or focused
   helpers under `src/lib/`. Existing large pages are legacy surfaces; do not add
   more orchestration there unless the change is very small.

@@ -132,6 +132,7 @@
 | 排查账号不命中、导入失败、挑战拦截、请求异常 | [FAQ 与账号命中规则](docs/zh-CN/report/FAQ与账号命中规则.md) |
 | 排查后台任务账号跳过、禁用与停用原因 | [后台任务账号跳过说明](docs/zh-CN/report/后台任务账号跳过说明.md) |
 | 管理官方/受管模型目录、价格、路由与 instructions policy | [模型目录 V2 管理与计费说明](docs/zh-CN/report/模型目录V2管理与计费说明.md) |
+| 接入 DeepSeek 等标准 Responses API 供应商 | [聚合 API 请求规则与配置说明](docs/zh-CN/report/聚合API请求规则与配置说明.md) |
 | 使用固定 ChatGPT Plus 商品池、定时同步、验证与提醒 | [商品池维护说明](docs/zh-CN/report/商品池维护说明.md) |
 | 按账号或聚合 API 筛选仪表盘统计 | [仪表盘来源筛选与资源状态说明](docs/zh-CN/report/仪表盘来源筛选与资源状态说明.md) |
 | 插件中心最小接入、快速对接 | [插件中心最小接入说明](docs/zh-CN/report/插件中心最小接入说明.md) |
@@ -146,7 +147,7 @@
 - 授权登录：支持 `chatgpt.com` 浏览器授权与 Device Code 登录；浏览器授权仍可手动粘贴回调地址完成解析
 - 平台 Key：随机生成或自定义固定 Key、禁用、删除、模型绑定、推理等级、服务等级（跟随请求 / Fast / Flex）；可绑定自定义账号分组，并与账号计划筛选取交集后仅在授权池内轮转
 - 模型管理：纯账号池遵循 OpenAI 官方 Codex 目录；聚合 API 与两种混合策略使用 CodexManager 受管 V2 目录，支持 builtin/custom、整数三价、长上下文阶梯价、route、instructions policy 和本地 JSON preview/commit
-- 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额和基于已配置 V2 route 的连通性测试；不会请求供应商 `/models` 或维护供应商模型池
+- 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额、V2 route 连通性测试，以及标准 Responses API 兼容档案、声明式字段规则、静态请求头和按需 `/models` 发现缓存
 - 商品池：固定同步 PriceAI 的 ChatGPT Plus 试用订阅；支持手动全量同步、按多标签定时同步、独立的 PriceAI/本地验证状态、提醒与变化记录，以及商家收藏筛选
 - 仪表盘来源筛选：支持今日、账号池/聚合 API 类型和具体来源任意多选；Token、请求、费用、趋势、模型统计与账号池剩余使用同一口径
 - 插件中心：路由为 `/plugins/`，支持内置精选、企业私有、自定义源三种市场模式，并提供插件清单、任务、日志与 Rhai 对接接口

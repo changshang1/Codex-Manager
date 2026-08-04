@@ -98,6 +98,7 @@ fn aggregate_api(id: &str) -> AggregateApi {
         auth_params_json: None,
         action: None,
         model_override: None,
+        compatibility_config_json: None,
         status: "active".to_string(),
         auto_toggle_enabled: true,
         consecutive_failures: 3,

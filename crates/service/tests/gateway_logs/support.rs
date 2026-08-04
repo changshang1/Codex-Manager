@@ -263,6 +263,7 @@ pub(super) fn seed_model_catalog_models(storage: &Storage, models: &[&str]) {
             priority: 0,
             weight: 1,
             sort_order: 0,
+            compatibility_override_json: None,
         }];
         storage
             .upsert_managed_model_v2(&ManagedModelV2Upsert {
@@ -304,6 +305,7 @@ pub(super) fn seed_model_catalog_route(
         priority,
         weight: 1,
         sort_order: 0,
+        compatibility_override_json: None,
     });
     storage
         .upsert_managed_model_v2(&ManagedModelV2Upsert {

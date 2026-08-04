@@ -854,6 +854,8 @@ pub struct AggregateApiSummary {
     pub auth_params: Option<serde_json::Value>,
     pub action: Option<String>,
     pub model_override: Option<String>,
+    #[serde(default)]
+    pub compatibility_config_json: Option<String>,
     pub status: String,
     #[serde(default)]
     pub auto_toggle_enabled: bool,
@@ -1704,6 +1706,18 @@ pub struct DashboardSourceUsageSummary {
     pub provider: Option<String>,
     pub today_usage: DashboardTokenUsageResult,
     pub range_usage: DashboardTokenUsageResult,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AggregateApiModelDiscoveryResult {
+    pub api_id: String,
+    #[serde(default)]
+    pub items: Vec<AggregateApiSupplierModelEntry>,
+    pub fetched_at: Option<i64>,
+    #[serde(default)]
+    pub from_cache: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

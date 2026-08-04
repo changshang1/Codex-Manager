@@ -409,6 +409,7 @@ export function useManagedModels() {
             sortOrder: route.sortOrder,
             priority: route.priority,
             weight: route.weight,
+            compatibilityOverrideJson: existing?.compatibilityOverrideJson || null,
           };
         });
         const routes =

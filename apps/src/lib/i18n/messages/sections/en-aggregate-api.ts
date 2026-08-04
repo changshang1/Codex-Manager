@@ -93,7 +93,7 @@ export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   连续失败: "Consecutive failures",
   上次自动停用: "Last automatic disable",
   停用原因: "Disable reason",
-  上游按日额度已耗尽: "Upstream daily quota exhausted",
+  上游周期额度已耗尽: "Upstream periodic quota exhausted",
   "未知熔断原因：{reason}": "Unknown circuit-breaker reason: {reason}",
   解除熔断: "Clear circuit breaker",
   "解除中...": "Clearing...",

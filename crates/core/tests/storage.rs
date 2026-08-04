@@ -529,6 +529,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             auth_params_json: None,
             action: None,
             model_override: None,
+            compatibility_config_json: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,
@@ -616,6 +617,10 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             priority: 10,
             weight: 1,
             sort_order: 10,
+            compatibility_override_json: Some(
+                r#"{"fieldPolicies":{"reasoning.effort":{"strategy":"replace","value":"medium"}}}"#
+                    .to_string(),
+            ),
         },
         ModelRouteV2 {
             id: String::new(),
@@ -626,6 +631,7 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             priority: 0,
             weight: 1,
             sort_order: 20,
+            compatibility_override_json: None,
         },
     ];
     storage
@@ -634,6 +640,14 @@ fn delete_aggregate_api_removes_aggregate_model_source_routes() {
             model: managed_model,
         })
         .expect("upsert managed model routes");
+    let saved_model = storage
+        .get_managed_model_v2("gpt-5.4-mini")
+        .expect("read saved managed model")
+        .expect("saved managed model");
+    assert_eq!(
+        saved_model.routes[0].compatibility_override_json.as_deref(),
+        Some(r#"{"fieldPolicies":{"reasoning.effort":{"strategy":"replace","value":"medium"}}}"#)
+    );
 
     storage
         .delete_aggregate_api("agg-routing-delete")
@@ -2029,6 +2043,7 @@ fn request_token_stats_rollups_use_owner_and_actual_source_precedence() {
                 auth_params_json: None,
                 action: None,
                 model_override: None,
+                compatibility_config_json: None,
                 status: "active".to_string(),
                 auto_toggle_enabled: false,
                 consecutive_failures: 0,

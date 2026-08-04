@@ -1,6 +1,7 @@
 use codexmanager_core::rpc::types::{
     AggregateApiBalanceRefreshResult, AggregateApiBalanceSnapshot, AggregateApiCreateResult,
-    AggregateApiSecretResult, AggregateApiSummary, AggregateApiTestResult,
+    AggregateApiModelDiscoveryResult, AggregateApiSecretResult, AggregateApiSummary,
+    AggregateApiTestResult,
 };
 use codexmanager_core::storage::{
     now_ts, AggregateApi, AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA,
@@ -20,6 +21,7 @@ pub(crate) const AGGREGATE_API_PROVIDER_CODEX: &str = "codex";
 pub(crate) const AGGREGATE_API_PROVIDER_CLAUDE: &str = "claude";
 pub(crate) const AGGREGATE_API_PROVIDER_GEMINI: &str = "gemini";
 pub(crate) const AGGREGATE_API_PROVIDER_COMPATIBLE: &str = "compatible";
+pub(crate) const AGGREGATE_API_PROVIDER_RESPONSES: &str = "responses";
 pub(crate) const AGGREGATE_API_AUTH_APIKEY: &str = "apikey";
 pub(crate) const AGGREGATE_API_AUTH_USERPASS: &str = "userpass";
 const AGGREGATE_API_BALANCE_TEMPLATE_GENERIC: &str = "generic";
@@ -30,35 +32,51 @@ const CUSTOM_BALANCE_AUTH_BALANCE_BEARER: &str = "balance_bearer";
 const CUSTOM_BALANCE_AUTH_NONE: &str = "none";
 pub(crate) const AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT: &str =
     AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_QUOTA;
+const AGGREGATE_API_DEPLETED_BALANCE_MAX_AGE_SECS: i64 = 30 * 60;
 
-fn is_daily_limit_error_code_text(value: &str) -> bool {
-    value
-        .trim()
-        .replace(['-', ' '], "_")
-        .eq_ignore_ascii_case("DAILY_LIMIT_EXCEEDED")
+fn is_quota_limit_error_code_text(value: &str) -> bool {
+    matches!(
+        value
+            .trim()
+            .replace(['-', ' '], "_")
+            .to_ascii_uppercase()
+            .as_str(),
+        "DAILY_LIMIT_EXCEEDED"
+            | "DAILY_USAGE_LIMIT_EXCEEDED"
+            | "WEEKLY_LIMIT_EXCEEDED"
+            | "WEEKLY_USAGE_LIMIT_EXCEEDED"
+            | "MONTHLY_LIMIT_EXCEEDED"
+            | "MONTHLY_USAGE_LIMIT_EXCEEDED"
+    )
 }
 
-fn is_explicit_daily_usage_limit_message_text(value: &str) -> bool {
-    value
+fn is_explicit_period_usage_limit_message_text(value: &str) -> bool {
+    let normalized = value
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_ascii_lowercase()
-        .contains("daily usage limit exceeded")
+        .to_ascii_lowercase();
+    [
+        "daily usage limit exceeded",
+        "weekly usage limit exceeded",
+        "monthly usage limit exceeded",
+    ]
+    .into_iter()
+    .any(|message| normalized.contains(message))
 }
 
-fn is_daily_limit_error_code(value: &serde_json::Value) -> bool {
-    value.as_str().is_some_and(is_daily_limit_error_code_text)
+fn is_quota_limit_error_code(value: &serde_json::Value) -> bool {
+    value.as_str().is_some_and(is_quota_limit_error_code_text)
 }
 
-fn is_explicit_daily_usage_limit_message(value: &serde_json::Value) -> bool {
+fn is_explicit_period_usage_limit_message(value: &serde_json::Value) -> bool {
     value
         .as_str()
-        .is_some_and(is_explicit_daily_usage_limit_message_text)
+        .is_some_and(is_explicit_period_usage_limit_message_text)
 }
 
-fn is_structured_daily_limit_error(value: &serde_json::Value) -> bool {
-    if is_daily_limit_error_code(value) || is_explicit_daily_usage_limit_message(value) {
+fn is_structured_quota_limit_error(value: &serde_json::Value) -> bool {
+    if is_quota_limit_error_code(value) || is_explicit_period_usage_limit_message(value) {
         return true;
     }
     let Some(object) = value.as_object() else {
@@ -67,19 +85,19 @@ fn is_structured_daily_limit_error(value: &serde_json::Value) -> bool {
     ["code", "type", "status", "reason"]
         .into_iter()
         .filter_map(|key| object.get(key))
-        .any(is_daily_limit_error_code)
+        .any(is_quota_limit_error_code)
         || ["message", "detail"]
             .into_iter()
             .filter_map(|key| object.get(key))
             .any(|value| {
-                is_explicit_daily_usage_limit_message(value)
+                is_explicit_period_usage_limit_message(value)
                     || value
                         .as_str()
-                        .is_some_and(has_daily_limit_error_code_prefix)
+                        .is_some_and(has_quota_limit_error_code_prefix)
             })
 }
 
-fn has_daily_limit_error_code_prefix(value: &str) -> bool {
+fn has_quota_limit_error_code_prefix(value: &str) -> bool {
     for token in value.split_whitespace() {
         let Some((key, raw_value)) = token.split_once('=') else {
             continue;
@@ -87,7 +105,7 @@ fn has_daily_limit_error_code_prefix(value: &str) -> bool {
         if ["code", "type", "status", "reason"]
             .into_iter()
             .any(|candidate| key.eq_ignore_ascii_case(candidate))
-            && is_daily_limit_error_code_text(
+            && is_quota_limit_error_code_text(
                 raw_value.trim_matches(|ch: char| matches!(ch, ',' | ';' | '"' | '\'')),
             )
         {
@@ -112,7 +130,7 @@ pub(crate) fn classify_aggregate_api_daily_limit_failure(
     let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let root_error = value
         .as_object()
-        .is_some_and(|_| is_structured_daily_limit_error(&value));
+        .is_some_and(|_| is_structured_quota_limit_error(&value));
     (root_error
         || [
             value.get("error"),
@@ -121,19 +139,71 @@ pub(crate) fn classify_aggregate_api_daily_limit_failure(
         ]
         .into_iter()
         .flatten()
-        .any(is_structured_daily_limit_error))
+        .any(is_structured_quota_limit_error))
     .then_some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
 }
 
 pub(crate) fn classify_aggregate_api_daily_limit_hint(hint: &str) -> Option<&'static str> {
     let structured_json_signal = serde_json::from_str::<serde_json::Value>(hint)
         .ok()
-        .is_some_and(|value| is_structured_daily_limit_error(&value));
+        .is_some_and(|value| is_structured_quota_limit_error(&value));
     (structured_json_signal
-        || has_daily_limit_error_code_prefix(hint)
-        || is_daily_limit_error_code_text(hint)
-        || is_explicit_daily_usage_limit_message_text(hint))
+        || has_quota_limit_error_code_prefix(hint)
+        || is_quota_limit_error_code_text(hint)
+        || is_explicit_period_usage_limit_message_text(hint))
     .then_some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+}
+
+fn aggregate_api_balance_confirms_depleted(api: &AggregateApi, now: i64) -> bool {
+    if !api.balance_query_enabled
+        || !api
+            .last_balance_status
+            .as_deref()
+            .is_some_and(|status| status.trim().eq_ignore_ascii_case("success"))
+    {
+        return false;
+    }
+    let Some(refreshed_at) = api.last_balance_at else {
+        return false;
+    };
+    let age = now.saturating_sub(refreshed_at);
+    if !(0..=AGGREGATE_API_DEPLETED_BALANCE_MAX_AGE_SECS).contains(&age) {
+        return false;
+    }
+    let Some(snapshot) = api
+        .last_balance_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+    else {
+        return false;
+    };
+    if snapshot.get("isValid").and_then(serde_json::Value::as_bool) == Some(false) {
+        return false;
+    }
+    snapshot
+        .get("remaining")
+        .and_then(serde_json::Value::as_f64)
+        .is_some_and(|remaining| remaining.is_finite() && remaining <= 0.0)
+}
+
+fn is_balance_confirmed_generic_upstream_failure(hint: &str) -> bool {
+    let normalized = hint
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    normalized.contains("code=upstream_error") && normalized.contains("upstream request failed")
+}
+
+pub(crate) fn classify_aggregate_api_daily_limit_hint_for_candidate(
+    api: &AggregateApi,
+    hint: &str,
+) -> Option<&'static str> {
+    classify_aggregate_api_daily_limit_hint(hint).or_else(|| {
+        (is_balance_confirmed_generic_upstream_failure(hint)
+            && aggregate_api_balance_confirms_depleted(api, now_ts()))
+        .then_some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +392,21 @@ fn normalize_model_override(value: Option<String>) -> Result<Option<String>, Str
         return Err("aggregate api modelOverride contains unsupported characters".to_string());
     }
     Ok(Some(trimmed.to_string()))
+}
+
+fn normalize_compatibility_config_json(value: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = value.map(|value| value.trim().to_string()) else {
+        return Ok(None);
+    };
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let parsed = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|_| "invalid compatibilityConfigJson".to_string())?;
+    if !parsed.is_object() {
+        return Err("compatibilityConfigJson must be a JSON object".to_string());
+    }
+    Ok(Some(raw))
 }
 
 fn normalize_balance_query_template(value: Option<String>) -> Result<Option<String>, String> {
@@ -766,6 +851,9 @@ fn normalize_provider_type(value: Option<String>) -> Result<String, String> {
                     Ok(AGGREGATE_API_PROVIDER_CLAUDE.to_string())
                 }
                 "compatible" => Ok(AGGREGATE_API_PROVIDER_COMPATIBLE.to_string()),
+                "responses" | "responses_api" | "openai_responses" => {
+                    Ok(AGGREGATE_API_PROVIDER_RESPONSES.to_string())
+                }
                 other => Err(format!("unsupported aggregate api provider type: {other}")),
             }
         }
@@ -1701,6 +1789,7 @@ pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> 
                 .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok()),
             action: item.action,
             model_override: item.model_override,
+            compatibility_config_json: item.compatibility_config_json,
             status: item.status,
             auto_toggle_enabled: item.auto_toggle_enabled,
             consecutive_failures: item.consecutive_failures,
@@ -1757,6 +1846,7 @@ pub(crate) fn create_aggregate_api(
     balance_query_access_token: Option<String>,
     balance_query_user_id: Option<String>,
     balance_query_config_json: Option<String>,
+    compatibility_config_json: Option<String>,
 ) -> Result<AggregateApiCreateResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let normalized_provider_type = normalize_provider_type(provider_type)?;
@@ -1773,6 +1863,8 @@ pub(crate) fn create_aggregate_api(
     let normalized_action =
         normalize_action_override(action_custom_enabled, action)?.unwrap_or(None);
     let normalized_model_override = normalize_model_override(model_override)?;
+    let normalized_compatibility_config_json =
+        normalize_compatibility_config_json(compatibility_config_json)?;
     let normalized_balance_query_enabled = balance_query_enabled.unwrap_or(false);
     let normalized_balance_query_template = if normalized_balance_query_enabled {
         Some(default_balance_query_template(
@@ -1818,6 +1910,7 @@ pub(crate) fn create_aggregate_api(
             .unwrap_or(None),
         action: normalized_action,
         model_override: normalized_model_override,
+        compatibility_config_json: normalized_compatibility_config_json,
         status: "active".to_string(),
         auto_toggle_enabled: auto_toggle_enabled.unwrap_or(false),
         consecutive_failures: 0,
@@ -1898,6 +1991,7 @@ pub(crate) fn update_aggregate_api(
     balance_query_access_token: Option<String>,
     balance_query_user_id: Option<String>,
     balance_query_config_json: Option<String>,
+    compatibility_config_json: Option<String>,
 ) -> Result<(), String> {
     if api_id.is_empty() {
         return Err("aggregate api id required".to_string());
@@ -1982,6 +2076,12 @@ pub(crate) fn update_aggregate_api(
         let normalized = normalize_model_override(model_override)?;
         storage
             .update_aggregate_api_model_override(api_id, normalized.as_deref())
+            .map_err(|err| err.to_string())?;
+    }
+    if let Some(config_json) = compatibility_config_json {
+        let normalized = normalize_compatibility_config_json(Some(config_json))?;
+        storage
+            .update_aggregate_api_compatibility_config(api_id, normalized.as_deref())
             .map_err(|err| err.to_string())?;
     }
 
@@ -2307,6 +2407,330 @@ pub(crate) fn test_aggregate_api_connection(
         message,
         tested_at: now_ts(),
         latency_ms: started_at.elapsed().as_millis() as i64,
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelDiscoveryConfig {
+    #[serde(default = "default_model_discovery_path")]
+    path: String,
+    #[serde(default = "default_model_discovery_items_path")]
+    items_path: String,
+    #[serde(default = "default_model_discovery_id_path")]
+    id_path: String,
+    #[serde(default)]
+    display_name_path: Option<String>,
+    #[serde(default)]
+    pagination: ModelDiscoveryPaginationConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelDiscoveryPaginationConfig {
+    #[serde(default)]
+    enabled: bool,
+    #[serde(default = "default_model_discovery_page_param")]
+    page_param: String,
+    #[serde(default = "default_model_discovery_cursor_param")]
+    cursor_param: String,
+    #[serde(default = "default_model_discovery_limit_param")]
+    limit_param: String,
+    #[serde(default = "default_model_discovery_page_size")]
+    page_size: usize,
+    #[serde(default = "default_model_discovery_max_pages")]
+    max_pages: usize,
+    #[serde(default = "default_model_discovery_has_more_path")]
+    has_more_path: String,
+    #[serde(default = "default_model_discovery_last_id_path")]
+    last_id_path: String,
+}
+
+impl Default for ModelDiscoveryPaginationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            page_param: default_model_discovery_page_param(),
+            cursor_param: default_model_discovery_cursor_param(),
+            limit_param: default_model_discovery_limit_param(),
+            page_size: default_model_discovery_page_size(),
+            max_pages: default_model_discovery_max_pages(),
+            has_more_path: default_model_discovery_has_more_path(),
+            last_id_path: default_model_discovery_last_id_path(),
+        }
+    }
+}
+
+fn default_model_discovery_path() -> String {
+    "/models".to_string()
+}
+fn default_model_discovery_items_path() -> String {
+    "data".to_string()
+}
+fn default_model_discovery_id_path() -> String {
+    "id".to_string()
+}
+fn default_model_discovery_page_param() -> String {
+    "page".to_string()
+}
+fn default_model_discovery_cursor_param() -> String {
+    "after".to_string()
+}
+fn default_model_discovery_limit_param() -> String {
+    "limit".to_string()
+}
+fn default_model_discovery_page_size() -> usize {
+    100
+}
+fn default_model_discovery_max_pages() -> usize {
+    10
+}
+fn default_model_discovery_has_more_path() -> String {
+    "has_more".to_string()
+}
+fn default_model_discovery_last_id_path() -> String {
+    "last_id".to_string()
+}
+
+fn read_json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.trim_matches('.')
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .try_fold(value, |current, part| current.as_object()?.get(part))
+}
+
+fn model_discovery_config(api: &AggregateApi) -> Result<ModelDiscoveryConfig, String> {
+    let raw = api.compatibility_config_json.as_deref().unwrap_or("{}");
+    let value = serde_json::from_str::<serde_json::Value>(raw)
+        .map_err(|_| "invalid compatibility config".to_string())?;
+    let discovery = value
+        .get("modelDiscovery")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    serde_json::from_value(discovery).map_err(|_| "invalid modelDiscovery config".to_string())
+}
+
+fn request_model_discovery_page(
+    client: &reqwest::blocking::Client,
+    url: String,
+    api: &AggregateApi,
+    secret: &str,
+) -> Result<serde_json::Value, String> {
+    let builder = client.get(url.as_str());
+    let (builder, updated_url) = apply_probe_auth(builder, url.clone(), api, secret)?;
+    let response = if updated_url != url {
+        let rebuilt = client.get(updated_url.as_str());
+        let (rebuilt, _) = apply_probe_auth(rebuilt, updated_url, api, secret)?;
+        rebuilt.header("accept", "application/json").send()
+    } else {
+        builder.header("accept", "application/json").send()
+    }
+    .map_err(|err| err.to_string())?;
+    let status = response.status();
+    let body = response.bytes().map_err(|err| err.to_string())?;
+    if !status.is_success() {
+        let detail = short_error_body(String::from_utf8_lossy(&body).as_ref());
+        return Err(if detail.is_empty() {
+            format!("models probe http_status={}", status.as_u16())
+        } else {
+            format!("models probe http_status={}; {detail}", status.as_u16())
+        });
+    }
+    serde_json::from_slice::<serde_json::Value>(&body)
+        .map_err(|err| format!("invalid models response: {err}"))
+}
+
+fn fetch_discovered_models(
+    client: &reqwest::blocking::Client,
+    api: &AggregateApi,
+    secret: &str,
+    config: &ModelDiscoveryConfig,
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let pagination = &config.pagination;
+    let max_pages = pagination.max_pages.clamp(1, 100);
+    let page_size = pagination.page_size.clamp(1, 1000);
+    let mut page = 1usize;
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+    let mut seen_models = HashSet::new();
+    let mut discovered = Vec::new();
+
+    loop {
+        let mut url = reqwest::Url::parse(
+            normalize_probe_url(api.url.as_str(), config.path.as_str()).as_str(),
+        )
+        .map_err(|err| format!("invalid models discovery url: {err}"))?;
+        if pagination.enabled {
+            let mut query = url.query_pairs_mut();
+            if !pagination.page_param.trim().is_empty() {
+                query.append_pair(pagination.page_param.trim(), page.to_string().as_str());
+            }
+            if !pagination.limit_param.trim().is_empty() {
+                query.append_pair(
+                    pagination.limit_param.trim(),
+                    page_size.to_string().as_str(),
+                );
+            }
+            if let Some(cursor) = cursor.as_deref() {
+                if !pagination.cursor_param.trim().is_empty() {
+                    query.append_pair(pagination.cursor_param.trim(), cursor);
+                }
+            }
+        }
+        let value = request_model_discovery_page(client, url.to_string(), api, secret)?;
+        let items = read_json_path(&value, config.items_path.as_str())
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| "models response items path is not an array".to_string())?;
+        for item in items {
+            let Some(id) = read_json_path(item, config.id_path.as_str())
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            if !seen_models.insert(id.to_string()) {
+                continue;
+            }
+            let display_name = config
+                .display_name_path
+                .as_deref()
+                .and_then(|path| read_json_path(item, path))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            discovered.push((id.to_string(), display_name));
+            if discovered.len() >= 10_000 {
+                return Ok(discovered);
+            }
+        }
+        if !pagination.enabled || page >= max_pages {
+            break;
+        }
+        let has_more = read_json_path(&value, pagination.has_more_path.as_str())
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if !has_more {
+            break;
+        }
+        cursor = read_json_path(&value, pagination.last_id_path.as_str())
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if let Some(cursor) = cursor.as_deref() {
+            if !seen_cursors.insert(cursor.to_string()) {
+                return Err("models pagination cursor repeated".to_string());
+            }
+        }
+        page += 1;
+    }
+    Ok(discovered)
+}
+
+fn cached_model_discovery_result(
+    storage: &codexmanager_core::storage::Storage,
+    api_id: &str,
+    provider_type: &str,
+    message: String,
+) -> Result<Option<AggregateApiModelDiscoveryResult>, String> {
+    let cached = storage
+        .list_aggregate_api_supplier_models(Some(api_id), Some(provider_type))
+        .map_err(|err| err.to_string())?;
+    if cached.is_empty() {
+        return Ok(None);
+    }
+    let fetched_at = cached.iter().map(|item| item.updated_at).max();
+    Ok(Some(AggregateApiModelDiscoveryResult {
+        api_id: api_id.to_string(),
+        items: cached
+            .into_iter()
+            .map(
+                |item| codexmanager_core::rpc::types::AggregateApiSupplierModelEntry {
+                    supplier_key: item.supplier_key,
+                    provider_type: item.provider_type,
+                    upstream_model: item.upstream_model,
+                    display_name: item.display_name,
+                    status: item.status,
+                    created_at: item.created_at,
+                    updated_at: item.updated_at,
+                },
+            )
+            .collect(),
+        fetched_at,
+        from_cache: true,
+        message: Some(message),
+    }))
+}
+
+pub(crate) fn discover_aggregate_api_models(
+    api_id: &str,
+) -> Result<AggregateApiModelDiscoveryResult, String> {
+    if api_id.trim().is_empty() {
+        return Err("aggregate api id required".to_string());
+    }
+    let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
+    let joined = storage
+        .find_aggregate_api_with_secrets_by_id(api_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "aggregate api not found".to_string())?;
+    let api = joined.api;
+    let secret = joined
+        .secret_value
+        .ok_or_else(|| "aggregate api secret not found".to_string())?;
+    let config = model_discovery_config(&api)?;
+    let client = gateway::upstream_client_for_aggregate_url(api.url.as_str());
+    let provider_type = normalize_provider_type_value(api.provider_type.as_str());
+    let discovered = match fetch_discovered_models(&client, &api, &secret, &config) {
+        Ok(items) => items,
+        Err(err) => {
+            if let Some(cached) = cached_model_discovery_result(
+                &storage,
+                api.id.as_str(),
+                provider_type.as_str(),
+                format!("模型刷新失败，已使用缓存：{err}"),
+            )? {
+                return Ok(cached);
+            }
+            return Err(err);
+        }
+    };
+    let mut entries = Vec::new();
+    let fetched_at = now_ts();
+    for (id, display_name) in discovered {
+        let now = now_ts();
+        storage
+            .upsert_aggregate_api_supplier_model(
+                &codexmanager_core::storage::AggregateApiSupplierModel {
+                    supplier_key: api.id.clone(),
+                    provider_type: provider_type.clone(),
+                    upstream_model: id.clone(),
+                    display_name: display_name.clone(),
+                    status: "available".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                },
+            )
+            .map_err(|err| err.to_string())?;
+        entries.push(
+            codexmanager_core::rpc::types::AggregateApiSupplierModelEntry {
+                supplier_key: api.id.clone(),
+                provider_type: provider_type.clone(),
+                upstream_model: id,
+                display_name,
+                status: "available".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+        );
+    }
+    Ok(AggregateApiModelDiscoveryResult {
+        api_id: api.id,
+        items: entries,
+        fetched_at: Some(fetched_at),
+        from_cache: false,
+        message: None,
     })
 }
 

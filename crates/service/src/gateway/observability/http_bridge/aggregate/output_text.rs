@@ -20,6 +20,7 @@ pub(crate) struct UpstreamResponseUsage {
     pub reasoning_output_tokens: Option<i64>,
     pub first_response_ms: Option<i64>,
     pub output_text: Option<String>,
+    pub response_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -136,6 +137,9 @@ pub(in super::super) fn merge_usage(
         let target_text = target.output_text.get_or_insert_with(String::new);
         append_output_text_raw(target_text, source_text.as_str());
     }
+    if source.response_id.is_some() {
+        target.response_id = source.response_id;
+    }
 }
 
 /// 函数 `usage_has_signal`
@@ -242,6 +246,7 @@ fn parse_usage_from_object(usage: Option<&Map<String, Value>>) -> UpstreamRespon
         reasoning_output_tokens,
         first_response_ms: None,
         output_text: None,
+        response_id: None,
     }
 }
 
@@ -669,6 +674,19 @@ pub(in super::super) fn parse_usage_from_json(value: &Value) -> UpstreamResponse
         .and_then(Value::as_object);
     merge_usage(&mut usage, parse_usage_from_object(response_usage));
     usage.output_text = extract_output_text_from_json(value);
+    usage.response_id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("response_id").and_then(Value::as_str))
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
     usage
 }
 

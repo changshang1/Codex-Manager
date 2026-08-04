@@ -11,14 +11,15 @@ use tiny_http::{Response, Server};
 
 use super::{
     action_path_or_default, classify_aggregate_api_daily_limit_failure,
-    classify_aggregate_api_daily_limit_hint, create_aggregate_api, extract_custom_balance,
-    extract_generic_balance, extract_new_api_balance, list_aggregate_apis,
-    normalize_action_override, normalize_custom_balance_query_config, normalize_provider_type,
-    normalize_provider_type_value, probe_claude_endpoint, probe_codex_endpoint,
-    provider_default_url, read_aggregate_api_secret, recover_aggregate_api, update_aggregate_api,
-    update_aggregate_api_sorts, AggregateApiSortUpdate, CustomBalanceQueryConfig,
-    AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT, AGGREGATE_API_PROVIDER_CLAUDE,
-    AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
+    classify_aggregate_api_daily_limit_hint, classify_aggregate_api_daily_limit_hint_for_candidate,
+    create_aggregate_api, extract_custom_balance, extract_generic_balance, extract_new_api_balance,
+    list_aggregate_apis, normalize_action_override, normalize_custom_balance_query_config,
+    normalize_provider_type, normalize_provider_type_value, probe_claude_endpoint,
+    probe_codex_endpoint, provider_default_url, read_aggregate_api_secret, recover_aggregate_api,
+    update_aggregate_api, update_aggregate_api_sorts, AggregateApiSortUpdate,
+    CustomBalanceQueryConfig, AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT,
+    AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_COMPATIBLE,
+    AGGREGATE_API_PROVIDER_GEMINI,
 };
 
 static AGGREGATE_API_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -29,6 +30,8 @@ fn daily_limit_classifier_requires_a_structured_explicit_signal() {
         br#"{"error":{"code":"DAILY_LIMIT_EXCEEDED"}}"#,
         br#"{"response":{"error":{"type":"daily-limit-exceeded"}}}"#,
         br#"{"error":{"message":"Daily usage limit exceeded. Try again tomorrow."}}"#,
+        br#"{"code":"USAGE_LIMIT_EXCEEDED","message":"error: code=429 reason=\"MONTHLY_LIMIT_EXCEEDED\" message=\"monthly usage limit exceeded\" metadata=map[]"}"#,
+        br#"{"error":{"reason":"WEEKLY_LIMIT_EXCEEDED"}}"#,
         br#"{"code":"USAGE_LIMIT_EXCEEDED","message":"error: code=429 reason=\"DAILY_LIMIT_EXCEEDED\" message=\"daily usage limit exceeded\" metadata=map[]"}"#,
         br#"{"code":"USAGE_LIMIT_EXCEEDED","message":"error: code=429 reason=\"DAILY_LIMIT_EXCEEDED\""}"#,
         br#"{"error":{"type":"billing_error","message":"daily usage limit exceeded"}}"#,
@@ -53,6 +56,7 @@ fn daily_limit_classifier_requires_a_structured_explicit_signal() {
     for hint in [
         r#"{"code":"DAILY_LIMIT_EXCEEDED"}"#,
         "code=DAILY_LIMIT_EXCEEDED upstream quota rejected",
+        "code=429 reason=MONTHLY_LIMIT_EXCEEDED monthly usage limit exceeded",
     ] {
         assert_eq!(
             classify_aggregate_api_daily_limit_hint(hint),
@@ -90,6 +94,43 @@ fn daily_limit_classifier_rejects_transient_and_unstructured_failures() {
     );
     assert_eq!(
         classify_aggregate_api_daily_limit_hint("upstream mentioned DAILY_LIMIT_EXCEEDED"),
+        None
+    );
+}
+
+#[test]
+fn daily_limit_candidate_classifier_uses_only_fresh_confirmed_zero_balance() {
+    let now = now_ts();
+    let mut api = aggregate_api_with_action(None);
+    api.balance_query_enabled = true;
+    api.last_balance_status = Some("success".to_string());
+    api.last_balance_at = Some(now);
+    api.last_balance_json = Some(r#"{"isValid":true,"remaining":0.0,"unit":"USD"}"#.to_string());
+    let generic_failure = "code=upstream_error Upstream request failed";
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint_for_candidate(&api, generic_failure),
+        Some(AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT)
+    );
+
+    api.last_balance_json = Some(r#"{"isValid":true,"remaining":1.0}"#.to_string());
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint_for_candidate(&api, generic_failure),
+        None
+    );
+
+    api.last_balance_json = Some(r#"{"isValid":true,"remaining":0.0}"#.to_string());
+    api.last_balance_at = Some(now - 30 * 60 - 1);
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint_for_candidate(&api, generic_failure),
+        None
+    );
+
+    api.last_balance_at = Some(now);
+    assert_eq!(
+        classify_aggregate_api_daily_limit_hint_for_candidate(
+            &api,
+            "aggregate api upstream error: connection timed out",
+        ),
         None
     );
 }
@@ -214,6 +255,7 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         auth_params_json: None,
         action: action.map(str::to_string),
         model_override: None,
+        compatibility_config_json: None,
         status: "active".to_string(),
         auto_toggle_enabled: false,
         consecutive_failures: 0,
@@ -259,6 +301,7 @@ fn create_test_aggregate_api(suffix: &str, auto_toggle_enabled: Option<bool>) ->
         None,
         None,
         None,
+        None,
     )
     .expect("create aggregate API")
     .id
@@ -274,6 +317,7 @@ fn update_test_aggregate_api_auto_toggle(api_id: &str, supplier_name: &str, enab
         None,
         None,
         Some(enabled),
+        None,
         None,
         None,
         None,
@@ -349,6 +393,7 @@ fn update_disabling_auto_toggle_clears_current_breaker_but_preserves_history() {
         None,
         Some("disabled".to_string()),
         Some(false),
+        None,
         None,
         None,
         None,

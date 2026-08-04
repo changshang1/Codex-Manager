@@ -253,6 +253,15 @@ pub async fn service_aggregate_api_test_connection(
 }
 
 #[tauri::command]
+pub async fn service_aggregate_api_discover_models(
+    addr: Option<String>,
+    id: String,
+) -> Result<serde_json::Value, String> {
+    let params = serde_json::json!({ "id": id });
+    rpc_call_in_background("aggregateApi/discoverModels", addr, Some(params)).await
+}
+
+#[tauri::command]
 pub async fn service_aggregate_api_refresh_balance(
     addr: Option<String>,
     id: String,

@@ -7,6 +7,7 @@ import {
   normalizeAccountList,
   normalizeAggregateApiBalanceRefreshResult,
   normalizeAggregateApiCreateResult,
+  normalizeAggregateApiModelDiscoveryResult,
   normalizeAggregateApiList,
   normalizeAggregateApiSecretResult,
   normalizeAggregateApiTestResult,
@@ -63,6 +64,7 @@ import {
   AggregateApi,
   AggregateApiBalanceRefreshResult,
   AggregateApiCreateResult,
+  AggregateApiModelDiscoveryResult,
   AggregateApiSecretResult,
   AggregateApiTestResult,
   ApiKey,
@@ -197,6 +199,7 @@ interface AggregateApiPayload {
   authParams?: Record<string, unknown> | null;
   actionCustomEnabled?: boolean | null;
   action?: string | null;
+  compatibilityConfigJson?: string | null;
   username?: string | null;
   password?: string | null;
   balanceQueryEnabled?: boolean | null;
@@ -822,6 +825,7 @@ export const accountClient = {
             ? params.actionCustomEnabled
             : null,
         action: params.action ?? null,
+        compatibilityConfigJson: params.compatibilityConfigJson ?? null,
         username: params.username || null,
         password: params.password || null,
         balanceQueryEnabled:
@@ -872,6 +876,7 @@ export const accountClient = {
             ? params.actionCustomEnabled
             : null,
         action: params.action ?? null,
+        compatibilityConfigJson: params.compatibilityConfigJson ?? null,
         username: params.username || null,
         password: params.password || null,
         balanceQueryEnabled:
@@ -921,6 +926,15 @@ export const accountClient = {
       withAddr({ id: apiId })
     );
     return normalizeAggregateApiTestResult(result);
+  },
+  async discoverAggregateApiModels(
+    apiId: string,
+  ): Promise<AggregateApiModelDiscoveryResult> {
+    const result = await invoke<unknown>(
+      "service_aggregate_api_discover_models",
+      withAddr({ id: apiId }),
+    );
+    return normalizeAggregateApiModelDiscoveryResult(result);
   },
   async refreshAggregateApiBalance(apiId: string): Promise<AggregateApiBalanceRefreshResult> {
     const result = await invoke<unknown>(

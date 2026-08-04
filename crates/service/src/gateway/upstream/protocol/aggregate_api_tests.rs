@@ -1,14 +1,17 @@
 use codexmanager_core::storage::{now_ts, AggregateApi, Storage};
 
 use super::{
+    apply_compatibility_static_headers, apply_previous_response_affinity,
     build_anthropic_bridge_aggregate_api_request, build_upstream_url, effective_action_path,
-    resolve_aggregate_api_rotation_candidates, resolve_passthrough_sse_protocol,
-    responses_to_anthropic_messages_action_path, rewrite_body_model_override,
+    merge_compatibility_config_json, resolve_aggregate_api_rotation_candidates,
+    resolve_passthrough_sse_protocol, responses_to_anthropic_messages_action_path,
+    rewrite_body_for_compatibility, rewrite_body_model_override,
     should_bridge_responses_to_anthropic,
 };
 use crate::aggregate_api::{
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_CODEX,
     AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
+    AGGREGATE_API_PROVIDER_RESPONSES,
 };
 use crate::gateway::{PassthroughSseProtocol, ResponseAdapter};
 use bytes::Bytes;
@@ -24,6 +27,7 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         auth_params_json: None,
         action: action.map(str::to_string),
         model_override: None,
+        compatibility_config_json: None,
         status: "active".to_string(),
         auto_toggle_enabled: false,
         consecutive_failures: 0,
@@ -68,6 +72,148 @@ fn messages_passthrough_protocol_still_requires_passthrough_adapter() {
         ResponseAdapter::AnthropicMessagesFromResponses,
     );
     assert_eq!(protocol, None);
+}
+
+#[test]
+fn deepseek_compatibility_preserves_supported_responses_fields() {
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = "responses".to_string();
+    api.compatibility_config_json = Some(r#"{"profile":"deepseek"}"#.to_string());
+    let body = Bytes::from_static(
+        br#"{"model":"deepseek-v4-flash","input":"hi","reasoning":{"effort":"high"},"include":["reasoning.encrypted_content"],"background":true,"service_tier":"flex"}"#,
+    );
+    let rewritten = rewrite_body_for_compatibility(&body, &api).expect("rewrite body");
+    let value: serde_json::Value = serde_json::from_slice(&rewritten).expect("json body");
+    assert_eq!(value["reasoning"]["effort"], "high");
+    assert_eq!(value["background"], true);
+    assert_eq!(value["include"][0], "reasoning.encrypted_content");
+    assert_eq!(value["service_tier"], "flex");
+}
+
+#[test]
+fn deepseek_compatibility_rejects_required_tool_choice() {
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = "responses".to_string();
+    api.compatibility_config_json = Some(r#"{"profile":"deepseek"}"#.to_string());
+    let body = Bytes::from_static(
+        br#"{"model":"deepseek-v4-flash","input":"hi","tool_choice":"required"}"#,
+    );
+    let error = rewrite_body_for_compatibility(&body, &api).expect_err("reject tool choice");
+    assert!(error.contains("tool_choice=required"));
+}
+
+#[test]
+fn compatibility_field_policy_can_reject_or_replace_fields() {
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = "responses".to_string();
+    api.compatibility_config_json = Some(
+        r#"{"fieldPolicies":{"store":"reject","service_tier":{"strategy":"replace","value":"default"}}}"#
+            .to_string(),
+    );
+    let body = Bytes::from_static(br#"{"model":"x","input":"hi","store":true}"#);
+    let error = rewrite_body_for_compatibility(&body, &api).expect_err("reject unsupported field");
+    assert!(error.contains("store"));
+}
+
+#[test]
+fn compatibility_field_policy_supports_nested_paths_and_value_maps() {
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = "responses".to_string();
+    api.compatibility_config_json = Some(
+        r#"{"fieldPolicies":{"reasoning.effort":{"strategy":"map","value":{"max":"high"}},"metadata.private":"drop","text.verbosity":{"strategy":"replace","value":"low"}}}"#
+            .to_string(),
+    );
+    let body = Bytes::from_static(
+        br#"{"model":"x","reasoning":{"effort":"max"},"metadata":{"private":true,"keep":1}}"#,
+    );
+    let rewritten = rewrite_body_for_compatibility(&body, &api).expect("rewrite nested fields");
+    let value: serde_json::Value = serde_json::from_slice(&rewritten).expect("json body");
+    assert_eq!(value["reasoning"]["effort"], "high");
+    assert!(value["metadata"].get("private").is_none());
+    assert_eq!(value["metadata"]["keep"], 1);
+    assert_eq!(value["text"]["verbosity"], "low");
+}
+
+#[test]
+fn route_compatibility_override_deep_merges_aggregate_config() {
+    let merged = merge_compatibility_config_json(
+        Some(r#"{"profile":"deepseek","staticHeaders":{"x-base":"1"},"fieldPolicies":{"store":"drop"}}"#),
+        Some(r#"{"staticHeaders":{"x-route":"2"},"fieldPolicies":{"store":"pass","background":"drop"}}"#),
+    )
+    .expect("merge compatibility config")
+    .expect("merged json");
+    let value: serde_json::Value = serde_json::from_str(&merged).expect("json");
+    assert_eq!(value["profile"], "deepseek");
+    assert_eq!(value["staticHeaders"]["x-base"], "1");
+    assert_eq!(value["staticHeaders"]["x-route"], "2");
+    assert_eq!(value["fieldPolicies"]["store"], "pass");
+    assert_eq!(value["fieldPolicies"]["background"], "drop");
+}
+
+#[test]
+fn compatibility_static_headers_render_allowed_placeholders() {
+    let mut api = aggregate_api_with_action(None);
+    api.id = "agg-header".to_string();
+    api.supplier_name = Some("DeepSeek".to_string());
+    api.compatibility_config_json = Some(
+        r#"{"staticHeaders":{"x-provider-context":"${supplier}:${model}:${secret}"}}"#.to_string(),
+    );
+    let request = apply_compatibility_static_headers(
+        reqwest::blocking::Client::new().post("https://example.com/v1/responses"),
+        &api,
+        "secret-value",
+        Some("deepseek-v4-flash"),
+    )
+    .expect("apply static headers")
+    .build()
+    .expect("build request");
+    assert_eq!(
+        request
+            .headers()
+            .get("x-provider-context")
+            .and_then(|value| value.to_str().ok()),
+        Some("DeepSeek:deepseek-v4-flash:secret-value")
+    );
+}
+
+#[test]
+fn previous_response_affinity_selects_bound_supplier_and_rejects_unknown_multi_supplier() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let mut first = aggregate_api_with_action(None);
+    first.id = "agg-affinity-first".to_string();
+    let mut second = aggregate_api_with_action(None);
+    second.id = "agg-affinity-second".to_string();
+    storage
+        .insert_aggregate_api(&first)
+        .expect("insert first aggregate api");
+    storage
+        .insert_aggregate_api(&second)
+        .expect("insert second aggregate api");
+    storage
+        .upsert_aggregate_api_response_affinity("resp-bound", second.id.as_str())
+        .expect("save response affinity");
+
+    let mut candidates = vec![first.clone(), second.clone()];
+    apply_previous_response_affinity(
+        &storage,
+        &Bytes::from_static(br#"{"previous_response_id":"resp-bound"}"#),
+        &mut candidates,
+        false,
+    )
+    .expect("apply bound affinity");
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, second.id);
+
+    let mut unknown_candidates = vec![first, second];
+    let error = apply_previous_response_affinity(
+        &storage,
+        &Bytes::from_static(br#"{"previous_response_id":"resp-unknown"}"#),
+        &mut unknown_candidates,
+        false,
+    )
+    .expect_err("unknown response id must not cross suppliers");
+    assert!(error.contains("禁止跨供应商"));
 }
 
 #[test]
@@ -242,6 +388,7 @@ fn gemini_native_candidates_resolve_to_gemini_provider_only() {
                 auth_params_json: None,
                 action: None,
                 model_override: None,
+                compatibility_config_json: None,
                 status: "active".to_string(),
                 auto_toggle_enabled: false,
                 consecutive_failures: 0,
@@ -266,8 +413,13 @@ fn gemini_native_candidates_resolve_to_gemini_provider_only() {
             .expect("insert aggregate api");
     }
 
-    let candidates = resolve_aggregate_api_rotation_candidates(&storage, "gemini_native", None)
-        .expect("resolve gemini candidates");
+    let candidates = resolve_aggregate_api_rotation_candidates(
+        &storage,
+        "gemini_native",
+        "/v1beta/models/gemini:generateContent",
+        None,
+    )
+    .expect("resolve gemini candidates");
     let candidate_ids = candidates
         .iter()
         .map(|item| item.id.as_str())
@@ -291,8 +443,13 @@ fn compatible_candidate_resolves_for_codex_and_anthropic_without_protocol_bridge
         .expect("insert compatible aggregate api");
 
     for protocol_type in ["openai", "anthropic_native"] {
-        let candidates = resolve_aggregate_api_rotation_candidates(&storage, protocol_type, None)
-            .expect("resolve compatible candidate");
+        let candidates = resolve_aggregate_api_rotation_candidates(
+            &storage,
+            protocol_type,
+            "/v1/responses",
+            None,
+        )
+        .expect("resolve compatible candidate");
         assert_eq!(
             candidates
                 .iter()
@@ -301,11 +458,48 @@ fn compatible_candidate_resolves_for_codex_and_anthropic_without_protocol_bridge
             vec!["agg-compatible"]
         );
     }
-    assert!(resolve_aggregate_api_rotation_candidates(&storage, "gemini_native", None).is_err());
+    assert!(resolve_aggregate_api_rotation_candidates(
+        &storage,
+        "gemini_native",
+        "/v1beta/models/gemini:generateContent",
+        None,
+    )
+    .is_err());
     assert!(!should_bridge_responses_to_anthropic(
         &compatible,
         "/v1/responses"
     ));
+}
+
+#[test]
+fn responses_provider_only_resolves_for_client_responses_path() {
+    let storage = Storage::open_in_memory().expect("open storage");
+    storage.init().expect("init storage");
+    let now = now_ts();
+    let mut responses = aggregate_api_with_action(None);
+    responses.id = "agg-responses-only".to_string();
+    responses.provider_type = AGGREGATE_API_PROVIDER_RESPONSES.to_string();
+    responses.url = "https://api.deepseek.com".to_string();
+    responses.created_at = now;
+    responses.updated_at = now;
+    storage
+        .insert_aggregate_api(&responses)
+        .expect("insert responses aggregate api");
+
+    let responses_candidates =
+        resolve_aggregate_api_rotation_candidates(&storage, "openai", "/v1/responses", None)
+            .expect("resolve responses candidates");
+    assert!(responses_candidates
+        .iter()
+        .any(|candidate| candidate.id == "agg-responses-only"));
+
+    assert!(resolve_aggregate_api_rotation_candidates(
+        &storage,
+        "openai",
+        "/v1/chat/completions",
+        None,
+    )
+    .is_err());
 }
 
 #[test]
@@ -329,6 +523,7 @@ fn explicit_aggregate_api_id_promotes_matching_active_provider_candidate_only() 
                 auth_params_json: None,
                 action: None,
                 model_override: None,
+                compatibility_config_json: None,
                 status: "active".to_string(),
                 auto_toggle_enabled: false,
                 consecutive_failures: 0,
@@ -353,18 +548,26 @@ fn explicit_aggregate_api_id_promotes_matching_active_provider_candidate_only() 
             .expect("insert aggregate api");
     }
 
-    let candidates =
-        resolve_aggregate_api_rotation_candidates(&storage, "openai", Some("agg-preferred"))
-            .expect("resolve codex candidates");
+    let candidates = resolve_aggregate_api_rotation_candidates(
+        &storage,
+        "openai",
+        "/v1/chat/completions",
+        Some("agg-preferred"),
+    )
+    .expect("resolve codex candidates");
     let candidate_ids = candidates
         .iter()
         .map(|item| item.id.as_str())
         .collect::<Vec<_>>();
     assert_eq!(candidate_ids, vec!["agg-preferred", "agg-first"]);
 
-    let candidates =
-        resolve_aggregate_api_rotation_candidates(&storage, "openai", Some("agg-claude"))
-            .expect("resolve codex candidates with mismatched preferred");
+    let candidates = resolve_aggregate_api_rotation_candidates(
+        &storage,
+        "openai",
+        "/v1/chat/completions",
+        Some("agg-claude"),
+    )
+    .expect("resolve codex candidates with mismatched preferred");
     let candidate_ids = candidates
         .iter()
         .map(|item| item.id.as_str())

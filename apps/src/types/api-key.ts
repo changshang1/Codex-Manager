@@ -35,6 +35,7 @@ export interface AggregateApi {
   authType: string;
   authParams: Record<string, unknown> | null;
   action: string | null;
+  compatibilityConfigJson: string | null;
   status: string;
   autoToggleEnabled: boolean;
   consecutiveFailures: number;
@@ -78,6 +79,24 @@ export interface AggregateApiTestResult {
   message: string | null;
   testedAt: number;
   latencyMs: number;
+}
+
+export interface AggregateApiSupplierModelEntry {
+  supplierKey: string;
+  providerType: string;
+  upstreamModel: string;
+  displayName: string | null;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AggregateApiModelDiscoveryResult {
+  apiId: string;
+  items: AggregateApiSupplierModelEntry[];
+  fetchedAt: number | null;
+  fromCache: boolean;
+  message: string | null;
 }
 
 export interface AggregateApiBalanceSnapshot {

@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +32,7 @@ import {
   microusdToUsdPerMillion,
   usdPerMillionToMicrousd,
 } from "@/lib/api/managed-models-v2";
+import { accountClient } from "@/lib/api/account-client";
 import { useI18n } from "@/lib/i18n/provider";
 import type { AggregateApi } from "@/types/api-key";
 import type {
@@ -53,6 +55,7 @@ type RouteDraft = {
   sortOrder: string;
   priority: string;
   weight: string;
+  compatibilityOverrideJson: string;
 };
 
 type ModelDraft = {
@@ -141,6 +144,7 @@ function routeDraft(route: ModelRouteV2, index: number): RouteDraft {
     ),
     priority: String(route.priority),
     weight: String(route.weight),
+    compatibilityOverrideJson: route.compatibilityOverrideJson || "",
   };
 }
 
@@ -236,6 +240,7 @@ function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: num
             sortOrder: 10,
             priority: 0,
             weight: 1,
+            compatibilityOverrideJson: null,
           },
           0,
         ),
@@ -269,6 +274,16 @@ function parseCapabilities(value: string): Record<string, unknown> {
     throw new Error("关键能力 JSON 必须是对象");
   }
   return parsed as Record<string, unknown>;
+}
+
+function compatibilityOverrideJson(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const parsed = JSON.parse(normalized);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Responses 路由覆盖 JSON 必须是对象");
+  }
+  return JSON.stringify(parsed);
 }
 
 function buildPrice(
@@ -376,6 +391,11 @@ export function ModelCatalogModal({
     buildDraft(model, nextSortOrder),
   );
   const [error, setError] = useState<string | null>(null);
+  const [discoveredModelsByApi, setDiscoveredModelsByApi] = useState<Record<string, string[]>>({});
+  const [modelDiscoveryMetaByApi, setModelDiscoveryMetaByApi] = useState<
+    Record<string, { fetchedAt: number | null; fromCache: boolean; message: string | null }>
+  >({});
+  const [discoveringApiId, setDiscoveringApiId] = useState<string | null>(null);
 
   const title = useMemo(
     () => (model ? t("编辑模型") : t("新增自定义模型")),
@@ -403,6 +423,36 @@ export function ModelCatalogModal({
     }));
   };
 
+  const discoverModels = async (apiId: string) => {
+    setDiscoveringApiId(apiId);
+    try {
+      const result = await accountClient.discoverAggregateApiModels(apiId);
+      setDiscoveredModelsByApi((current) => ({
+        ...current,
+        [apiId]: result.items.map((item) => item.upstreamModel),
+      }));
+      setModelDiscoveryMetaByApi((current) => ({
+        ...current,
+        [apiId]: {
+          fetchedAt: result.fetchedAt,
+          fromCache: result.fromCache,
+          message: result.message,
+        },
+      }));
+      if (result.items.length === 0) {
+        toast.info(t("未发现模型，仍可手动输入上游模型名"));
+      } else if (result.fromCache) {
+        toast.warning(result.message || t("模型刷新失败，已使用缓存"));
+      } else {
+        toast.success(t("模型列表已刷新"));
+      }
+    } catch (error) {
+      toast.error(`${t("模型发现失败")}: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setDiscoveringApiId(null);
+    }
+  };
+
   const addRoute = (sourceKind: ModelRouteSourceKindV2) => {
     const sourceId =
       sourceKind === "account_pool" ? "default" : aggregateApis[0]?.id || "";
@@ -420,6 +470,7 @@ export function ModelCatalogModal({
           sortOrder: String(nextRouteSortOrder(current.routes)),
           priority: "0",
           weight: "1",
+          compatibilityOverrideJson: "",
         },
       ],
     }));
@@ -452,6 +503,7 @@ export function ModelCatalogModal({
           sortOrder: integer(route.sortOrder, "路由顺序号"),
           priority: integer(route.priority, "路由优先级"),
           weight: integer(route.weight, "路由权重", 1),
+          compatibilityOverrideJson: compatibilityOverrideJson(route.compatibilityOverrideJson),
         };
       });
       if (
@@ -754,7 +806,7 @@ export function ModelCatalogModal({
             <TabsContent value="routes" className="mt-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm text-muted-foreground">
-                  {t("上游模型名始终手填；这里不会访问供应商 `/models`。")}
+                  {t("上游模型名支持手动输入；选择聚合 API 后可按需刷新供应商 `/models`。")}
                 </p>
                 <div className="flex gap-2">
                   <Button type="button" size="sm" variant="outline" onClick={() => addRoute("account_pool")}>
@@ -850,7 +902,44 @@ export function ModelCatalogModal({
                         </div>
                         <div className="min-w-0 space-y-2">
                           <Label className="leading-5" htmlFor={`route-model-${index}`}>{t("上游模型")}</Label>
-                          <Input id={`route-model-${index}`} value={route.upstreamModel} onChange={(event) => updateRoute(route.key, "upstreamModel", event.target.value)} />
+                          <div className="flex gap-2">
+                            <Input
+                              id={`route-model-${index}`}
+                              list={`route-model-options-${index}`}
+                              value={route.upstreamModel}
+                              onChange={(event) => updateRoute(route.key, "upstreamModel", event.target.value)}
+                            />
+                            {route.sourceKind === "aggregate_api" && route.sourceId ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="icon"
+                                aria-label={t("刷新模型列表")}
+                                title={t("刷新模型列表")}
+                                disabled={discoveringApiId === route.sourceId}
+                                onClick={() => discoverModels(route.sourceId)}
+                              >
+                                <RefreshCw className={`h-4 w-4 ${discoveringApiId === route.sourceId ? "animate-spin" : ""}`} />
+                              </Button>
+                            ) : null}
+                          </div>
+                          <datalist id={`route-model-options-${index}`}>
+                            {(discoveredModelsByApi[route.sourceId] || []).map((modelName) => (
+                              <option key={modelName} value={modelName} />
+                            ))}
+                          </datalist>
+                          {modelDiscoveryMetaByApi[route.sourceId] ? (
+                            <p className="text-xs text-muted-foreground">
+                              {modelDiscoveryMetaByApi[route.sourceId].fromCache
+                                ? t("当前使用缓存模型列表")
+                                : t("模型列表刷新时间")}
+                              {modelDiscoveryMetaByApi[route.sourceId].fetchedAt
+                                ? `：${new Date(
+                                    modelDiscoveryMetaByApi[route.sourceId].fetchedAt! * 1000,
+                                  ).toLocaleString("zh-CN")}`
+                                : ""}
+                            </p>
+                          ) : null}
                         </div>
                       </div>
                       <div className="grid items-end gap-3 md:grid-cols-[110px_110px_110px_1fr_auto]">
@@ -874,6 +963,22 @@ export function ModelCatalogModal({
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
+                      {route.sourceKind === "aggregate_api" ? (
+                        <div className="space-y-2">
+                          <Label htmlFor={`route-compatibility-${index}`}>
+                            {t("Responses 路由覆盖 JSON")}
+                          </Label>
+                          <Textarea
+                            id={`route-compatibility-${index}`}
+                            rows={4}
+                            value={route.compatibilityOverrideJson}
+                            placeholder='{"fieldPolicies":{"reasoning.effort":{"strategy":"replace","value":"medium"}}}'
+                            onChange={(event) =>
+                              updateRoute(route.key, "compatibilityOverrideJson", event.target.value)
+                            }
+                          />
+                        </div>
+                      ) : null}
                     </CardContent>
                   </Card>
                 ))

@@ -9,6 +9,7 @@ pub(super) const AGGREGATE_API_SELECT_SQL: &str = "SELECT
     auth_params_json,
     action,
     model_override,
+    compatibility_config_json,
     status,
     created_at,
     updated_at,
@@ -55,6 +56,7 @@ pub(super) fn aggregate_api_with_secrets_by_id_sql() -> &'static str {
         a.auth_params_json,
         a.action,
         a.model_override,
+        a.compatibility_config_json,
         a.status,
         a.created_at,
         a.updated_at,
@@ -235,6 +237,10 @@ pub(super) fn update_aggregate_api_action_sql() -> &'static str {
 
 pub(super) fn update_aggregate_api_model_override_sql() -> &'static str {
     "UPDATE aggregate_apis SET model_override = ?1, updated_at = ?2 WHERE id = ?3"
+}
+
+pub(super) fn update_aggregate_api_compatibility_config_sql() -> &'static str {
+    "UPDATE aggregate_apis SET compatibility_config_json = ?1, updated_at = ?2 WHERE id = ?3"
 }
 
 pub(super) fn update_aggregate_api_balance_query_sql() -> &'static str {

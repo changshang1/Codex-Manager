@@ -10,6 +10,8 @@ import {
   AggregateApiBalanceRefreshResult,
   AggregateApiBalanceSnapshot,
   AggregateApiCreateResult,
+  AggregateApiModelDiscoveryResult,
+  AggregateApiSupplierModelEntry,
   AggregateApiSecretResult,
   AggregateApiTestResult,
   ApiKey,
@@ -834,6 +836,10 @@ export function normalizeAggregateApi(item: unknown): AggregateApi | null {
       typeof source.action === "string"
         ? source.action
         : asString(source.action) || null,
+    compatibilityConfigJson:
+      asString(
+        source.compatibilityConfigJson ?? source.compatibility_config_json,
+      ) || null,
     status: asString(source.status) || "active",
     autoToggleEnabled: asBoolean(
       source.autoToggleEnabled ?? source.auto_toggle_enabled,
@@ -958,6 +964,37 @@ export function normalizeAggregateApiTestResult(payload: unknown): AggregateApiT
     message: asString(source.message) || null,
     testedAt: asInteger(source.testedAt ?? source.tested_at, 0, 0),
     latencyMs: asInteger(source.latencyMs ?? source.latency_ms, 0, 0),
+  };
+}
+
+export function normalizeAggregateApiModelDiscoveryResult(
+  payload: unknown,
+): AggregateApiModelDiscoveryResult {
+  const source = asObject(payload);
+  const items = asArray(source.items)
+    .map((item) => {
+      const value = asObject(item);
+      const upstreamModel = asString(value.upstreamModel).trim();
+      return upstreamModel
+        ? {
+            supplierKey: asString(value.supplierKey),
+            providerType: asString(value.providerType),
+            upstreamModel,
+            displayName:
+              typeof value.displayName === "string" ? value.displayName.trim() : null,
+            status: asString(value.status),
+            createdAt: typeof value.createdAt === "number" ? value.createdAt : 0,
+            updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+          }
+        : null;
+    })
+    .filter((item): item is AggregateApiSupplierModelEntry => Boolean(item));
+  return {
+    apiId: asString(source.apiId),
+    items,
+    fetchedAt: typeof source.fetchedAt === "number" ? source.fetchedAt : null,
+    fromCache: asBoolean(source.fromCache),
+    message: typeof source.message === "string" ? source.message : null,
   };
 }
 
