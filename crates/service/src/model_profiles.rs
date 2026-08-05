@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use codexmanager_core::storage::{
-    ManagedModelV2, ManagedModelV2Upsert, ModelPriceV2, ModelRouteV2,
+    ManagedModelV2, ManagedModelV2Upsert, ModelPriceTierV2, ModelPriceV2, ModelRouteV2,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -104,6 +104,16 @@ impl ModelProfilePrice {
             cache_write_microusd_per_1m: self.cache_write_microusd_per_1m,
             output_microusd_per_1m: self.output_microusd_per_1m,
         }
+    }
+
+    fn to_base_price_tier(&self) -> Option<ModelPriceTierV2> {
+        Some(ModelPriceTierV2 {
+            min_input_tokens: 0,
+            input_microusd_per_1m: self.input_microusd_per_1m?,
+            cached_input_microusd_per_1m: self.cached_input_microusd_per_1m?,
+            cache_write_microusd_per_1m: self.cache_write_microusd_per_1m,
+            output_microusd_per_1m: self.output_microusd_per_1m?,
+        })
     }
 }
 
@@ -544,6 +554,17 @@ fn desired_model(
     profile: &ModelProfileTemplate,
 ) -> ManagedModelV2 {
     let now = codexmanager_core::storage::now_ts();
+    let price = profile
+        .price
+        .as_ref()
+        .map(ModelProfilePrice::to_model_price)
+        .unwrap_or_default();
+    let price_tiers = profile
+        .price
+        .as_ref()
+        .and_then(ModelProfilePrice::to_base_price_tier)
+        .into_iter()
+        .collect();
     let mut routes = existing
         .map(|model| model.routes.clone())
         .unwrap_or_default();
@@ -603,14 +624,8 @@ fn desired_model(
         instructions_text: existing.and_then(|model| model.instructions_text.clone()),
         builtin_revision: None,
         user_edited: true,
-        price: profile
-            .price
-            .as_ref()
-            .map(ModelProfilePrice::to_model_price)
-            .unwrap_or_default(),
-        price_tiers: existing
-            .map(|model| model.price_tiers.clone())
-            .unwrap_or_default(),
+        price,
+        price_tiers,
         routes,
         permission_group_ids: existing
             .map(|model| model.permission_group_ids.clone())
@@ -876,6 +891,44 @@ mod tests {
         assert_eq!(
             profile.price.as_ref().unwrap().input_microusd_per_1m,
             Some(140_000)
+        );
+    }
+
+    #[test]
+    fn applying_priced_profile_builds_matching_zero_threshold_tier() {
+        let catalog = builtin_catalog();
+        let profile = catalog.models.get("deepseek-v4-flash").unwrap();
+        let existing = ManagedModelV2 {
+            slug: "deepseek-v4-flash".to_string(),
+            display_name: "deepseek-v4-flash".to_string(),
+            origin: "custom".to_string(),
+            enabled: true,
+            supported_in_api: true,
+            visibility: "list".to_string(),
+            instructions_mode: "passthrough".to_string(),
+            ..Default::default()
+        };
+
+        let desired = desired_model(Some(&existing), "deepseek-v4-flash", "deepseek", profile);
+
+        assert_eq!(desired.price_tiers.len(), 1);
+        let tier = &desired.price_tiers[0];
+        assert_eq!(tier.min_input_tokens, 0);
+        assert_eq!(
+            Some(tier.input_microusd_per_1m),
+            desired.price.input_microusd_per_1m
+        );
+        assert_eq!(
+            Some(tier.cached_input_microusd_per_1m),
+            desired.price.cached_input_microusd_per_1m
+        );
+        assert_eq!(
+            tier.cache_write_microusd_per_1m,
+            desired.price.cache_write_microusd_per_1m
+        );
+        assert_eq!(
+            Some(tier.output_microusd_per_1m),
+            desired.price.output_microusd_per_1m
         );
     }
 
