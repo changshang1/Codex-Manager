@@ -15,7 +15,7 @@
       "maxContextWindow": 1000000,
       "defaultReasoningEffort": "high",
       "capabilities": {
-        "reasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        "reasoningEfforts": ["low", "high", "max"],
         "serviceTiers": [],
         "inputModalities": ["text"],
         "supportsParallelToolCalls": true,
@@ -52,7 +52,7 @@
         "maxContextWindow": 1000000,
         "defaultReasoningEffort": "high",
         "capabilities": {
-          "reasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "reasoningEfforts": ["low", "high", "max"],
           "serviceTiers": [],
           "inputModalities": ["text"],
           "supportsParallelToolCalls": true,
