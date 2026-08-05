@@ -309,6 +309,52 @@ pub(super) fn try_handle(req: &JsonRpcRequest, actor: &RpcActor) -> Option<JsonR
                 super::value_or_error(params.and_then(crate::models_v2::commit_import))
             }
         }
+        "apikey/modelProfileStatus" => {
+            if !actor.is_admin() {
+                super::value_or_error::<crate::model_profiles::ModelProfileStatus>(Err(
+                    super::permission_denied("apikey/modelProfileStatus"),
+                ))
+            } else {
+                super::value_or_error(crate::model_profiles::status())
+            }
+        }
+        "apikey/modelProfileRefresh" => {
+            if !actor.is_admin() {
+                super::value_or_error::<crate::model_profiles::ModelProfileStatus>(Err(
+                    super::permission_denied("apikey/modelProfileRefresh"),
+                ))
+            } else {
+                super::value_or_error(crate::model_profiles::refresh(true))
+            }
+        }
+        "apikey/modelProfileCandidates" => {
+            if !actor.is_admin() {
+                super::value_or_error::<crate::model_profiles::ModelProfileCandidateList>(Err(
+                    super::permission_denied("apikey/modelProfileCandidates"),
+                ))
+            } else {
+                super::value_or_error(crate::model_profiles::candidates())
+            }
+        }
+        "apikey/modelProfileApply" => {
+            if !actor.is_admin() {
+                super::value_or_error::<crate::model_profiles::ApplyModelProfileResult>(Err(
+                    super::permission_denied("apikey/modelProfileApply"),
+                ))
+            } else {
+                let params = req
+                    .params
+                    .clone()
+                    .ok_or_else(|| "missing model profile apply payload".to_string())
+                    .and_then(|value| {
+                        serde_json::from_value::<crate::model_profiles::ApplyModelProfileParams>(
+                            value,
+                        )
+                        .map_err(|err| format!("parse model profile apply payload failed: {err}"))
+                    });
+                super::value_or_error(params.and_then(crate::model_profiles::apply))
+            }
+        }
         "apikey/usageStats" => super::value_or_error(
             apikey_usage_stats::read_api_key_usage_stats_for_actor(actor)
                 .map(|items| ApiKeyUsageStatListResult { items }),

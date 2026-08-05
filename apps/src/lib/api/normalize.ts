@@ -1848,6 +1848,13 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     ).map((item) => asString(item)),
     pluginMarketMode: asString(source.pluginMarketMode ?? source.plugin_market_mode) || "builtin",
     pluginMarketSourceUrl: asString(source.pluginMarketSourceUrl ?? source.plugin_market_source_url),
+    modelProfileAutoUpdate: asBoolean(
+      source.modelProfileAutoUpdate ?? source.model_profile_auto_update,
+      true,
+    ),
+    modelProfileSourceUrl: asString(
+      source.modelProfileSourceUrl ?? source.model_profile_source_url,
+    ),
     authorSponsors: normalizeSponsorLinkItems(
       source.authorSponsors,
       DEFAULT_AUTHOR_SPONSORS

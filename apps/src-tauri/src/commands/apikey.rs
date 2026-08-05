@@ -114,6 +114,35 @@ pub async fn service_managed_model_import_commit_v2(
     rpc_call_in_background("apikey/managedModelImportCommitV2", addr, Some(payload)).await
 }
 
+#[tauri::command]
+pub async fn service_model_profile_status(
+    addr: Option<String>,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("apikey/modelProfileStatus", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_model_profile_refresh(
+    addr: Option<String>,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("apikey/modelProfileRefresh", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_model_profile_candidates(
+    addr: Option<String>,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("apikey/modelProfileCandidates", addr, None).await
+}
+
+#[tauri::command]
+pub async fn service_model_profile_apply(
+    addr: Option<String>,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    rpc_call_in_background("apikey/modelProfileApply", addr, Some(payload)).await
+}
+
 /// 函数 `service_apikey_create`
 ///
 /// 作者: gaohongshun

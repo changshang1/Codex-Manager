@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "updatedAt": "2026-08-04T00:00:00Z",
+  "models": {
+    "deepseek-v4-flash": {
+      "displayName": "DeepSeek V4 Flash",
+      "description": "DeepSeek V4 Flash 正式版，支持文本生成、推理、编程、函数调用和 JSON 输出。",
+      "provider": "DeepSeek",
+      "family": "DeepSeek V4",
+      "category": "通用",
+      "tags": ["编程", "推理", "工具调用", "Responses API"],
+      "sortOrder": 54,
+      "contextWindow": 1000000,
+      "maxContextWindow": 1000000,
+      "defaultReasoningEffort": "high",
+      "capabilities": {
+        "reasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+        "serviceTiers": [],
+        "inputModalities": ["text"],
+        "supportsParallelToolCalls": true,
+        "supportsReasoningSummaries": false,
+        "defaultReasoningSummary": "none",
+        "supportsVerbosity": false,
+        "supportsSearchTool": true,
+        "applyPatchToolType": "custom",
+        "webSearchToolType": "text",
+        "shellType": "shell_command",
+        "truncationMode": "tokens",
+        "truncationLimit": 10000,
+        "experimentalSupportedTools": []
+      },
+      "price": {
+        "priceStatus": "official",
+        "priceSource": "https://api-docs.deepseek.com/quick_start/pricing/",
+        "inputMicrousdPer1m": 140000,
+        "cachedInputMicrousdPer1m": 2800,
+        "cacheWriteMicrousdPer1m": 140000,
+        "outputMicrousdPer1m": 280000
+      }
+    }
+  },
+  "familyRules": [
+    {
+      "prefix": "deepseek-v4-",
+      "defaults": {
+        "provider": "DeepSeek",
+        "family": "DeepSeek V4",
+        "category": "通用",
+        "tags": ["编程", "推理", "工具调用", "Responses API"],
+        "contextWindow": 1000000,
+        "maxContextWindow": 1000000,
+        "defaultReasoningEffort": "high",
+        "capabilities": {
+          "reasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          "serviceTiers": [],
+          "inputModalities": ["text"],
+          "supportsParallelToolCalls": true,
+          "supportsReasoningSummaries": false,
+          "defaultReasoningSummary": "none",
+          "supportsVerbosity": false,
+          "experimentalSupportedTools": []
+        }
+      }
+    }
+  ]
+}

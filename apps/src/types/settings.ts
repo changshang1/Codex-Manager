@@ -89,6 +89,8 @@ export interface AppSettings extends GatewayTransportValues {
   gatewayResidencyRequirementOptions: string[];
   pluginMarketMode: string;
   pluginMarketSourceUrl: string;
+  modelProfileAutoUpdate: boolean;
+  modelProfileSourceUrl: string;
   authorSponsors: SponsorLinkItem[];
   authorServerRecommendations: SponsorLinkItem[];
   upstreamProxyUrl: string;

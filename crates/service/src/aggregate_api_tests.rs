@@ -19,7 +19,7 @@ use super::{
     update_aggregate_api, update_aggregate_api_sorts, AggregateApiSortUpdate,
     CustomBalanceQueryConfig, AGGREGATE_API_AUTO_DISABLE_REASON_DAILY_LIMIT,
     AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_COMPATIBLE,
-    AGGREGATE_API_PROVIDER_GEMINI,
+    AGGREGATE_API_PROVIDER_GEMINI, AGGREGATE_API_PROVIDER_RESPONSES,
 };
 
 static AGGREGATE_API_TEST_DIR_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -611,6 +611,10 @@ fn gemini_provider_type_is_normalized_independently() {
     assert_eq!(
         normalize_provider_type_value("compatible"),
         AGGREGATE_API_PROVIDER_COMPATIBLE
+    );
+    assert_eq!(
+        normalize_provider_type_value("responses_api"),
+        AGGREGATE_API_PROVIDER_RESPONSES
     );
 }
 

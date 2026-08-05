@@ -15,6 +15,7 @@ import { EN_MARKETPLACE_MESSAGES } from "./sections/en-marketplace";
 import { EN_MODELS_MESSAGES } from "./sections/en-models";
 import { EN_PLATFORM_MODE_MESSAGES } from "./sections/en-platform-mode";
 import { EN_PROJECTS_MESSAGES } from "./sections/en-projects";
+import { EN_RESPONSES_COMPAT_MESSAGES } from "./sections/en-responses-compat";
 import { EN_RUNTIME_UI_MESSAGES } from "./sections/en-runtime-ui";
 import { EN_SKILLS_MESSAGES } from "./sections/en-skills";
 
@@ -72,6 +73,7 @@ export const EN_MESSAGES: MessageCatalog = {
   ...EN_MODEL_GROUPS_MESSAGES,
   ...EN_MODELS_MESSAGES,
   ...EN_PLATFORM_MODE_MESSAGES,
+  ...EN_RESPONSES_COMPAT_MESSAGES,
   ...EN_RUNTIME_UI_MESSAGES,
   模型与路由: "Models & Routing",
   成员管理: "Member Management",

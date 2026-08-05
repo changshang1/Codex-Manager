@@ -567,6 +567,62 @@ Accept: text/event-stream
 
 `pagination.enabled` 默认是 `false`；启用后支持标准 `has_more` / `last_id` 游标，也会递增 `page`。单次刷新最多 100 页、10000 个去重模型。发现结果只填充 route 的上游模型选择，不自动创建对外平台模型。
 
+### 可独立更新的模型档案
+
+模型档案用于补充 `/models` 通常不返回的信息，包括显示名称、描述、供应商、模型系列、标签、上下文窗口、能力和价格。模型档案不允许修改 API 地址、认证、请求头或 Responses 字段处理规则。
+
+默认档案地址：
+
+```text
+https://raw.githubusercontent.com/changshang1/Codex-Manager/main/crates/service/resources/model-profiles-v1.json
+```
+
+档案更新规则：
+
+- 服务启动后异步检查，每 24 小时最多一次，不阻塞服务启动。
+- 设置页可以关闭自动更新、覆盖 HTTPS 档案 URL 或立即更新。
+- 模型管理页的“更新模型档案”还会按需刷新所有 active Responses 聚合 API 的 `/models`，用于发现刚发布的新模型。
+- 在线更新失败时保留上次成功缓存；没有有效缓存时回退程序内置档案。
+- 在线 revision 不允许低于现有缓存 revision，避免意外回滚。
+- JSON 最大 1 MiB，必须是 UTF-8、HTTPS 和受支持的 schemaVersion。
+- 远程 JSON 使用严格字段 Schema，额外的认证、URL 或请求转换字段会导致档案被拒绝。
+
+“可导入模型”必须同时满足：
+
+1. 某条 active 聚合 API 的 `/models` 已实际发现该上游模型。
+2. 在线档案、内置档案或该聚合 API 本地覆盖中存在完整的精确模型档案。
+3. 精确档案包含输入、缓存读取和输出价格；系列回退规则不能提供价格时不会自动导入。
+
+满足条件后，模型管理页只显示候选，不会静默创建。用户点击“导入并启用”后才会一次写入基本信息、能力、价格和指向发现来源的 route。已有模型遇到新版档案时会展示字段差异，必须点击确认才会应用；系统使用上次应用档案的哈希识别更新，不会因为用户自行修改字段就在后台覆盖。
+
+模型档案优先级：
+
+1. 程序内置系列安全回退。
+2. 程序内置或在线精确模型档案。
+3. 当前聚合 API `compatibilityConfigJson.modelProfiles` 本地覆盖。
+
+聚合 API 本地覆盖示例：
+
+```json
+{
+  "profile": "deepseek",
+  "modelProfiles": {
+    "deepseek-v4-flash": {
+      "price": {
+        "inputMicrousdPer1m": 140000,
+        "cachedInputMicrousdPer1m": 2800,
+        "cacheWriteMicrousdPer1m": 140000,
+        "outputMicrousdPer1m": 280000
+      }
+    }
+  }
+}
+```
+
+价格单位是“每百万 Token 对应的 micro-USD”。例如 `$0.14 / 1M Token` 写为 `140000`。本地覆盖可以只填写需要覆盖的字段，其余字段继续继承在线或内置档案。
+
+DeepSeek V4 Pro 发布后的正常流程：供应商 `/models` 出现 `deepseek-v4-pro`，项目仓库中的在线档案增加同名精确条目，CodexManager 下一次自动或手动更新后显示“可导入模型”。程序本体不需要升级。
+
 ### DeepSeek Flash 配置
 
 聚合 API：
@@ -953,6 +1009,15 @@ Gemini 模型同样在模型目录 V2 中新增并配置 route；上游模型名
 | 刷新余额 | `service_aggregate_api_refresh_balance` | `aggregateApi/refreshBalance` |
 
 模型目录 V2 使用独立的 `service_managed_model_*_v2` 命令和 `apikey/managedModel*V2` RPC；模型发现 RPC 只返回并缓存供应商模型，不创建平台模型或导入模板。
+
+模型档案管理命令：
+
+| 功能 | Desktop command | Service/Web RPC |
+| --- | --- | --- |
+| 读取档案状态 | `service_model_profile_status` | `apikey/modelProfileStatus` |
+| 立即更新在线档案 | `service_model_profile_refresh` | `apikey/modelProfileRefresh` |
+| 读取可导入和可更新候选 | `service_model_profile_candidates` | `apikey/modelProfileCandidates` |
+| 确认应用模型档案 | `service_model_profile_apply` | `apikey/modelProfileApply` |
 
 前端 API 封装在：
 

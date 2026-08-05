@@ -882,6 +882,9 @@ fn normalize_provider_type_value(value: &str) -> String {
             AGGREGATE_API_PROVIDER_GEMINI.to_string()
         }
         "compatible" => AGGREGATE_API_PROVIDER_COMPATIBLE.to_string(),
+        "responses" | "response" | "responses_api" | "openai_responses" => {
+            AGGREGATE_API_PROVIDER_RESPONSES.to_string()
+        }
         _ => AGGREGATE_API_PROVIDER_CODEX.to_string(),
     }
 }
@@ -2696,6 +2699,26 @@ pub(crate) fn discover_aggregate_api_models(
             return Err(err);
         }
     };
+    let discovered_ids = discovered
+        .iter()
+        .map(|(id, _)| id.as_str())
+        .collect::<HashSet<_>>();
+    for cached in storage
+        .list_aggregate_api_supplier_models(Some(api.id.as_str()), None)
+        .map_err(|err| err.to_string())?
+    {
+        if cached.provider_type != provider_type
+            || !discovered_ids.contains(cached.upstream_model.as_str())
+        {
+            storage
+                .delete_aggregate_api_supplier_model(
+                    api.id.as_str(),
+                    cached.provider_type.as_str(),
+                    cached.upstream_model.as_str(),
+                )
+                .map_err(|err| err.to_string())?;
+        }
+    }
     let mut entries = Vec::new();
     let fetched_at = now_ts();
     for (id, display_name) in discovered {

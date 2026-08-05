@@ -15,6 +15,7 @@ import { KO_MARKETPLACE_MESSAGES } from "./sections/ko-marketplace";
 import { KO_MODELS_MESSAGES } from "./sections/ko-models";
 import { KO_PLATFORM_MODE_MESSAGES } from "./sections/ko-platform-mode";
 import { KO_PROJECTS_MESSAGES } from "./sections/ko-projects";
+import { KO_RESPONSES_COMPAT_MESSAGES } from "./sections/ko-responses-compat";
 import { KO_RUNTIME_UI_MESSAGES } from "./sections/ko-runtime-ui";
 import { KO_SKILLS_MESSAGES } from "./sections/ko-skills";
 
@@ -73,6 +74,7 @@ export const KO_MESSAGES: MessageCatalog = {
   ...KO_MODEL_GROUPS_MESSAGES,
   ...KO_MODELS_MESSAGES,
   ...KO_PLATFORM_MODE_MESSAGES,
+  ...KO_RESPONSES_COMPAT_MESSAGES,
   ...KO_RUNTIME_UI_MESSAGES,
   模型与路由: "모델 및 라우팅",
   成员管理: "멤버 관리",

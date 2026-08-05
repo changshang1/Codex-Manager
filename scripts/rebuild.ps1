@@ -47,7 +47,7 @@ $portableRoot = if ($PortableDir) { $PortableDir } else { Join-Path $root "porta
 $portableExe = Join-Path $portableRoot "$appName-portable.exe"
 $legacyPortableExe = Join-Path $portableRoot "$appName.exe"
 $legacyPortableMarker = Join-Path $portableRoot ".codexmanager-portable"
-$appExe = Join-Path $tauriDir "target\\release\\$appName.exe"
+$appExe = Join-Path $rootTarget "release\\$appName.exe"
 $artifactsRoot = if ($ArtifactsDir) { $ArtifactsDir } else { Join-Path $root "artifacts" }
 
 <#

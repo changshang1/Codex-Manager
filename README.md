@@ -146,7 +146,7 @@
 - 用量展示：支持标准 5 小时 + 7 日窗口、仅 7 日单窗口账号，以及 Code Review / Spark 等官方附加额度窗口；刷新后会统一展示各额度的剩余百分比与重置时间
 - 授权登录：支持 `chatgpt.com` 浏览器授权与 Device Code 登录；浏览器授权仍可手动粘贴回调地址完成解析
 - 平台 Key：随机生成或自定义固定 Key、禁用、删除、模型绑定、推理等级、服务等级（跟随请求 / Fast / Flex）；可绑定自定义账号分组，并与账号计划筛选取交集后仅在授权池内轮转
-- 模型管理：纯账号池遵循 OpenAI 官方 Codex 目录；聚合 API 与两种混合策略使用 CodexManager 受管 V2 目录，支持 builtin/custom、整数三价、长上下文阶梯价、route、instructions policy 和本地 JSON preview/commit
+- 模型管理：纯账号池遵循 OpenAI 官方 Codex 目录；聚合 API 与两种混合策略使用 CodexManager 受管 V2 目录，支持 builtin/custom、价格、route、instructions policy、本地 JSON 导入，以及可独立更新的供应商模型档案和一键导入
 - 聚合 API：管理第三方最小转发上游，支持创建、编辑、余额、V2 route 连通性测试，以及标准 Responses API 兼容档案、声明式字段规则、静态请求头和按需 `/models` 发现缓存
 - 商品池：固定同步 PriceAI 的 ChatGPT Plus 试用订阅；支持手动全量同步、按多标签定时同步、独立的 PriceAI/本地验证状态、提醒与变化记录，以及商家收藏筛选
 - 仪表盘来源筛选：支持今日、账号池/聚合 API 类型和具体来源任意多选；Token、请求、费用、趋势、模型统计与账号池剩余使用同一口径

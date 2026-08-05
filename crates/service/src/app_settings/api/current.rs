@@ -230,6 +230,8 @@ fn current_app_settings_value_inner(
         .get(APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY)
         .cloned()
         .unwrap_or_default();
+    let model_profile_auto_update = crate::model_profiles::auto_update_enabled();
+    let model_profile_source_url = crate::model_profiles::source_url();
     let author_sponsors = load_author_link_items(
         &settings,
         APP_SETTING_AUTHOR_SPONSORS_KEY,
@@ -385,6 +387,14 @@ fn current_app_settings_value_inner(
         object.insert(
             "keepWindowUiMounted".to_string(),
             serde_json::json!(keep_window_ui_mounted),
+        );
+        object.insert(
+            "modelProfileAutoUpdate".to_string(),
+            model_profile_auto_update.into(),
+        );
+        object.insert(
+            "modelProfileSourceUrl".to_string(),
+            model_profile_source_url.into(),
         );
         object.insert(
             "showMainWindowOnStartup".to_string(),

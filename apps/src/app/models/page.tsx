@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   Boxes,
   Cable,
   CircleDollarSign,
+  CloudDownload,
   Database,
   EyeOff,
   FileJson,
   GitBranch,
+  ListPlus,
   PencilLine,
   Plus,
   RefreshCw,
@@ -27,6 +30,7 @@ import { BatchModelRoutesModal } from "@/components/modals/batch-model-routes-mo
 import { ConfirmDialog } from "@/components/modals/confirm-dialog";
 import { ModelCatalogModal } from "@/components/modals/model-catalog-modal";
 import { ModelImportModal } from "@/components/modals/model-import-modal";
+import { ModelProfileCandidatesModal } from "@/components/modals/model-profile-candidates-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -71,6 +75,8 @@ import {
   codexProfileClient,
 } from "@/lib/api/codex-profile-client";
 import { microusdToUsdPerMillion } from "@/lib/api/managed-models-v2";
+import { modelProfilesClient } from "@/lib/api/model-profiles";
+import { getAppErrorMessage } from "@/lib/api/transport";
 import { useI18n } from "@/lib/i18n/provider";
 import type { CodexProfileApiKeyCandidate } from "@/types";
 import type {
@@ -80,6 +86,7 @@ import type {
   ModelPriceStatusV2,
   ModelRouteSourceKindV2,
 } from "@/types/model-v2";
+import type { ModelProfileCandidate } from "@/types/model-profile";
 
 type ModelFilter =
   | "all"
@@ -235,6 +242,7 @@ function PriceBadge({ model }: { model: ManagedModelV2 }) {
 }
 
 export default function ModelsPage() {
+  const queryClient = useQueryClient();
   const { t } = useI18n();
   const { isDesktopRuntime } = useRuntimeCapabilities();
   const { data: session, isLoading: isSessionLoading } = useAppSession();
@@ -338,6 +346,7 @@ export default function ModelsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [batchRoutesOpen, setBatchRoutesOpen] = useState(false);
+  const [profileCandidatesOpen, setProfileCandidatesOpen] = useState(false);
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [selectedSlugs, setSelectedSlugs] = useState<string[]>([]);
   const [deleteSlugs, setDeleteSlugs] = useState<string[]>([]);
@@ -348,12 +357,103 @@ export default function ModelsPage() {
       setEditorOpen(false);
       setImportOpen(false);
       setBatchRoutesOpen(false);
+      setProfileCandidatesOpen(false);
       setEditingSlug(null);
       setSelectedSlugs([]);
       setDeleteSlugs([]);
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [isPageActive]);
+
+  const modelProfileStatusQuery = useQuery({
+    queryKey: ["model-profile-status"],
+    queryFn: () => modelProfilesClient.status(),
+    enabled: isAdminMode && isServiceReady && isPageActive,
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const modelProfileCandidatesQuery = useQuery({
+    queryKey: ["model-profile-candidates"],
+    queryFn: () => modelProfilesClient.candidates(),
+    enabled: isAdminMode && isServiceReady && isPageActive,
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const refreshModelProfiles = useMutation({
+    mutationFn: async () => {
+      let catalogError: string | null = null;
+      try {
+        await modelProfilesClient.refresh();
+      } catch (error) {
+        catalogError = getAppErrorMessage(error);
+      }
+      const availableApis =
+        aggregateApis.length > 0
+          ? aggregateApis
+          : await accountClient.listAggregateApis();
+      const responsesApis = availableApis.filter(
+        (api) => api.providerType === "responses" && api.status === "active",
+      );
+      const discoveryResults = await Promise.allSettled(
+        responsesApis.map((api) => accountClient.discoverAggregateApiModels(api.id)),
+      );
+      return {
+        catalogError,
+        failedDiscoveries: discoveryResults.filter(
+          (result) => result.status === "rejected",
+        ).length,
+      };
+    },
+    onSuccess: async ({ catalogError, failedDiscoveries }) => {
+      await Promise.all([
+        modelProfileStatusQuery.refetch(),
+        modelProfileCandidatesQuery.refetch(),
+      ]);
+      if (catalogError) {
+        toast.warning(
+          t("在线模型档案更新失败，已继续使用本地档案：{error}", {
+            error: catalogError,
+          }),
+        );
+      } else if (failedDiscoveries > 0) {
+        toast.warning(
+          t("模型档案已更新，但有 {count} 条供应商模型列表刷新失败", {
+            count: failedDiscoveries,
+          }),
+        );
+      } else {
+        toast.success(t("模型档案和供应商模型列表已更新"));
+      }
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("更新模型档案失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+  const applyModelProfile = useMutation({
+    mutationFn: (candidate: ModelProfileCandidate) =>
+      modelProfilesClient.apply({
+        sourceId: candidate.sourceId,
+        upstreamModel: candidate.upstreamModel,
+      }),
+    onSuccess: async (result) => {
+      await Promise.all([
+        refreshLocal(),
+        modelProfileStatusQuery.refetch(),
+        modelProfileCandidatesQuery.refetch(),
+        queryClient.invalidateQueries({ queryKey: ["model-groups"] }),
+        queryClient.invalidateQueries({ queryKey: ["startup-snapshot"] }),
+      ]);
+      toast.success(t("模型档案已应用到 {slug}", { slug: result.model.slug }));
+    },
+    onError: (error: unknown) => {
+      toast.error(`${t("应用模型档案失败")}: ${getAppErrorMessage(error)}`);
+    },
+  });
+  const modelProfileCandidates = modelProfileCandidatesQuery.data?.items || [];
+  const modelProfileCandidateCount = modelProfileCandidates.length;
+  const applyingProfileKey = applyModelProfile.variables
+    ? `${applyModelProfile.variables.sourceId}:${applyModelProfile.variables.upstreamModel}`
+    : null;
 
   useEffect(() => {
     const availableSlugs = new Set(models.map((model) => model.slug));
@@ -454,6 +554,30 @@ export default function ModelsPage() {
                 <RefreshCw className={`mr-1.5 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
                 {t("刷新本地目录")}
               </Button>
+              {isAdminMode ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!isServiceReady || refreshModelProfiles.isPending}
+                  onClick={() => refreshModelProfiles.mutate()}
+                >
+                  <CloudDownload
+                    className={`mr-1.5 h-4 w-4 ${refreshModelProfiles.isPending ? "animate-pulse" : ""}`}
+                  />
+                  {t("更新模型档案")}
+                </Button>
+              ) : null}
+              {isAdminMode ? (
+                <Button
+                  size="sm"
+                  variant={modelProfileCandidateCount > 0 ? "default" : "outline"}
+                  disabled={!isServiceReady || modelProfileCandidatesQuery.isLoading}
+                  onClick={() => setProfileCandidatesOpen(true)}
+                >
+                  <ListPlus className="mr-1.5 h-4 w-4" />
+                  {t("可导入和更新")} ({modelProfileCandidateCount})
+                </Button>
+              ) : null}
               {isAdminMode ? (
                 <Button
                   size="sm"
@@ -762,6 +886,16 @@ export default function ModelsPage() {
             if (result && result.failed.length === 0) setSelectedSlugs([]);
             return result;
           }}
+        />
+      ) : null}
+
+      {isAdminMode ? (
+        <ModelProfileCandidatesModal
+          open={profileCandidatesOpen}
+          onOpenChange={setProfileCandidatesOpen}
+          items={modelProfileCandidates}
+          applyingKey={applyModelProfile.isPending ? applyingProfileKey : null}
+          onApply={(candidate) => applyModelProfile.mutate(candidate)}
         />
       ) : null}
 

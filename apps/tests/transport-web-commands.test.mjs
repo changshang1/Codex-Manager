@@ -531,6 +531,34 @@ test("createWebCommandMap 为模型目录 V2 原子命令提供 Web RPC 映射",
       { jsonContent: "{}", conflictStrategy: "keep_existing" },
     );
   }
+
+  assert.equal(
+    commandMap.service_model_profile_status.rpcMethod,
+    "apikey/modelProfileStatus",
+  );
+  assert.equal(
+    commandMap.service_model_profile_refresh.rpcMethod,
+    "apikey/modelProfileRefresh",
+  );
+  assert.equal(
+    commandMap.service_model_profile_candidates.rpcMethod,
+    "apikey/modelProfileCandidates",
+  );
+  const applyProfile = commandMap.service_model_profile_apply;
+  assert.equal(applyProfile.rpcMethod, "apikey/modelProfileApply");
+  assert.ok(applyProfile.mapParams);
+  assert.deepEqual(
+    applyProfile.mapParams({
+      payload: {
+        sourceId: "ag_deepseek",
+        upstreamModel: "deepseek-v4-flash",
+      },
+    }),
+    {
+      sourceId: "ag_deepseek",
+      upstreamModel: "deepseek-v4-flash",
+    },
+  );
 });
 
 test("createWebCommandMap 不再暴露旧模型发现与供应商模型命令", () => {

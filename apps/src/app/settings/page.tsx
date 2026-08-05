@@ -73,6 +73,7 @@ import {
   ServiceListenCard,
 } from "@/app/settings/components/general-tab-cards";
 import { GeneralBasicsCard } from "@/app/settings/components/general-basics-card";
+import { ModelProfileSettingsCard } from "@/app/settings/components/model-profile-settings-card";
 import { DesktopDiagnosticsCard } from "@/app/settings/components/desktop-diagnostics-card";
 import { TasksTabContent } from "@/app/settings/components/tasks-tab-content";
 import {
@@ -1404,6 +1405,11 @@ function AdminSettingsPage() {
           />
           {isDesktopRuntime ? <DesktopDiagnosticsCard t={t} /> : null}
           <ServiceListenCard
+            t={t}
+            snapshot={snapshot}
+            updateSettings={updateSettings}
+          />
+          <ModelProfileSettingsCard
             t={t}
             snapshot={snapshot}
             updateSettings={updateSettings}

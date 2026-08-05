@@ -15,6 +15,7 @@ import { RU_MARKETPLACE_MESSAGES } from "./sections/ru-marketplace";
 import { RU_MODELS_MESSAGES } from "./sections/ru-models";
 import { RU_PLATFORM_MODE_MESSAGES } from "./sections/ru-platform-mode";
 import { RU_PROJECTS_MESSAGES } from "./sections/ru-projects";
+import { RU_RESPONSES_COMPAT_MESSAGES } from "./sections/ru-responses-compat";
 import { RU_RUNTIME_UI_MESSAGES } from "./sections/ru-runtime-ui";
 import { RU_SKILLS_MESSAGES } from "./sections/ru-skills";
 
@@ -69,6 +70,7 @@ export const RU_MESSAGES: MessageCatalog = {
   ...RU_MODEL_CATALOG_MESSAGES,
   ...RU_MODEL_GROUPS_MESSAGES,
   ...RU_MODELS_MESSAGES,
+  ...RU_RESPONSES_COMPAT_MESSAGES,
   ...RU_RUNTIME_UI_MESSAGES,
   资源接入: "Ресурсы",
   模型路由: "Маршрутизация",

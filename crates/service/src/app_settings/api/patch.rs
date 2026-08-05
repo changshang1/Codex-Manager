@@ -50,6 +50,8 @@ pub(super) struct AppSettingsPatch {
     gateway_residency_requirement: Option<String>,
     plugin_market_mode: Option<String>,
     plugin_market_source_url: Option<String>,
+    model_profile_auto_update: Option<bool>,
+    model_profile_source_url: Option<String>,
     author_sponsors: Option<Vec<AuthorLinkItem>>,
     author_server_recommendations: Option<Vec<AuthorLinkItem>>,
     upstream_proxy_url: Option<String>,
@@ -181,6 +183,12 @@ pub(super) fn apply_app_settings_patch(patch: AppSettingsPatch) -> Result<(), St
             } else {
                 Some(&plugin_market_source_url)
             },
+        )?;
+    }
+    if patch.model_profile_auto_update.is_some() || patch.model_profile_source_url.is_some() {
+        crate::model_profiles::set_settings(
+            patch.model_profile_auto_update,
+            patch.model_profile_source_url,
         )?;
     }
     if let Some(author_sponsors) = patch.author_sponsors {

@@ -23,6 +23,7 @@ mod lifecycle;
 mod logging;
 mod marketplace;
 mod model_groups;
+mod model_profiles;
 mod models_v2;
 mod plugin;
 mod proxy_registry;
