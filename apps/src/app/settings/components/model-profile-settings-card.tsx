@@ -104,6 +104,34 @@ export function ModelProfileSettingsCard({
           />
         </div>
 
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border/60 px-4 py-3">
+          <div>
+            <Label htmlFor="codex-sync-catalog">{t("同步模型目录到 Codex 配置")}</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("模型改动时更新 config.toml 的 model_catalog_json，指向本地网关目录。")}
+            </p>
+          </div>
+          <Switch
+            id="codex-sync-catalog"
+            checked={snapshot.codexSyncModelCatalogJson}
+            onCheckedChange={(checked) => updateSettings.mutate({ codexSyncModelCatalogJson: checked })}
+          />
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-md border border-border/60 px-4 py-3">
+          <div>
+            <Label htmlFor="codex-sync-provider">{t("同步路由提供方到 Codex 配置")}</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("模型改动时更新 config.toml 的 model_provider 为本地网关，关闭后保留自定义提供方。")}
+            </p>
+          </div>
+          <Switch
+            id="codex-sync-provider"
+            checked={snapshot.codexSyncModelProvider}
+            onCheckedChange={(checked) => updateSettings.mutate({ codexSyncModelProvider: checked })}
+          />
+        </div>
+
         <div className="space-y-2">
           <Label htmlFor="model-profile-source-url">{t("模型档案 URL")}</Label>
           <div className="flex flex-col gap-2 sm:flex-row">

@@ -127,6 +127,8 @@ export const useAppStore = create<AppState>((set) => ({
     pluginMarketSourceUrl: "",
     modelProfileAutoUpdate: true,
     modelProfileSourceUrl: "",
+    codexSyncModelCatalogJson: true,
+    codexSyncModelProvider: true,
     authorSponsors: DEFAULT_AUTHOR_SPONSORS,
     authorServerRecommendations: DEFAULT_AUTHOR_SERVER_RECOMMENDATIONS,
     upstreamProxyUrl: "",

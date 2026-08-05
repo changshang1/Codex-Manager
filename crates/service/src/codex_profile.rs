@@ -31,6 +31,8 @@ const MIN_HISTORY_BACKUPS_PER_PROFILE: usize = 1;
 const AUTH_FILE: &str = "auth.json";
 const CONFIG_FILE: &str = "config.toml";
 const PROVIDER_ID: &str = "cm";
+const SETTING_SYNC_MODEL_CATALOG_JSON: &str = "codex.sync_model_catalog_json";
+const SETTING_SYNC_MODEL_PROVIDER: &str = "codex.sync_model_provider";
 const DEFAULT_HISTORY_PROVIDER_ID: &str = "openai";
 const HISTORY_BACKUP_DIR: &str = ".codexmanager_history_backups";
 const STATE_DB_FILE: &str = "state_5.sqlite";
@@ -42,6 +44,34 @@ const ENV_HOME: &str = "HOME";
 const ENV_USERPROFILE: &str = "USERPROFILE";
 const ENV_HOMEDRIVE: &str = "HOMEDRIVE";
 const ENV_HOMEPATH: &str = "HOMEPATH";
+
+/// 网关同步时是否写入 model_catalog_json（默认开启）
+pub(crate) fn sync_model_catalog_json_enabled() -> bool {
+    crate::app_settings::get_persisted_app_setting(SETTING_SYNC_MODEL_CATALOG_JSON)
+        .map(|value| crate::app_settings::parse_bool_with_default(&value, true))
+        .unwrap_or(true)
+}
+
+/// 网关同步时是否写入 model_provider 与 [model_providers.cm]（默认开启）
+pub(crate) fn sync_model_provider_enabled() -> bool {
+    crate::app_settings::get_persisted_app_setting(SETTING_SYNC_MODEL_PROVIDER)
+        .map(|value| crate::app_settings::parse_bool_with_default(&value, true))
+        .unwrap_or(true)
+}
+
+/// 设置网关同步开关，传入 None 表示保持当前值不变
+pub(crate) fn set_sync_settings(
+    sync_model_catalog_json: Option<bool>,
+    sync_model_provider: Option<bool>,
+) -> Result<(), String> {
+    if let Some(enabled) = sync_model_catalog_json {
+        crate::app_settings::save_persisted_bool_setting(SETTING_SYNC_MODEL_CATALOG_JSON, enabled)?;
+    }
+    if let Some(enabled) = sync_model_provider {
+        crate::app_settings::save_persisted_bool_setting(SETTING_SYNC_MODEL_PROVIDER, enabled)?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -415,6 +445,8 @@ pub(crate) fn apply_gateway(
         &gateway_base_url,
         &paths.gateway_model_catalog_path,
         supports_websockets,
+        true,
+        true,
     )?;
     write_profile_files(
         &profile_dir,
@@ -2012,45 +2044,58 @@ fn patch_config_for_gateway(
     base_url: &str,
     managed_catalog_path: &Path,
     supports_websockets: bool,
+    write_catalog_json: bool,
+    write_provider: bool,
 ) -> Result<String, String> {
     let mut doc = parse_config(content.as_deref().unwrap_or(""))?;
-    doc.as_table_mut()
-        .insert("model_provider", toml_value(PROVIDER_ID));
-    doc.as_table_mut().insert(
-        "model_catalog_json",
-        toml_value(managed_catalog_path.to_string_lossy().as_ref()),
-    );
-
-    if doc.as_table().get("model_providers").is_none() {
+    if write_provider {
         doc.as_table_mut()
-            .insert("model_providers", Item::Table(Table::new()));
+            .insert("model_provider", toml_value(PROVIDER_ID));
     }
-    let providers = doc
-        .as_table_mut()
-        .get_mut("model_providers")
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| "config.toml model_providers is not a table".to_string())?;
-    if providers
-        .get(PROVIDER_ID)
-        .and_then(Item::as_table)
-        .is_none()
-    {
-        providers.insert(PROVIDER_ID, Item::Table(Table::new()));
+    if write_catalog_json {
+        doc.as_table_mut().insert(
+            "model_catalog_json",
+            toml_value(managed_catalog_path.to_string_lossy().as_ref()),
+        );
     }
-    let provider = providers
-        .get_mut(PROVIDER_ID)
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| "config.toml model_providers.cm is not a table".to_string())?;
-    if provider.get("name").is_none() {
-        provider.insert("name", toml_value("CodexManager"));
+
+    if write_provider {
+        if doc.as_table().get("model_providers").is_none() {
+            doc.as_table_mut()
+                .insert("model_providers", Item::Table(Table::new()));
+        }
+        let providers = doc
+            .as_table_mut()
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| "config.toml model_providers is not a table".to_string())?;
+        if providers
+            .get(PROVIDER_ID)
+            .and_then(Item::as_table)
+            .is_none()
+        {
+            providers.insert(PROVIDER_ID, Item::Table(Table::new()));
+        }
+        let provider = providers
+            .get_mut(PROVIDER_ID)
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| "config.toml model_providers.cm is not a table".to_string())?;
+        if provider.get("name").is_none() {
+            provider.insert("name", toml_value("CodexManager"));
+        }
+        provider.insert("base_url", toml_value(base_url));
+        provider.insert("wire_api", toml_value("responses"));
+        provider.insert("supports_websockets", toml_value(supports_websockets));
     }
-    provider.insert("base_url", toml_value(base_url));
-    provider.insert("wire_api", toml_value("responses"));
-    provider.insert("supports_websockets", toml_value(supports_websockets));
     Ok(doc.to_string())
 }
 
 pub(crate) fn sync_active_gateway_profile_from_storage(storage: &Storage) -> Result<bool, String> {
+    let write_catalog_json = sync_model_catalog_json_enabled();
+    let write_provider = sync_model_provider_enabled();
+    if !write_catalog_json && !write_provider {
+        return Ok(false);
+    }
     let Some(state) = load_state() else {
         return Ok(false);
     };
@@ -2063,15 +2108,21 @@ pub(crate) fn sync_active_gateway_profile_from_storage(storage: &Storage) -> Res
         .api_key_id
         .as_deref()
         .ok_or_else(|| "active gateway profile is missing api key id".to_string())?;
-    let catalog_policy =
-        crate::codex_model_catalog::gateway_catalog_policy_for_api_key(storage, api_key_id)?;
-    let supports_websockets = gateway_supports_websockets(storage, api_key_id)?;
-    crate::codex_model_catalog::write_gateway_model_catalog(
-        storage,
-        api_key_id,
-        &paths.gateway_model_catalog_path,
-        catalog_policy,
-    )?;
+    if write_catalog_json {
+        let catalog_policy =
+            crate::codex_model_catalog::gateway_catalog_policy_for_api_key(storage, api_key_id)?;
+        crate::codex_model_catalog::write_gateway_model_catalog(
+            storage,
+            api_key_id,
+            &paths.gateway_model_catalog_path,
+            catalog_policy,
+        )?;
+    }
+    let supports_websockets = if write_provider {
+        gateway_supports_websockets(storage, api_key_id)?
+    } else {
+        false
+    };
     let gateway_base_url = normalize_gateway_base_url(state.gateway_base_url.as_deref());
     let current_config = read_optional(&profile_dir.join(CONFIG_FILE))?;
     let config_toml = patch_config_for_gateway(
@@ -2079,6 +2130,8 @@ pub(crate) fn sync_active_gateway_profile_from_storage(storage: &Storage) -> Res
         &gateway_base_url,
         &paths.gateway_model_catalog_path,
         supports_websockets,
+        write_catalog_json,
+        write_provider,
     )?;
     write_atomic(&profile_dir.join(CONFIG_FILE), &config_toml)?;
     Ok(true)

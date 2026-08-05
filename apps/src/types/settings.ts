@@ -91,6 +91,8 @@ export interface AppSettings extends GatewayTransportValues {
   pluginMarketSourceUrl: string;
   modelProfileAutoUpdate: boolean;
   modelProfileSourceUrl: string;
+  codexSyncModelCatalogJson: boolean;
+  codexSyncModelProvider: boolean;
   authorSponsors: SponsorLinkItem[];
   authorServerRecommendations: SponsorLinkItem[];
   upstreamProxyUrl: string;

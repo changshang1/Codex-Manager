@@ -1855,6 +1855,14 @@ export function normalizeAppSettings(payload: unknown): AppSettings {
     modelProfileSourceUrl: asString(
       source.modelProfileSourceUrl ?? source.model_profile_source_url,
     ),
+    codexSyncModelCatalogJson: asBoolean(
+      source.codexSyncModelCatalogJson ?? source.codex_sync_model_catalog_json,
+      true,
+    ),
+    codexSyncModelProvider: asBoolean(
+      source.codexSyncModelProvider ?? source.codex_sync_model_provider,
+      true,
+    ),
     authorSponsors: normalizeSponsorLinkItems(
       source.authorSponsors,
       DEFAULT_AUTHOR_SPONSORS

@@ -159,6 +159,8 @@ name = "Other"
         "http://127.0.0.1:48770/v1",
         &managed_catalog,
         true,
+        true,
+        true,
     )
     .expect("patch gateway");
 
@@ -176,6 +178,8 @@ name = "Other"
         "http://127.0.0.1:48770/v1",
         &managed_catalog,
         false,
+        true,
+        true,
     )
     .expect("disable gateway websocket");
     assert!(without_websocket.contains("supports_websockets = false"));
@@ -200,6 +204,8 @@ custom_header = "custom-value"
         Some(input.to_string()),
         "http://127.0.0.1:48770/v1",
         &managed_catalog,
+        true,
+        true,
         true,
     )
     .expect("patch gateway");
@@ -275,8 +281,92 @@ fn invalid_toml_is_rejected() {
         "http://x/v1",
         Path::new("/tmp/gateway-models.json"),
         false,
+        true,
+        true,
     )
     .is_err());
+}
+
+#[test]
+fn gateway_config_sync_switches_control_catalog_and_provider() {
+    let managed_catalog = PathBuf::from("/tmp/codexmanager/gateway-models.json");
+    let base_url = "http://127.0.0.1:48770/v1";
+
+    // 两个开关都关闭：不写 model_provider、model_catalog_json，也不创建 model_providers 表
+    let none = patch_config_for_gateway(
+        Some("model = \"gpt-5.4\"\n".to_string()),
+        base_url,
+        &managed_catalog,
+        true,
+        false,
+        false,
+    )
+    .expect("patch gateway without provider or catalog");
+    assert!(!none.contains("model_provider"));
+    assert!(!none.contains("model_catalog_json"));
+    assert!(!none.contains("model_providers"));
+    assert!(none.contains("model = \"gpt-5.4\""));
+
+    // 只写 catalog：包含 model_catalog_json，不写 model_provider，也不创建 model_providers 表
+    let only_catalog = patch_config_for_gateway(
+        Some("model = \"gpt-5.4\"\n".to_string()),
+        base_url,
+        &managed_catalog,
+        true,
+        true,
+        false,
+    )
+    .expect("patch gateway with catalog only");
+    assert!(only_catalog.contains("model_catalog_json = \"/tmp/codexmanager/gateway-models.json\""));
+    assert!(!only_catalog.contains("model_provider"));
+    assert!(!only_catalog.contains("model_providers"));
+
+    // 只写 provider：包含 model_provider 与 [model_providers.cm]，不写 model_catalog_json
+    let only_provider = patch_config_for_gateway(
+        Some("model = \"gpt-5.4\"\n".to_string()),
+        base_url,
+        &managed_catalog,
+        true,
+        false,
+        true,
+    )
+    .expect("patch gateway with provider only");
+    assert!(only_provider.contains("model_provider = \"cm\""));
+    assert!(only_provider.contains("[model_providers.cm]"));
+    assert!(!only_provider.contains("model_catalog_json"));
+}
+
+#[test]
+fn disabled_gateway_sync_skips_api_key_and_config_access() {
+    let _env_lock = crate::test_env_guard();
+    let dir = temp_profile("disabled-gateway-sync");
+    let _db_guard = set_test_db(&dir);
+    fs::create_dir_all(&dir).expect("mkdir profile");
+    let invalid_config = "invalid = [\n";
+    fs::write(dir.join(CONFIG_FILE), invalid_config).expect("write invalid config");
+    save_state(&ManagedState {
+        profile_dir: profile_key(&dir),
+        mode: CodexProfileMode::Gateway,
+        account_id: None,
+        api_key_id: Some("missing-key".to_string()),
+        gateway_base_url: Some("http://localhost:48760/v1".to_string()),
+        provider_id: PROVIDER_ID.to_string(),
+        previous_model_catalog_json: None,
+        updated_at: now_ts(),
+    })
+    .expect("save gateway state");
+    set_sync_settings(Some(false), Some(false)).expect("disable gateway sync");
+    let storage = open_storage().expect("open storage");
+
+    let synced = sync_active_gateway_profile_from_storage(&storage).expect("skip gateway sync");
+
+    assert!(!synced);
+    assert_eq!(
+        fs::read_to_string(dir.join(CONFIG_FILE)).expect("read config"),
+        invalid_config
+    );
+    drop(storage);
+    cleanup_profile(&dir);
 }
 
 #[test]

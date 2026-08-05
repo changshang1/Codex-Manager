@@ -52,6 +52,8 @@ pub(super) struct AppSettingsPatch {
     plugin_market_source_url: Option<String>,
     model_profile_auto_update: Option<bool>,
     model_profile_source_url: Option<String>,
+    codex_sync_model_catalog_json: Option<bool>,
+    codex_sync_model_provider: Option<bool>,
     author_sponsors: Option<Vec<AuthorLinkItem>>,
     author_server_recommendations: Option<Vec<AuthorLinkItem>>,
     upstream_proxy_url: Option<String>,
@@ -189,6 +191,12 @@ pub(super) fn apply_app_settings_patch(patch: AppSettingsPatch) -> Result<(), St
         crate::model_profiles::set_settings(
             patch.model_profile_auto_update,
             patch.model_profile_source_url,
+        )?;
+    }
+    if patch.codex_sync_model_catalog_json.is_some() || patch.codex_sync_model_provider.is_some() {
+        crate::codex_profile::set_sync_settings(
+            patch.codex_sync_model_catalog_json,
+            patch.codex_sync_model_provider,
         )?;
     }
     if let Some(author_sponsors) = patch.author_sponsors {

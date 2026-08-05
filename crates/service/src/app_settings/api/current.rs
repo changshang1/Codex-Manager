@@ -232,6 +232,8 @@ fn current_app_settings_value_inner(
         .unwrap_or_default();
     let model_profile_auto_update = crate::model_profiles::auto_update_enabled();
     let model_profile_source_url = crate::model_profiles::source_url();
+    let codex_sync_model_catalog_json = crate::codex_profile::sync_model_catalog_json_enabled();
+    let codex_sync_model_provider = crate::codex_profile::sync_model_provider_enabled();
     let author_sponsors = load_author_link_items(
         &settings,
         APP_SETTING_AUTHOR_SPONSORS_KEY,
@@ -395,6 +397,14 @@ fn current_app_settings_value_inner(
         object.insert(
             "modelProfileSourceUrl".to_string(),
             model_profile_source_url.into(),
+        );
+        object.insert(
+            "codexSyncModelCatalogJson".to_string(),
+            codex_sync_model_catalog_json.into(),
+        );
+        object.insert(
+            "codexSyncModelProvider".to_string(),
+            codex_sync_model_provider.into(),
         );
         object.insert(
             "showMainWindowOnStartup".to_string(),
