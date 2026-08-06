@@ -1,6 +1,5 @@
 "use client";
 
-import { useLayoutEffect, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import {
   ArrowDown,
@@ -408,42 +407,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
   );
   const statusMutationBusy =
     isUpdatingManyStatuses || Boolean(isUpdatingStatusAccountId);
-  const accountPoolLayoutRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    const layout = accountPoolLayoutRef.current;
-    if (!layout) return;
-
-    const mainRows = Array.from(
-      layout.querySelectorAll<HTMLElement>("[data-account-pool-main-row]"),
-    );
-    const actionRows = Array.from(
-      layout.querySelectorAll<HTMLElement>("[data-account-pool-action-row]"),
-    );
-    const syncRowHeights = () => {
-      actionRows.forEach((actionRow, index) => {
-        const mainRow = mainRows[index];
-        actionRow.style.height = mainRow
-          ? `${mainRow.getBoundingClientRect().height}px`
-          : "";
-      });
-    };
-
-    syncRowHeights();
-    if (typeof ResizeObserver === "undefined") {
-      return () => {
-        actionRows.forEach((row) => row.style.removeProperty("height"));
-      };
-    }
-
-    const observer = new ResizeObserver(syncRowHeights);
-    mainRows.forEach((row) => observer.observe(row));
-    return () => {
-      observer.disconnect();
-      actionRows.forEach((row) => row.style.removeProperty("height"));
-    };
-  }, [isLoading, visibleAccounts]);
-
   const accountAccessEnabled = (account: Account) =>
     String(account.status || "").trim().toLowerCase() !== "disabled";
 
@@ -1160,8 +1123,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
 
       <Card className="glass-card mission-panel overflow-hidden py-0 shadow-sm">
         <CardContent className="p-0">
-          <div ref={accountPoolLayoutRef} className="account-pool-layout">
-            <div className="account-pool-main-pane">
+          <div className="account-pool-main-pane">
               <Table className="account-pool-main-table">
                 <colgroup>
                   <col className="account-pool-col-select" />
@@ -1170,9 +1132,11 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                   <col className="account-pool-col-order" />
                   <col className="account-pool-col-proxy" />
                   <col className="account-pool-col-status" />
+                  <col className="account-pool-col-access" />
+                  <col className="account-pool-col-actions" />
                 </colgroup>
                 <TableHeader>
-                  <TableRow data-account-pool-main-row>
+                  <TableRow>
                     <TableHead className="w-12 text-center">
                       <Checkbox
                         checked={
@@ -1197,12 +1161,18 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     <TableHead className="account-pool-status-head whitespace-normal">
                       {t("状态")}
                     </TableHead>
+                    <TableHead className="table-sticky-access-head text-center">
+                      {t("允许接入")}
+                    </TableHead>
+                    <TableHead className="table-sticky-action-head text-center">
+                      {t("操作")}
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
                     Array.from({ length: 5 }).map((_, index) => (
-                      <TableRow key={index} data-account-pool-main-row>
+                      <TableRow key={index}>
                     <TableCell>
                       <Skeleton className="mx-auto h-4 w-4" />
                     </TableCell>
@@ -1225,11 +1195,17 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     <TableCell className="account-pool-status-cell align-top">
                       <Skeleton className="h-6 w-16 rounded-full" />
                     </TableCell>
+                    <TableCell className="table-sticky-access-cell">
+                      <Skeleton className="mx-auto h-5 w-9 rounded-full" />
+                    </TableCell>
+                    <TableCell className="table-sticky-action-cell">
+                      <Skeleton className="mx-auto h-8 w-20" />
+                    </TableCell>
                   </TableRow>
                 ))
               ) : visibleAccounts.length === 0 ? (
-                <TableRow data-account-pool-main-row>
-                  <TableCell colSpan={6} className="h-48 text-center">
+                <TableRow>
+                  <TableCell colSpan={8} className="h-48 text-center">
                     <div className="flex w-[calc(100dvw-6rem)] flex-col items-center justify-center gap-2 text-muted-foreground sm:w-auto">
                       <Search className="h-8 w-8 opacity-20" />
                       <p>{t("未找到符合条件的账号")}</p>
@@ -1268,7 +1244,6 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                         isAccountWarrantyIncident(account) &&
                           "bg-destructive/10 hover:bg-destructive/15 [&>td:first-child]:border-l-2 [&>td:first-child]:border-l-destructive",
                       )}
-                      data-account-pool-main-row
                     >
                       <TableCell className="text-center">
                         <Checkbox
@@ -1377,80 +1352,30 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       <TableCell className="account-pool-status-cell align-top">
                         <AccountStatusCell account={account} />
                       </TableCell>
+                      <TableCell
+                        className={cn(
+                          "table-sticky-access-cell text-center",
+                          isAccountWarrantyIncident(account) &&
+                            "table-sticky-warranty-cell",
+                        )}
+                      >
+                        {renderAccountAccess(account)}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "table-sticky-action-cell",
+                          isAccountWarrantyIncident(account) &&
+                            "table-sticky-warranty-cell",
+                        )}
+                      >
+                        {renderAccountActions(account)}
+                      </TableCell>
                     </TableRow>
                   );
                     })
                   )}
                 </TableBody>
               </Table>
-            </div>
-            <div
-              className="account-pool-action-rail"
-              role="table"
-              aria-label={`${t("允许接入")} / ${t("操作")}`}
-            >
-              <div
-                className="account-pool-action-rail-head"
-                role="row"
-                data-account-pool-action-row
-              >
-                <div
-                  className="account-pool-access-rail-cell"
-                  role="columnheader"
-                >
-                  {t("允许接入")}
-                </div>
-                <div
-                  className="account-pool-actions-rail-cell"
-                  role="columnheader"
-                >
-                  {t("操作")}
-                </div>
-              </div>
-              {isLoading ? (
-                Array.from({ length: 5 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="account-pool-action-rail-row"
-                    role="row"
-                    data-account-pool-action-row
-                  >
-                    <div className="account-pool-access-rail-cell" role="cell">
-                      <Skeleton className="mx-auto h-5 w-9 rounded-full" />
-                    </div>
-                    <div className="account-pool-actions-rail-cell" role="cell">
-                      <Skeleton className="mx-auto h-8 w-20" />
-                    </div>
-                  </div>
-                ))
-              ) : visibleAccounts.length === 0 ? (
-                <div
-                  className="account-pool-action-rail-row"
-                  aria-hidden="true"
-                  data-account-pool-action-row
-                />
-              ) : (
-                visibleAccounts.map((account) => (
-                  <div
-                    key={account.id}
-                    className={cn(
-                      "account-pool-action-rail-row",
-                      isAccountWarrantyIncident(account) &&
-                        "account-pool-action-rail-row-warranty",
-                    )}
-                    role="row"
-                    data-account-pool-action-row
-                  >
-                    <div className="account-pool-access-rail-cell" role="cell">
-                      {renderAccountAccess(account)}
-                    </div>
-                    <div className="account-pool-actions-rail-cell" role="cell">
-                      {renderAccountActions(account)}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
           </div>
         </CardContent>
       </Card>

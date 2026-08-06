@@ -93,29 +93,25 @@ test("wide tables retain reachable actions and visible empty states", async () =
   assert.match(modelsSource, /table-sticky-action-cell/);
   assert.match(
     accountsSource,
-    /account-pool-layout[\s\S]*account-pool-main-pane[\s\S]*account-pool-main-table[\s\S]*account-pool-col-status[\s\S]*account-pool-action-rail/,
+    /account-pool-main-pane[\s\S]*account-pool-main-table[\s\S]*account-pool-col-status[\s\S]*account-pool-col-access[\s\S]*account-pool-col-actions/,
   );
-  assert.doesNotMatch(accountsSource, /table-sticky-action-(?:head|cell)/);
-  assert.match(accountsSource, /new ResizeObserver\(syncRowHeights\)/);
-  assert.match(accountsSource, /data-account-pool-main-row/);
-  assert.match(accountsSource, /data-account-pool-action-row/);
+  assert.match(accountsSource, /table-sticky-access-head/);
+  assert.match(accountsSource, /table-sticky-access-cell/);
+  assert.match(accountsSource, /table-sticky-action-head/);
+  assert.match(accountsSource, /table-sticky-action-cell/);
   assert.match(accountsSource, /renderAccountAccess\(account\)/);
   assert.match(accountsSource, /renderAccountActions\(account\)/);
   assert.match(
     stylesSource,
-    /\.account-pool-layout[\s\S]*--account-pool-action-width: 216px;[\s\S]*grid-template-columns: minmax\(0, 1fr\) var\(--account-pool-action-width\);/,
+    /\.account-pool-col-access[\s\S]*width: 104px;/,
   );
   assert.match(
     stylesSource,
-    /\.account-pool-main-table[\s\S]*table-layout: fixed;[\s\S]*width: 100%;[\s\S]*min-width: 1280px;/,
+    /\.account-pool-col-actions[\s\S]*width: 112px;/,
   );
   assert.match(
     stylesSource,
-    /\.account-pool-action-rail[\s\S]*position: relative;[\s\S]*z-index: 5;[\s\S]*width: var\(--account-pool-action-width\);/,
-  );
-  assert.match(
-    stylesSource,
-    /\.account-pool-action-rail-head,[\s\S]*grid-template-columns: 104px 112px;/,
+    /\.account-pool-main-table[\s\S]*table-layout: fixed;[\s\S]*width: 100%;[\s\S]*min-width: 1496px;/,
   );
 });
 

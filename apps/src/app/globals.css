@@ -1071,23 +1071,14 @@ tr {
   height: 100%;
 }
 
-.account-pool-layout {
-  --account-pool-action-width: 216px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--account-pool-action-width);
-  width: 100%;
-  isolation: isolate;
-}
-
 .account-pool-main-pane {
   min-width: 0;
-  overflow: hidden;
 }
 
 .account-pool-main-table {
   table-layout: fixed;
   width: 100%;
-  min-width: 1280px;
+  min-width: 1496px;
 }
 
 .account-pool-col-select {
@@ -1107,74 +1098,18 @@ tr {
   width: 180px;
 }
 
+.account-pool-col-access {
+  width: 104px;
+}
+
+.account-pool-col-actions {
+  width: 112px;
+}
+
 .account-pool-status-head,
 .account-pool-status-cell {
   overflow: hidden;
   white-space: normal;
-}
-
-.account-pool-action-rail {
-  position: relative;
-  z-index: 5;
-  width: var(--account-pool-action-width);
-  min-width: var(--account-pool-action-width);
-  border-left: 1px solid rgb(var(--primary-rgb) / 0.18);
-  background: var(--card-solid);
-  box-shadow: -16px 0 24px -22px rgb(var(--primary-rgb) / 0.55);
-}
-
-.account-pool-action-rail-head,
-.account-pool-action-rail-row {
-  display: grid;
-  grid-template-columns: 104px 112px;
-  align-items: center;
-  width: 100%;
-  background: var(--card-solid);
-}
-
-.account-pool-access-rail-cell,
-.account-pool-actions-rail-cell {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-width: 0;
-}
-
-.account-pool-access-rail-cell {
-  border-right: 1px solid rgb(var(--primary-rgb) / 0.14);
-}
-
-.account-pool-actions-rail-cell {
-  padding: 0.5rem;
-}
-
-.account-pool-action-rail-head {
-  height: 42px;
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  background: var(--table-header-bg);
-  box-shadow: inset 0 -1px 0 rgb(var(--primary-rgb) / 0.14);
-}
-
-.account-pool-action-rail-row {
-  min-height: 48px;
-  border-bottom: 1px solid rgb(var(--primary-rgb) / 0.12);
-}
-
-.account-pool-action-rail-row:hover {
-  background: color-mix(in srgb, var(--card-solid) 94%, rgb(var(--primary-rgb)) 6%);
-}
-
-.account-pool-action-rail-row-warranty {
-  background: color-mix(in srgb, var(--card-solid) 90%, var(--destructive) 10%);
-}
-
-.account-pool-action-rail-row-warranty:hover {
-  background: color-mix(in srgb, var(--card-solid) 86%, var(--destructive) 14%);
 }
 
 .table-sticky-action-head,
@@ -1212,6 +1147,10 @@ tr {
   background: var(--card-solid);
 }
 
+.table-sticky-warranty-cell {
+  background: color-mix(in srgb, var(--card-solid) 90%, var(--destructive) 10%);
+}
+
 [data-appearance='modern'] .table-sticky-action-head,
 [data-appearance='modern'] .table-sticky-action-cell,
 [data-appearance='modern'] .table-sticky-access-head,
@@ -1224,6 +1163,10 @@ tr {
 [data-slot="table-body"] [data-slot="table-row"]:hover .table-sticky-action-cell,
 [data-slot="table-body"] [data-slot="table-row"]:hover .table-sticky-access-cell {
   background: color-mix(in srgb, var(--card-solid) 94%, rgb(var(--primary-rgb)) 6%);
+}
+
+[data-slot="table-body"] [data-slot="table-row"]:hover .table-sticky-warranty-cell {
+  background: color-mix(in srgb, var(--card-solid) 86%, var(--destructive) 14%);
 }
 
 [data-slot="table-body"] [data-slot="table-row"][data-state="selected"] .table-sticky-action-cell,
