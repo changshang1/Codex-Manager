@@ -847,53 +847,6 @@ impl Storage {
         Ok(out)
     }
 
-    pub fn list_account_workspace_identities_matching_identity(
-        &self,
-        account_ids: &[String],
-        chatgpt_account_id: Option<&str>,
-        workspace_id: Option<&str>,
-    ) -> Result<Vec<AccountWorkspaceIdentity>> {
-        let mut clauses = Vec::new();
-        let mut params = Vec::new();
-
-        let account_ids = normalize_text_ids(account_ids);
-        if !account_ids.is_empty() {
-            let Some((condition, values)) = text_id_in_clause("a.id", &account_ids) else {
-                return Ok(Vec::new());
-            };
-            clauses.push(condition);
-            params.extend(values);
-        }
-        if let Some(value) = normalize_optional_filter(chatgpt_account_id) {
-            clauses.push("a.chatgpt_account_id = ?".to_string());
-            params.push(Value::Text(value));
-        }
-        if let Some(value) = normalize_optional_filter(workspace_id) {
-            clauses.push("a.workspace_id = ?".to_string());
-            params.push(Value::Text(value));
-        }
-        if clauses.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let sql = format!(
-            "SELECT a.id, a.chatgpt_account_id, a.workspace_id
-             FROM accounts a
-             WHERE {}
-             ORDER BY a.updated_at DESC, a.id ASC",
-            clauses.join(" OR ")
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(params), |row| {
-            Ok(AccountWorkspaceIdentity {
-                id: row.get(0)?,
-                chatgpt_account_id: row.get(1)?,
-                workspace_id: row.get(2)?,
-            })
-        })?;
-        rows.collect()
-    }
-
     pub fn list_account_workspace_identities_for_subject(
         &self,
         subject_account_id: &str,

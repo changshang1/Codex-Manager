@@ -2328,56 +2328,6 @@ fn matching_identity_accounts_only_returns_identity_candidates() {
 }
 
 #[test]
-fn matching_identity_workspace_identities_only_reads_identity_candidates() {
-    let storage = Storage::open_in_memory().expect("open");
-    storage.init().expect("init");
-    let now = now_ts();
-
-    let mut by_chatgpt = sample_account("acc-identity-by-chatgpt", "active", now);
-    by_chatgpt.label = "ignored label".to_string();
-    by_chatgpt.issuer = "ignored issuer".to_string();
-    by_chatgpt.chatgpt_account_id = Some("cgpt-target".to_string());
-    by_chatgpt.workspace_id = Some("ws-other".to_string());
-    by_chatgpt.updated_at = now.saturating_add(10);
-    let mut by_workspace = sample_account("acc-identity-by-workspace", "active", now);
-    by_workspace.group_name = Some("ignored group".to_string());
-    by_workspace.chatgpt_account_id = Some("cgpt-other".to_string());
-    by_workspace.workspace_id = Some("ws-target".to_string());
-    by_workspace.updated_at = now.saturating_add(20);
-    let by_id = sample_account("acc-identity-by-id", "active", now);
-    let unrelated = sample_account("acc-identity-unrelated", "active", now.saturating_add(30));
-
-    for account in [&by_chatgpt, &by_workspace, &by_id, &unrelated] {
-        storage.insert_account(account).expect("insert account");
-    }
-
-    let identities = storage
-        .list_account_workspace_identities_matching_identity(
-            &["acc-identity-by-id".to_string()],
-            Some("cgpt-target"),
-            Some("ws-target"),
-        )
-        .expect("list identity candidates");
-
-    assert_eq!(
-        identities
-            .iter()
-            .map(|identity| identity.id.as_str())
-            .collect::<Vec<_>>(),
-        vec![
-            "acc-identity-by-workspace",
-            "acc-identity-by-chatgpt",
-            "acc-identity-by-id"
-        ]
-    );
-    assert_eq!(identities[0].workspace_id.as_deref(), Some("ws-target"));
-    assert_eq!(
-        identities[1].chatgpt_account_id.as_deref(),
-        Some("cgpt-target")
-    );
-}
-
-#[test]
 fn list_gateway_candidates_only_returns_active_available_accounts() {
     let storage = Storage::open_in_memory().expect("open");
     storage.init().expect("init");
