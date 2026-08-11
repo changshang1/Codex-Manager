@@ -34,6 +34,12 @@ fn build_account(id: &str, now: i64) -> Account {
     }
 }
 
+#[test]
+fn same_account_retry_is_limited_to_one_retry() {
+    assert!(super::should_retry_same_account_after_failover(0));
+    assert!(!super::should_retry_same_account_after_failover(1));
+}
+
 fn build_token(account_id: &str, now: i64) -> Token {
     Token {
         account_id: account_id.to_string(),

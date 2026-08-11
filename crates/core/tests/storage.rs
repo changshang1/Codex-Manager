@@ -1009,9 +1009,9 @@ fn storage_login_session_roundtrip() {
         status: "pending".to_string(),
         error: None,
         workspace_id: Some("org_123".to_string()),
-        note: None,
-        tags: None,
-        group_name: None,
+        note: Some("Primary account".to_string()),
+        tags: Some("work,plus".to_string()),
+        group_name: Some("Team A".to_string()),
         created_at: now_ts(),
         updated_at: now_ts(),
     };
@@ -1024,6 +1024,9 @@ fn storage_login_session_roundtrip() {
         .expect("session exists");
     assert_eq!(loaded.status, "pending");
     assert_eq!(loaded.workspace_id.as_deref(), Some("org_123"));
+    assert_eq!(loaded.note.as_deref(), Some("Primary account"));
+    assert_eq!(loaded.tags.as_deref(), Some("work,plus"));
+    assert_eq!(loaded.group_name.as_deref(), Some("Team A"));
 }
 
 #[test]

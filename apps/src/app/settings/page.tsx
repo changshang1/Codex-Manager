@@ -949,6 +949,10 @@ function AdminSettingsPage() {
     );
   };
 
+  const handleZoomFactorChange = (nextZoomFactor: number) => {
+    updateSettings.mutate({ zoomFactor: nextZoomFactor, _silent: true });
+  };
+
   /**
    * 函数 `updateBackgroundTasks`
    *
@@ -1430,8 +1434,11 @@ function AdminSettingsPage() {
             t={t}
             theme={theme}
             appearancePreset={normalizeAppearancePreset(snapshot.appearancePreset)}
+            isDesktopRuntime={isDesktopRuntime}
+            zoomFactor={snapshot.zoomFactor}
             onThemeChange={handleThemeChange}
             onAppearancePresetChange={handleAppearancePresetChange}
+            onZoomFactorChange={handleZoomFactorChange}
           />
         </TabsContent>
 

@@ -5,6 +5,13 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-08
+
+### Fixed
+
+- Fixed same-team account logins overwriting an existing account by isolating persisted account identity by login subject.
+- Limited retryable streaming upstream failures to one retry per account before failover, reducing rate-limit amplification.
+
 ## [0.5.2] - 2026-07-31
 
 ### Changed
@@ -452,7 +459,8 @@ It follows Keep a Changelog with a lightweight adaptation for this repository.
 ### Changed
 - The operation area of ​​the account management page is integrated into a single "Account Operation" drop-down menu, replacing the stack of multiple buttons on the right, making the interface more concise.
 
-[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/qxcnm/Codex-Manager/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/qxcnm/Codex-Manager/compare/v0.4.4...v0.5.0

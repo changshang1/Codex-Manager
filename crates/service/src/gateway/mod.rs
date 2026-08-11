@@ -153,6 +153,7 @@ use request_rewrite::{
     apply_request_overrides_with_service_tier_and_forced_prompt_cache_key_scope,
     apply_request_overrides_with_service_tier_and_prompt_cache_key_scope, compute_upstream_url,
 };
+pub(crate) use thread_anchor::align_existing_prompt_cache_key_with_native_anchor;
 pub(super) use thread_anchor::{
     resolve_fallback_thread_anchor, resolve_local_conversation_id_with_sticky_fallback,
 };
@@ -866,6 +867,10 @@ pub(crate) fn set_upstream_proxy_bypass_hosts(raw: Option<&str>) -> String {
 /// 返回函数执行结果
 pub(crate) fn current_upstream_stream_timeout_ms() -> u64 {
     runtime_config::current_upstream_stream_timeout_ms()
+}
+
+pub(crate) fn current_upstream_connect_timeout() -> std::time::Duration {
+    runtime_config::current_upstream_connect_timeout()
 }
 
 pub(crate) fn current_upstream_total_timeout_ms() -> u64 {

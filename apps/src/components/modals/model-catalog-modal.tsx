@@ -38,6 +38,7 @@ import type { AggregateApi } from "@/types/api-key";
 import type {
   ManagedModelV2,
   ManagedModelV2Upsert,
+  ModelFastPolicyV2,
   ModelInstructionsModeV2,
   ModelPriceTierV2,
   ModelRouteSourceKindV2,
@@ -73,6 +74,7 @@ type ModelDraft = {
   contextWindow: string;
   maxContextWindow: string;
   defaultReasoningEffort: string;
+  fastPolicy: ModelFastPolicyV2;
   capabilitiesJson: string;
   inputPrice: string;
   cachedInputPrice: string;
@@ -209,6 +211,7 @@ function buildDraft(model: ManagedModelV2 | null | undefined, nextSortOrder: num
     maxContextWindow:
       model?.maxContextWindow == null ? "" : String(model.maxContextWindow),
     defaultReasoningEffort: model?.defaultReasoningEffort || "",
+    fastPolicy: model?.fastPolicy || "passthrough",
     capabilitiesJson: JSON.stringify(model?.capabilities || DEFAULT_CAPABILITIES, null, 2),
     inputPrice: microusdToUsdPerMillion(model?.price.inputMicrousdPer1m ?? null),
     cachedInputPrice: microusdToUsdPerMillion(
@@ -536,6 +539,7 @@ export function ModelCatalogModal({
           "最大上下文窗口",
         ),
         defaultReasoningEffort: draft.defaultReasoningEffort.trim() || null,
+        fastPolicy: draft.fastPolicy,
         capabilities: parseCapabilities(draft.capabilitiesJson),
         instructionsMode: draft.instructionsMode,
         instructionsText: draft.instructionsText.trim() || null,
@@ -734,6 +738,55 @@ export function ModelCatalogModal({
                     </SelectContent>
                   </Select>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="model-fast-policy">{t("Fast 策略")}</Label>
+                <Select
+                  value={draft.fastPolicy}
+                  onValueChange={(value) =>
+                    updateDraft(
+                      "fastPolicy",
+                      (value || "passthrough") as ModelFastPolicyV2,
+                    )
+                  }
+                >
+                  <SelectTrigger id="model-fast-policy" aria-label={t("Fast 策略")}>
+                    <SelectValue>
+                      {(value) => {
+                        switch (value) {
+                          case "filter":
+                            return t("过滤（移除 service_tier）");
+                          case "force":
+                            return t("强制设置 priority（Fast）");
+                          case "block":
+                            return t("拦截（拒绝 Fast 请求）");
+                          default:
+                            return t("透传（保留 service_tier）");
+                        }
+                      }}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="passthrough">
+                        {t("透传（保留 service_tier）")}
+                      </SelectItem>
+                      <SelectItem value="filter">
+                        {t("过滤（移除 service_tier）")}
+                      </SelectItem>
+                      <SelectItem value="force">
+                        {t("强制设置 priority（Fast）")}
+                      </SelectItem>
+                      <SelectItem value="block">
+                        {t("拦截（拒绝 Fast 请求）")}
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  {t("控制该模型如何处理请求中的 service_tier。")}
+                </p>
               </div>
 
               <div className="space-y-2">

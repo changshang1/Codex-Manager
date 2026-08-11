@@ -99,6 +99,13 @@ export const EN_MODELS_MESSAGES: MessageCatalog = {
   "隐藏模型 {slug}": "Hide model {slug}",
   "删除模型 {slug}": "Delete model {slug}",
   编辑模型: "Edit model",
+  "Fast 策略": "Fast policy",
+  "透传（保留 service_tier）": "Pass through (preserve service_tier)",
+  "过滤（移除 service_tier）": "Filter (remove service_tier)",
+  "强制设置 priority（Fast）": "Force priority (Fast)",
+  "拦截（拒绝 Fast 请求）": "Block (reject Fast requests)",
+  "控制该模型如何处理请求中的 service_tier。":
+    "Controls how this model handles service_tier in requests.",
   删除模型: "Delete model",
   "Builtin 模型 {slug} 将被禁用，数据不会删除。":
     "Builtin model {slug} will be disabled; its data will not be deleted.",

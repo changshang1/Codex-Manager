@@ -157,14 +157,14 @@ pub(crate) fn login_with_chatgpt_auth_tokens(
         workspace_id.as_deref(),
         None,
     );
-    let account_id = storage
-        .find_account_id_by_identity(
-            fallback_subject_key.as_deref(),
-            chatgpt_account_id.as_deref(),
-            workspace_id.as_deref(),
-        )
-        .map_err(|err| err.to_string())?
-        .unwrap_or(account_storage_id);
+    let account_id = crate::auth_tokens::resolve_existing_account_for_login(
+        &storage,
+        subject_account_id,
+        chatgpt_account_id.as_deref(),
+        workspace_id.as_deref(),
+        fallback_subject_key.as_deref(),
+    )?
+    .unwrap_or(account_storage_id);
 
     let existing_state = storage
         .find_account_upsert_state_by_id(&account_id)
@@ -196,6 +196,9 @@ pub(crate) fn login_with_chatgpt_auth_tokens(
     };
     storage
         .insert_account(&account)
+        .map_err(|err| err.to_string())?;
+    storage
+        .update_account_subject_identity(&account_id, subject_account_id)
         .map_err(|err| err.to_string())?;
 
     let mut token = Token {

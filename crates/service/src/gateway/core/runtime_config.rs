@@ -368,6 +368,7 @@ pub(crate) fn fresh_async_upstream_client_for_account(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn upstream_proxy_url_for_account(account_id: &str) -> Option<String> {
     ensure_runtime_config_loaded();
     match account_proxy_client_cache_entry(account_id) {
@@ -386,9 +387,26 @@ pub(crate) fn websocket_proxy_url_for_account(
     account_id: &str,
     target_url: &str,
 ) -> Result<Option<String>, String> {
-    if let Some(proxy_url) = upstream_proxy_url_for_account(account_id) {
+    ensure_runtime_config_loaded();
+    match account_proxy_client_cache_entry(account_id) {
+        AccountProxyClientCacheEntry::Ready { proxy_url, .. } => return Ok(Some(proxy_url)),
+        AccountProxyClientCacheEntry::Invalid { proxy_url, error } => {
+            return Err(format!(
+                "account explicit proxy for {account_id} is invalid and fail-closed: {proxy_url}. {error}"
+            ));
+        }
+        AccountProxyClientCacheEntry::NotConfigured => {}
+    }
+
+    let pool = crate::lock_utils::read_recover(upstream_client_pool_lock(), "upstream_client_pool");
+    if let Some(proxy_url) = pool.proxy_for_account(account_id) {
+        return Ok(Some(proxy_url.to_string()));
+    }
+    drop(pool);
+    if let Some(proxy_url) = current_upstream_proxy_url() {
         return Ok(Some(proxy_url));
     }
+
     environment_proxy_url_for_target(target_url)
 }
 
@@ -408,8 +426,44 @@ fn environment_proxy_url_for_target(target_url: &str) -> Result<Option<String>, 
         }
         _ => None,
     };
-    normalize_upstream_proxy_url(proxy_url.as_deref())
-        .map_err(|err| format!("invalid websocket environment proxy: {err}"))
+    if proxy_url.is_some() {
+        return normalize_upstream_proxy_url(proxy_url.as_deref())
+            .map_err(|err| format!("invalid websocket environment proxy: {err}"));
+    }
+    system_proxy_url_for_target(target_url)
+}
+
+fn system_proxy_url_for_target(target_url: &str) -> Result<Option<String>, String> {
+    let matcher = hyper_util::client::proxy::matcher::Matcher::from_system();
+    proxy_url_from_matcher_for_target(target_url, &matcher)
+}
+
+fn proxy_url_from_matcher_for_target(
+    target_url: &str,
+    matcher: &hyper_util::client::proxy::matcher::Matcher,
+) -> Result<Option<String>, String> {
+    let mut target = reqwest::Url::parse(target_url.trim())
+        .map_err(|err| format!("invalid websocket target url {target_url}: {err}"))?;
+    let http_scheme = match target.scheme() {
+        "wss" => "https",
+        "ws" => "http",
+        "https" => "https",
+        "http" => "http",
+        scheme => return Err(format!("unsupported websocket target scheme: {scheme}")),
+    };
+    target
+        .set_scheme(http_scheme)
+        .map_err(|_| format!("replace websocket target scheme failed: {target_url}"))?;
+    let target_uri = target
+        .as_str()
+        .parse::<axum::http::Uri>()
+        .map_err(|err| format!("invalid websocket target uri {target_url}: {err}"))?;
+    let Some(intercept) = matcher.intercept(&target_uri) else {
+        return Ok(None);
+    };
+    let proxy_url = intercept.uri().to_string();
+    normalize_upstream_proxy_url(Some(proxy_url.as_str()))
+        .map_err(|err| format!("invalid websocket system proxy: {err}"))
 }
 
 fn first_environment_proxy(keys: &[&str]) -> Option<String> {

@@ -689,6 +689,12 @@ export const EN_MESSAGES: MessageCatalog = {
   "使用更明显的渐层背景、增强玻璃质感和更强层次感。":
     "Use a stronger gradient background, richer glass effect, and more visual depth.",
   界面主题: "Theme",
+  界面缩放: "Interface scale",
+  调整桌面主窗口的整体显示比例: "Adjust the overall scale of the desktop window.",
+  缩小界面: "Zoom out",
+  放大界面: "Zoom in",
+  界面缩放比例: "Interface scale",
+  恢复默认缩放: "Reset scale",
   "选择您喜爱的配色方案，适配不同工作心情":
     "Choose your preferred color theme for different moods.",
   企业蓝: "Enterprise Blue",
@@ -1473,6 +1479,18 @@ export const EN_MESSAGES: MessageCatalog = {
   "第一步：确认服务已连接": "Step 1: Confirm the service is connected",
   "先确认 CodexManager 本地服务可用，再写 Codex 配置。":
     "Confirm the CodexManager local service is available before editing Codex configuration.",
+  "同步模型目录到 Codex 配置": "Sync model catalog to Codex configuration",
+  "同步路由提供方到 Codex 配置": "Sync route providers to Codex configuration",
+  "模型改动时更新 config.toml 的 model_catalog_json，指向本地网关目录。":
+    "When models change, update `model_catalog_json` in `config.toml` to point to the local gateway catalog.",
+  "模型改动时更新 config.toml 的 model_provider 为本地网关，关闭后保留自定义提供方。":
+    "When models change, set `model_provider` in `config.toml` to the local gateway; when disabled, custom providers are kept.",
+  "上游协议": "Upstream protocol",
+  "透传（不转换，直连上游）": "Passthrough (no conversion, direct to upstream)",
+  "Chat Completions（通过 Chat Completions 桥接）":
+    "Chat Completions (via Chat Completions bridge)",
+  "选择 Chat Completions 可将 Responses 请求桥接到仅支持 Chat Completions 的上游。":
+    "Selecting Chat Completions bridges Responses requests to upstreams that only support Chat Completions.",
   "顶部或设置页显示“服务已连接”。":
     "The header or Settings page should show Service Connected.",
   "默认网关地址是 `http://localhost:48760/v1`。":

@@ -2958,3 +2958,36 @@ fn account_write_helpers_use_primary_key_indexes() {
         rusqlite::params![2_i64, "acc-a"],
     );
 }
+
+#[test]
+fn subject_identity_lookup_separates_accounts_with_shared_workspace() {
+    let storage = Storage::open_in_memory().expect("open");
+    storage.init().expect("init");
+    let now = now_ts();
+    let mut first = sample_account("user-a::cgpt=team|ws=team", "active", now);
+    first.chatgpt_account_id = Some("team".to_string());
+    first.workspace_id = Some("team".to_string());
+    let mut second = sample_account("user-b::cgpt=team|ws=team", "active", now);
+    second.chatgpt_account_id = Some("team".to_string());
+    second.workspace_id = Some("team".to_string());
+    storage.insert_account(&first).expect("insert first");
+    storage.insert_account(&second).expect("insert second");
+    storage
+        .update_account_subject_identity(&first.id, "user-a")
+        .expect("set first subject");
+    storage
+        .update_account_subject_identity(&second.id, "user-b")
+        .expect("set second subject");
+
+    let first_matches = storage
+        .list_account_workspace_identities_for_subject("user-a")
+        .expect("find first subject");
+    let second_matches = storage
+        .list_account_workspace_identities_for_subject("user-b")
+        .expect("find second subject");
+
+    assert_eq!(first_matches.len(), 1);
+    assert_eq!(first_matches[0].id, first.id);
+    assert_eq!(second_matches.len(), 1);
+    assert_eq!(second_matches[0].id, second.id);
+}

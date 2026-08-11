@@ -1,7 +1,9 @@
 use crate::commands::settings::sync_window_runtime_state_from_settings;
 
 use super::state::TRAY_AVAILABLE;
-use super::window::{navigate_main_window_to_startup_app, request_show_main_window};
+use super::window::{
+    initialize_main_window, navigate_main_window_to_startup_app, request_show_main_window,
+};
 
 #[cfg(debug_assertions)]
 const DEV_SERVER_STARTUP_URL: &str = "http://127.0.0.1:3005/startup.html";
@@ -36,8 +38,15 @@ pub(crate) fn sync_startup_window_state() {
 pub(crate) fn schedule_startup_main_window(app: &tauri::AppHandle) {
     let tray_available = TRAY_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed);
     let configured = codexmanager_service::current_show_main_window_on_startup_setting();
-    if !should_show_main_window_on_startup(configured, tray_available) {
-        log::info!("startup main window remains hidden by app setting");
+    if startup_main_window_action(configured, tray_available)
+        == StartupMainWindowAction::InitializeHidden
+    {
+        log::info!("startup main window remains hidden by app setting while initializing");
+        if !initialize_main_window(app) {
+            log::warn!("startup main window failed to initialize in the background");
+            return;
+        }
+        schedule_startup_app_navigation(app.clone());
         return;
     }
 
@@ -47,13 +56,31 @@ pub(crate) fn schedule_startup_main_window(app: &tauri::AppHandle) {
             log::warn!("startup show main window request failed: {}", err);
             return;
         }
-        wait_for_startup_webview_content();
-        navigate_main_window_to_startup_app_when_ready(&app);
+        wait_for_startup_app_navigation(&app);
     });
 }
 
-fn should_show_main_window_on_startup(configured: bool, tray_available: bool) -> bool {
-    configured || !tray_available
+fn schedule_startup_app_navigation(app: tauri::AppHandle) {
+    std::thread::spawn(move || wait_for_startup_app_navigation(&app));
+}
+
+fn wait_for_startup_app_navigation(app: &tauri::AppHandle) {
+    wait_for_startup_webview_content();
+    navigate_main_window_to_startup_app_when_ready(app);
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StartupMainWindowAction {
+    InitializeHidden,
+    Show,
+}
+
+fn startup_main_window_action(configured: bool, tray_available: bool) -> StartupMainWindowAction {
+    if configured || !tray_available {
+        StartupMainWindowAction::Show
+    } else {
+        StartupMainWindowAction::InitializeHidden
+    }
 }
 
 fn navigate_main_window_to_startup_app_when_ready(app: &tauri::AppHandle) {
@@ -117,16 +144,25 @@ fn wait_for_startup_webview_content() {}
 
 #[cfg(test)]
 mod tests {
-    use super::should_show_main_window_on_startup;
+    use super::{startup_main_window_action, StartupMainWindowAction};
 
     #[test]
     fn startup_window_respects_setting_when_tray_is_available() {
-        assert!(should_show_main_window_on_startup(true, true));
-        assert!(!should_show_main_window_on_startup(false, true));
+        assert_eq!(
+            startup_main_window_action(true, true),
+            StartupMainWindowAction::Show
+        );
+        assert_eq!(
+            startup_main_window_action(false, true),
+            StartupMainWindowAction::InitializeHidden
+        );
     }
 
     #[test]
     fn startup_window_is_shown_when_tray_is_unavailable() {
-        assert!(should_show_main_window_on_startup(false, false));
+        assert_eq!(
+            startup_main_window_action(false, false),
+            StartupMainWindowAction::Show
+        );
     }
 }

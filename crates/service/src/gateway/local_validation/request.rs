@@ -113,11 +113,50 @@ fn apply_model_instructions_policy_for_rotation(
     if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
         && !crate::distribution_enabled_for_storage(storage)
     {
-        // Pure account rotation follows the official OpenAI catalog. Outside distribution mode,
-        // local V2 visibility and instruction settings must not block or rewrite official models.
+        // 纯账号池轮换遵循官方目录：非分发模式下本地 V2 可见性与 instructions 设置
+        // 不得阻断或改写官方模型。
         return Ok(body);
     }
     apply_model_instructions_policy(storage, model_slug, body, protocol)
+}
+
+fn apply_model_fast_policy(
+    storage: &codexmanager_core::storage::Storage,
+    rotation_strategy: &str,
+    model_slug: Option<&str>,
+    body: Vec<u8>,
+    client_has_service_tier: bool,
+) -> Result<(Vec<u8>, bool), LocalValidationError> {
+    let Some(model_slug) = model_slug.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok((body, false));
+    };
+    let Some(model) = storage.get_enabled_model_v2(model_slug).map_err(|err| {
+        LocalValidationError::new(500, format!("model_catalog_v2_read_failed: {err}"))
+    })?
+    else {
+        // 模型不在本地受管目录：非分发纯账号池遵循官方目录直通（不拦截、不改写），
+        // 其余场景（分发/聚合/混合）保持 404 model_not_found。
+        if rotation_strategy == crate::apikey_profile::ROTATION_ACCOUNT
+            && !crate::distribution_enabled_for_storage(storage)
+        {
+            return Ok((body, false));
+        }
+        return Err(LocalValidationError::new(
+            404,
+            format!("model_not_found: {model_slug}"),
+        ));
+    };
+    crate::models_v2::fast_policy::apply(body, model.fast_policy, client_has_service_tier).map_err(
+        |_| {
+            LocalValidationError::new(
+                400,
+                crate::gateway::bilingual_error(
+                    format!("模型 {model_slug} 不允许 Fast 请求"),
+                    format!("model {model_slug} does not allow Fast requests"),
+                ),
+            )
+        },
+    )
 }
 
 fn is_removed_openai_compat_request_path(normalized_path: &str) -> bool {
@@ -1931,7 +1970,7 @@ pub(super) fn build_local_validation_result(
             model_for_log,
             reasoning_for_log,
             service_tier_for_log,
-            effective_service_tier_for_log,
+            _effective_service_tier_for_log,
             has_prompt_cache_key,
             request_shape,
         ) = apply_passthrough_request_overrides(
@@ -1953,11 +1992,6 @@ pub(super) fn build_local_validation_result(
             reasoning_for_log.as_deref(),
             api_key.reasoning_effort.as_deref(),
         );
-        let service_tier_source_for_log = resolve_service_tier_source_for_log(
-            service_tier_for_log.as_deref(),
-            effective_service_tier_for_log.as_deref(),
-            api_key.service_tier.as_deref(),
-        );
         rewritten_body = apply_model_instructions_policy_for_rotation(
             &storage,
             api_key.rotation_strategy.as_str(),
@@ -1965,6 +1999,28 @@ pub(super) fn build_local_validation_result(
             rewritten_body,
             instruction_protocol_for_passthrough(effective_protocol_type),
         )?;
+        let (next_body, fast_policy_applied) = apply_model_fast_policy(
+            &storage,
+            api_key.rotation_strategy.as_str(),
+            model_for_log.as_deref(),
+            rewritten_body,
+            initial_service_tier_diagnostic.has_field,
+        )?;
+        rewritten_body = next_body;
+        let effective_service_tier_for_log =
+            super::super::parse_request_json_value(&rewritten_body)
+                .as_ref()
+                .map(super::super::parse_request_metadata_from_value)
+                .and_then(|metadata| metadata.service_tier);
+        let service_tier_source_for_log = if fast_policy_applied {
+            Some("model_policy".to_string())
+        } else {
+            resolve_service_tier_source_for_log(
+                service_tier_for_log.as_deref(),
+                effective_service_tier_for_log.as_deref(),
+                api_key.service_tier.as_deref(),
+            )
+        };
         let mut rewritten_body_value_for_validation = None;
         if is_non_native_openai_responses_api_request(
             effective_protocol_type,
@@ -2055,6 +2111,14 @@ pub(super) fn build_local_validation_result(
         passthrough_body,
         instruction_protocol_for_passthrough(effective_protocol_type),
     )?;
+    passthrough_body = apply_model_fast_policy(
+        &storage,
+        api_key.rotation_strategy.as_str(),
+        passthrough_model_for_policy,
+        passthrough_body,
+        initial_service_tier_diagnostic.has_field,
+    )?
+    .0;
     let mut passthrough_body_value_for_validation = None;
     if is_non_native_openai_responses_api_request(
         effective_protocol_type,
@@ -2301,6 +2365,16 @@ pub(super) fn build_local_validation_result(
             allow_codex_compat_rewrite,
         )
     };
+    body =
+        super::super::align_existing_prompt_cache_key_with_native_anchor(body, &incoming_headers);
+    let (next_body, fast_policy_applied) = apply_model_fast_policy(
+        &storage,
+        api_key.rotation_strategy.as_str(),
+        instruction_model,
+        body,
+        initial_service_tier_diagnostic.has_field,
+    )?;
+    body = next_body;
     if should_normalize_compat_service_tier {
         body = normalize_compat_service_tier_for_codex_backend(body);
     }
@@ -2334,11 +2408,15 @@ pub(super) fn build_local_validation_result(
     );
     let service_tier_for_log = client_request_meta.service_tier;
     let effective_service_tier_for_log = request_meta.service_tier;
-    let service_tier_source_for_log = resolve_service_tier_source_for_log(
-        service_tier_for_log.as_deref(),
-        effective_service_tier_for_log.as_deref(),
-        api_key.service_tier.as_deref(),
-    );
+    let service_tier_source_for_log = if fast_policy_applied {
+        Some("model_policy".to_string())
+    } else {
+        resolve_service_tier_source_for_log(
+            service_tier_for_log.as_deref(),
+            effective_service_tier_for_log.as_deref(),
+            api_key.service_tier.as_deref(),
+        )
+    };
     let is_stream = resolve_client_is_stream(
         effective_protocol_type,
         logical_path.as_str(),

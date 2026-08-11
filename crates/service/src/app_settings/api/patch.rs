@@ -18,7 +18,7 @@ use super::{
     set_keep_window_ui_mounted_setting, set_lightweight_mode_on_close_to_tray_setting,
     set_saved_service_addr, set_service_bind_mode, set_show_main_window_on_startup_setting,
     set_ui_appearance_preset, set_ui_locale, set_ui_low_transparency_enabled, set_ui_theme,
-    set_update_auto_check_enabled, BackgroundTasksInput, QuotaGuardInput,
+    set_ui_zoom_factor, set_update_auto_check_enabled, BackgroundTasksInput, QuotaGuardInput,
     APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,
     APP_SETTING_PLUGIN_MARKET_MODE_KEY, APP_SETTING_PLUGIN_MARKET_SOURCE_URL_KEY,
 };
@@ -34,6 +34,7 @@ pub(super) struct AppSettingsPatch {
     lightweight_mode_on_close_to_tray: Option<bool>,
     codex_cli_guide_dismissed: Option<bool>,
     low_transparency: Option<bool>,
+    zoom_factor: Option<f64>,
     theme: Option<String>,
     appearance_preset: Option<String>,
     locale: Option<String>,
@@ -124,6 +125,9 @@ pub(super) fn apply_app_settings_patch(patch: AppSettingsPatch) -> Result<(), St
     }
     if let Some(enabled) = patch.low_transparency {
         set_ui_low_transparency_enabled(enabled)?;
+    }
+    if let Some(zoom_factor) = patch.zoom_factor {
+        let _ = set_ui_zoom_factor(zoom_factor)?;
     }
     if let Some(theme) = patch.theme {
         let _ = set_ui_theme(Some(&theme))?;

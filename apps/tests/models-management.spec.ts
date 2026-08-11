@@ -176,6 +176,7 @@ function builtinModel(
         },
     instructionsMode: "passthrough",
     instructionsText: null,
+    fastPolicy: "passthrough",
     builtinRevision: isImageModel ? 7 : slug.startsWith("gpt-5.6") ? 7 : 2,
     userEdited: false,
     price,
@@ -1080,6 +1081,9 @@ test("编辑器不依赖后续动画帧即可载入目标模型", async ({ page 
   );
   await expect(page.getByLabel("默认推理强度")).toHaveValue("medium");
   await expect(page.getByRole("combobox", { name: "可见性" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Fast 策略" })).toContainText(
+    "透传（保留 service_tier）",
+  );
 });
 
 test("长路由来源不会覆盖相邻的模型和批量路由字段", async ({ page }) => {
@@ -1316,6 +1320,8 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
   await page.getByLabel("模型标识（Slug）").fill("my-custom-model");
   await page.getByLabel("显示名称").fill("My Custom Model");
   await page.getByLabel("描述").fill("local managed model");
+  await page.getByRole("combobox", { name: "Fast 策略" }).click();
+  await page.getByRole("option", { name: "强制设置 priority（Fast）" }).click();
 
   await page.getByRole("tab", { name: "价格" }).click();
   await page.locator("#price-input").fill("2.5");
@@ -1348,6 +1354,7 @@ test("模型目录 V2 完成本地管理、原子保存和导入", async ({ page
   const atomicSave = state.upserts[0];
   expect(atomicSave.previousSlug).toBeNull();
   const savedModel = atomicSave.model as JsonObject;
+  expect(savedModel.fastPolicy).toBe("force");
   expect(savedModel.price).toEqual({
     priceStatus: "custom",
     priceSource: "local-ui",

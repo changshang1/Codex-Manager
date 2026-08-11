@@ -1,6 +1,7 @@
 export type ManagedModelOriginV2 = "builtin" | "custom";
 export type ModelPriceStatusV2 = "official" | "estimated" | "custom" | "missing";
 export type ModelInstructionsModeV2 = "passthrough" | "fallback" | "override";
+export type ModelFastPolicyV2 = "passthrough" | "filter" | "force" | "block";
 export type ModelVisibilityV2 = "list" | "hide";
 export type ModelRouteSourceKindV2 = "account_pool" | "aggregate_api";
 export type ModelRouteBatchModeV2 = "merge" | "replace";
@@ -74,6 +75,7 @@ export interface ManagedModelV2 {
   capabilities: Record<string, unknown>;
   instructionsMode: ModelInstructionsModeV2;
   instructionsText: string | null;
+  fastPolicy: ModelFastPolicyV2;
   builtinRevision: number | null;
   userEdited: boolean;
   price: ModelPriceV2;

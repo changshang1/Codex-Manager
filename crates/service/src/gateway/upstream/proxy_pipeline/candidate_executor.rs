@@ -160,6 +160,10 @@ fn should_force_strip_after_anthropic_challenge(
         && is_challenge_failover_error(attempt_trace.last_attempt_error.as_deref())
 }
 
+fn should_retry_same_account_after_failover(retry_count: u8) -> bool {
+    retry_count == 0
+}
+
 fn should_failover_terminal_gateway_error(
     context: &GatewayUpstreamExecutionContext<'_>,
     account_id: &str,
@@ -378,7 +382,8 @@ pub(in super::super) fn execute_candidate_sequence(
 
         let mut inflight_guard = Some(super::super::super::acquire_account_inflight(&account.id));
         let mut attempt_trace = CandidateAttemptTrace::default();
-        let decision = run_candidate_attempt(CandidateAttemptParams {
+        let mut same_account_retry_count = 0u8;
+        let mut decision = run_candidate_attempt(CandidateAttemptParams {
             storage,
             method,
             request_ctx,
@@ -398,6 +403,47 @@ pub(in super::super) fn execute_candidate_sequence(
             setup,
             trace: &mut attempt_trace,
         });
+
+        // A transient upstream error gets one retry on the same account. If that
+        // retry also fails, the normal candidate failover path selects the next
+        // account instead of repeatedly hammering the current one.
+        if matches!(decision, CandidateUpstreamDecision::Failover)
+            && should_retry_same_account_after_failover(same_account_retry_count)
+        {
+            same_account_retry_count += 1;
+            log::warn!(
+                "event=gateway_same_account_retry trace_id={} account_id={} retry={} ",
+                trace_id,
+                account.id,
+                same_account_retry_count
+            );
+            attempt_trace = CandidateAttemptTrace::default();
+            let request_ref = request
+                .as_ref()
+                .ok_or_else(|| "request already consumed before same-account retry".to_string())?;
+            let retry_request_ctx =
+                UpstreamRequestContext::from_request(request_ref, context.protocol_type());
+            decision = run_candidate_attempt(CandidateAttemptParams {
+                storage,
+                method,
+                request_ctx: retry_request_ctx,
+                incoming_headers: &attempt_headers,
+                body: &body_for_attempt,
+                upstream_is_stream,
+                path,
+                request_deadline,
+                account: &account,
+                token: &mut token,
+                strip_session_affinity,
+                debug,
+                allow_openai_fallback: attempt_allow_openai_fallback,
+                disable_challenge_stateless_retry,
+                has_more_candidates: context.has_more_candidates(idx),
+                context,
+                setup,
+                trace: &mut attempt_trace,
+            });
+        }
 
         match decision {
             CandidateUpstreamDecision::Failover => {

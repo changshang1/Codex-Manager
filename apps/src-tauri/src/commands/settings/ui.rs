@@ -1,4 +1,5 @@
 use crate::app_storage::apply_runtime_storage_env;
+use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::app_shell::sync_window_ui_mount_state;
@@ -49,6 +50,21 @@ fn set_auto_start_enabled(app: &tauri::AppHandle, enabled: bool) -> Result<(), S
             .map_err(|err| format!("disable autostart failed: {err}"))?;
     }
     Ok(())
+}
+
+fn sync_main_window_zoom(app: &tauri::AppHandle, settings: &serde_json::Value) {
+    let Some(zoom_factor) = settings
+        .get("zoomFactor")
+        .and_then(serde_json::Value::as_f64)
+    else {
+        return;
+    };
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Err(err) = window.set_zoom(zoom_factor) {
+        log::warn!("apply main window zoom failed: {err}");
+    }
 }
 
 pub(crate) fn sync_auto_start_runtime_state_from_settings(
@@ -134,6 +150,7 @@ pub async fn app_settings_get(app: tauri::AppHandle) -> Result<serde_json::Value
     .await
     .map_err(|err| format!("app_settings_get task failed: {err}"))??;
     sync_window_runtime_state_from_settings(&mut settings);
+    sync_main_window_zoom(&app, &settings);
     // The tray preview also loads settings during bootstrap. Mount-state changes
     // here would close a newly opened preview when resource retention is off.
     annotate_auto_start_settings(&app, &mut settings);
@@ -170,6 +187,7 @@ pub async fn app_settings_set(
     .await
     .map_err(|err| format!("app_settings_set task failed: {err}"))??;
     sync_window_runtime_state_from_settings(&mut settings);
+    sync_main_window_zoom(&app, &settings);
     sync_window_ui_mount_state(&app);
     annotate_auto_start_settings(&app, &mut settings);
     Ok(settings)

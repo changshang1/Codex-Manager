@@ -145,6 +145,84 @@ fn auth_account(captured: &CapturedUpstreamRequest) -> &str {
 }
 
 #[test]
+fn gateway_native_conversation_aligns_account_route_and_upstream_prompt_cache_key() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-gateway-native-conversation-cache-alignment");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let _route_guard = EnvGuard::set("CODEXMANAGER_ROUTE_STRATEGY", "balanced");
+
+    let (upstream_addr, upstream_rx, upstream_join) =
+        start_mock_upstream_sequence(vec![(200, ok_response("resp_native_conversation"))]);
+    let upstream_base = format!("http://{upstream_addr}/backend-api/codex");
+    let _upstream_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_BASE_URL", &upstream_base);
+
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+    let platform_key = "pk_native_conversation_cache_alignment";
+    let key_hash = seed_openai_compat_gateway(
+        &storage,
+        platform_key,
+        "gk_native_conversation_cache_alignment",
+    );
+    let native_conversation = "native-conversation-1";
+    let now = now_ts();
+    storage
+        .upsert_conversation_binding(&ConversationBinding {
+            platform_key_hash: key_hash,
+            conversation_id: native_conversation.to_string(),
+            account_id: "acc_prompt_cache_b".to_string(),
+            thread_epoch: 1,
+            thread_anchor: native_conversation.to_string(),
+            status: "active".to_string(),
+            last_model: Some(MODEL.to_string()),
+            last_switch_reason: None,
+            created_at: now,
+            updated_at: now,
+            last_used_at: now,
+        })
+        .expect("seed native conversation binding");
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    post_responses_with_headers(
+        &server.addr,
+        platform_key,
+        serde_json::json!({
+            "model": MODEL,
+            "input": "native conversation wins",
+            "stream": false,
+            "prompt_cache_key": "conflicting-client-thread"
+        }),
+        &[
+            ("conversation_id", native_conversation),
+            ("x-codex-turn-state", "turn-state-1"),
+        ],
+    );
+    server.join();
+
+    let captured = upstream_rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("receive upstream request");
+    upstream_join.join().expect("join mock upstream");
+    assert_eq!(auth_account(&captured), "acc_prompt_cache_b");
+    assert_eq!(
+        captured
+            .headers
+            .get("x-codex-turn-state")
+            .map(String::as_str),
+        Some("turn-state-1")
+    );
+
+    let body: serde_json::Value = serde_json::from_slice(&decode_upstream_request_body(&captured))
+        .expect("parse upstream body");
+    assert_eq!(
+        body.get("prompt_cache_key")
+            .and_then(serde_json::Value::as_str),
+        Some(native_conversation)
+    );
+}
+
+#[test]
 fn gateway_prompt_cache_binding_reuses_account_for_previous_response_chain() {
     let _lock = test_env_guard();
     let dir = new_test_dir("codexmanager-gateway-pck-reuse-chain");

@@ -910,6 +910,7 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
             "lightweightModeOnCloseToTray": true,
             "codexCliGuideDismissed": true,
             "lowTransparency": true,
+            "zoomFactor": 0.9,
             "theme": "dark",
             "appearancePreset": "classic",
             "serviceAddr": "127.0.0.1:4999",
@@ -986,6 +987,10 @@ fn app_settings_set_persists_snapshot_and_password_hash() {
                 .get("appearancePreset")
                 .and_then(|value| value.as_str()),
             Some("classic")
+        );
+        assert_eq!(
+            snapshot.get("zoomFactor").and_then(|value| value.as_f64()),
+            Some(0.9)
         );
         assert_eq!(
             snapshot

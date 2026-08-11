@@ -35,6 +35,11 @@ struct UsageRefreshCompletedPayload {
     completed_at: i64,
 }
 
+fn desktop_window_state_flags() -> tauri_plugin_window_state::StateFlags {
+    tauri_plugin_window_state::StateFlags::all()
+        .difference(tauri_plugin_window_state::StateFlags::VISIBLE)
+}
+
 #[cfg(target_os = "linux")]
 fn is_known_ayatana_deprecation_notice(domain: Option<&str>, message: &str) -> bool {
     domain == Some(AYATANA_APPINDICATOR_LOG_DOMAIN)
@@ -80,7 +85,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(
             tauri_plugin_window_state::Builder::new()
-                .with_state_flags(tauri_plugin_window_state::StateFlags::all())
+                .with_state_flags(desktop_window_state_flags())
                 .build(),
         )
         .plugin(

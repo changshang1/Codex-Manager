@@ -641,6 +641,12 @@ export const KO_MESSAGES: MessageCatalog = {
   默认: "기본",
   渐变版本: "그라데이션 버전",
   界面主题: "인터페이스 테마",
+  界面缩放: "인터페이스 배율",
+  调整桌面主窗口的整体显示比例: "데스크톱 기본 창의 전체 배율을 조정합니다.",
+  缩小界面: "축소",
+  放大界面: "확대",
+  界面缩放比例: "인터페이스 배율",
+  恢复默认缩放: "배율 초기화",
   网关策略: "게이트웨이 정책",
   后台任务线程: "백그라운드 작업 스레드",
   "Worker 并发参数": "Worker 동시성 설정",
@@ -1446,6 +1452,18 @@ export const KO_MESSAGES: MessageCatalog = {
   "第一步：确认服务已连接": "1단계: 서비스 연결 확인",
   "先确认 CodexManager 本地服务可用，再写 Codex 配置。":
     "Codex 설정을 작성하기 전에 CodexManager 로컬 서비스가 사용 가능한지 확인하세요.",
+  "同步模型目录到 Codex 配置": "모델 카탈로그를 Codex 구성에 동기화",
+  "同步路由提供方到 Codex 配置": "라우트 제공자를 Codex 구성에 동기화",
+  "模型改动时更新 config.toml 的 model_catalog_json，指向本地网关目录。":
+    "모델 변경 시 config.toml의 model_catalog_json을 로컬 게이트웨이 카탈로그를 가리키도록 업데이트합니다.",
+  "模型改动时更新 config.toml 的 model_provider 为本地网关，关闭后保留自定义提供方。":
+    "모델 변경 시 config.toml의 model_provider를 로컬 게이트웨이로 설정합니다. 끄면 사용자 지정 제공자가 유지됩니다.",
+  "上游协议": "업스트림 프로토콜",
+  "透传（不转换，直连上游）": "통과 (변환 없이 업스트림 직접 연결)",
+  "Chat Completions（通过 Chat Completions 桥接）":
+    "Chat Completions (Chat Completions 브리지 사용)",
+  "选择 Chat Completions 可将 Responses 请求桥接到仅支持 Chat Completions 的上游。":
+    "Chat Completions를 선택하면 Responses 요청이 Chat Completions만 지원하는 업스트림으로 브리지됩니다.",
   "顶部或设置页显示“服务已连接”。":
     "상단 또는 설정 페이지에 “서비스 연결됨”이 표시되어야 합니다.",
   "默认网关地址是 `http://localhost:48760/v1`。":

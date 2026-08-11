@@ -395,7 +395,7 @@ jobs:
       - name: Publish docker images to GHCR
         if: ${{ env.RELEASE_PUBLISH_CONTAINERS != 'false' }}
         shell: bash
-        run: bash scripts/release/publish-ghcr-images.sh release-assets "${{ github.repository_owner }}" "${{ env.RELEASE_TAG }}"
+        run: bash scripts/release/publish-ghcr-images.sh release-assets "${{ github.repository_owner }}" "${{ env.RELEASE_TAG }}" "${{ env.RELEASE_PRERELEASE }}"
 
       - name: List release assets
         run: find release-assets -type f | sort

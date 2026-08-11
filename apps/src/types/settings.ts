@@ -58,6 +58,7 @@ export interface AppSettings extends GatewayTransportValues {
   closeToTraySupported: boolean;
   keepWindowUiMounted: boolean;
   lowTransparency: boolean;
+  zoomFactor: number;
   lightweightModeOnCloseToTray: boolean;
   codexCliGuideDismissed: boolean;
   webAccessPasswordConfigured: boolean;

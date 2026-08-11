@@ -65,21 +65,44 @@
 
 ## 赞助商
 
-本项目现开放赞助合作，费用为 **500 元/月**。赞助方可在 README 及项目内的赞助展示区域展示品牌 Logo、简介及官方链接；具体文案、展示位置、展示周期与上线时间由双方协商确认。为保持项目调性与用户体验，合作内容需与开发者或 AI 工具生态相关，并符合相关法律法规。
+本项目现开放赞助合作，价格可谈。赞助方可在 README 及项目内的赞助展示区域展示品牌 Logo、简介及官方链接；具体文案、展示位置、展示周期与上线时间由双方协商确认。为保持项目调性与用户体验，合作内容需与开发者或 AI 工具生态相关，并符合相关法律法规。
 
-**合作洽谈：**可通过微信、Telegram 或邮箱 `18272669457@163.com` 联系，添加好友时请备注“赞助合作”。
+** 合作洽谈：** 可通过微信、Telegram 或邮箱 `18272669457@163.com` 联系，添加好友时请备注“赞助合作”。
 
 感谢以下朋友与伙伴对 CodexManager 的支持。
 
 <table>
   <tr>
     <td align="center" valign="middle" width="180">
-      <a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager">
+      <a href="https://api.fenno.ai/s/4ADZ">
+        <img src="assets/images/sponsors/fennoai.jpg" alt="FennoAI" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong><a href="https://api.fenno.ai/s/4ADZ">FennoAI</a></strong> 面向企业研发团队和开发者提供高稳定、高性能的 API 中转服务，兼容 OpenAI 与 Anthropic 协议，可无缝接入 Codex、Claude Code、OpenCode 等主流 AI 编程工具。平台具备企业级稳定性，可支撑千亿 Token/日的调用规模，并支持境内外主体公对公结算及开票。Codex-Manager 用户通过<a href="https://api.fenno.ai/s/4ADZ">专属链接</a>购买订阅，仅需 1.99 美元即可获得价值 50 美元的 Coding Plan 额度；邀请好友购买最高可获得 20% 返佣，邀请越多，奖励越高。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="https://s.qiniu.com/eiaQrq">
+        <img src="assets/images/sponsors/qiniuyun.jpg" alt="七牛云 AI" width="120" />
+      </a>
+    </td>
+    <td valign="top">
+      <strong><a href="https://s.qiniu.com/eiaQrq">七牛云 AI</a></strong> 是七牛云（02567.HK）旗下企业级大模型 MaaS 平台，一站式调用全球 150+ 主流模型，兼容全球主流模型厂商协议，覆盖文本、图像、音频、视频、文件处理等全模态处理能力，服务超过 169 万企业及开发者用户。七牛云 AI 为 Codex-Manager 用户提供专属福利：通过<a href="https://s.qiniu.com/eiaQrq">专属链接</a>注册，企业用户免费领取 1200 万 Token，开发者免费领取 300 万 Token。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="middle" width="180">
+      <a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=logo_brand_home_v3">
         <img src="assets/images/sponsors/aixiamo.jpg" alt="AI夏末 AIXiamo" width="120" />
       </a>
     </td>
     <td valign="top">
-      <strong><a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_owner">AIXiamo（独立 AI 订阅服务）</a></strong>：提供 ChatGPT Plus / Pro 国内充值；高频 Codex、深度研究和长任务用户可先<a href="https://www.aixiamo.com/tools/chatgpt-pro-plan-calculator?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_calculator">比较 Pro 5x / 20x 并用用量选择器判断档位</a>。也覆盖 Claude Max、Google AI Pro（Gemini）和 SuperGrok；支持支付宝，无需海外银行卡，订单状态可查询。
+      <strong><a href="https://www.aixiamo.com/?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=brand_home_v3">AIXiamo 官网｜国内 ChatGPT Plus / Pro 本人账号正规充值</a></strong><br />
+      <strong>Codex 额度不够，Plus 还是 Pro？</strong> 日常使用和普通 Codex 选 <a href="https://www.aixiamo.com/chatgpt-plus-domestic-recharge?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=plus_owner_v3">Plus</a>；经常触顶或高频长任务，再比较 <a href="https://www.aixiamo.com/chatgpt-pro?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=pro_owner_v3">Pro 5x / 20x</a>。<br />
+      支持支付宝、无需海外银行卡；不索取密码、验证码或恢复码，订单可查、中文售后，充值不成功经核验后全额退款。持续运营三年多，线上线下累计服务数万名用户；另有 Claude Pro / Max、Gemini（Google AI Pro）、Grok / SuperGrok 等主流 AI 会员。<br />
+      欢迎企业采购对接；<a href="https://www.aixiamo.com/articles/aixiamo-invoice-application-notice-2026?utm_source=github&utm_medium=sponsor&utm_campaign=codex_manager&utm_content=invoice_notice_v3">已完成订单支持申请开具发票，请先联系售后确认</a>。
     </td>
   </tr>
   <tr>

@@ -815,7 +815,6 @@ body.low-transparency .command-center-primary-action {
 [data-appearance='modern'] [data-slot="dropdown-menu-content"],
 [data-appearance='modern'] [data-slot="dropdown-menu-sub-content"],
 [data-appearance='modern'] [data-slot="select-content"],
-[data-appearance='modern'] [data-slot="chart-tooltip"],
 [data-appearance='modern'] [data-slot="tooltip-content"],
 [data-appearance='modern'] .sonner-toast,
 [data-appearance='modern'] .table-sticky-action-head,
@@ -826,6 +825,17 @@ body.low-transparency .command-center-primary-action {
   -webkit-backdrop-filter: blur(18px);
   border-color: var(--glass-border);
   box-shadow: var(--glass-shadow);
+}
+
+/* Moving Recharts tooltips must not use backdrop blur. WebView2 can retain
+   previous composited frames while the transformed tooltip follows the cursor. */
+[data-appearance='modern'] [data-slot="chart-tooltip"] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: color-mix(in srgb, var(--popover) 96%, var(--background));
+  border-color: var(--glass-border);
+  box-shadow: 0 12px 28px -20px rgb(0 0 0 / 0.52);
+  contain: paint;
 }
 
 [data-appearance='modern'] [data-slot="card"],

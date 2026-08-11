@@ -947,7 +947,7 @@ fn send_websocket_upstream_request_builds_valid_handshake_and_stops_on_done() {
 }
 
 #[test]
-fn send_websocket_upstream_request_uses_configured_proxy() {
+fn send_websocket_upstream_request_uses_system_environment_proxy() {
     let _env_lock = crate::test_env_guard();
     let _reload_guard = RuntimeConfigReloadGuard;
     let (target_url, headers_rx, _frame_rx, target_handle) =
@@ -960,8 +960,14 @@ fn send_websocket_upstream_request_uses_configured_proxy() {
         .expect("target has addr")
         .to_string();
     let (proxy_url, connect_rx, proxy_handle) = spawn_http_connect_proxy(target_addr);
-    let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", proxy_url.as_str());
+    let _proxy_guard = EnvGuard::set("CODEXMANAGER_UPSTREAM_PROXY_URL", "");
     let _proxy_list_guard = EnvGuard::set("CODEXMANAGER_PROXY_LIST", "");
+    let _upper_http_proxy_guard = EnvGuard::set("HTTP_PROXY", "");
+    let _http_proxy_guard = EnvGuard::set("http_proxy", proxy_url.as_str());
+    let _all_proxy_guard = EnvGuard::set("all_proxy", "");
+    let _upper_all_proxy_guard = EnvGuard::set("ALL_PROXY", "");
+    let _no_proxy_guard = EnvGuard::set("no_proxy", "");
+    let _upper_no_proxy_guard = EnvGuard::set("NO_PROXY", "");
     crate::gateway::reload_runtime_config_from_env();
 
     let body = Bytes::from(r#"{"model":"codex","input":"hello"}"#);

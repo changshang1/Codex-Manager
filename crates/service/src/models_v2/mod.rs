@@ -1,3 +1,4 @@
+pub(crate) mod fast_policy;
 mod import;
 pub(crate) mod instructions;
 

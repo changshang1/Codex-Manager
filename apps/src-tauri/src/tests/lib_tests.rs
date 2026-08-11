@@ -4,6 +4,7 @@ use crate::app_storage::{
 };
 use crate::commands::service::ensure_bind_target_available;
 use crate::commands::settings::effective_lightweight_mode_on_close_to_tray;
+use crate::desktop_window_state_flags;
 use crate::rpc_client::{normalize_addr, resolve_socket_addrs, rpc_call, rpc_call_with_sockets};
 use std::fs;
 use std::io::{Read, Write};
@@ -53,6 +54,17 @@ fn lightweight_close_to_tray_requires_close_to_tray_mode() {
     assert!(!effective_lightweight_mode_on_close_to_tray(false, true));
     assert!(!effective_lightweight_mode_on_close_to_tray(true, false));
     assert!(effective_lightweight_mode_on_close_to_tray(true, true));
+}
+
+#[test]
+fn startup_visibility_is_not_restored_from_window_state() {
+    let flags = desktop_window_state_flags();
+
+    assert!(!flags.contains(tauri_plugin_window_state::StateFlags::VISIBLE));
+    assert!(flags.contains(tauri_plugin_window_state::StateFlags::POSITION));
+    assert!(flags.contains(tauri_plugin_window_state::StateFlags::SIZE));
+    assert!(flags.contains(tauri_plugin_window_state::StateFlags::MAXIMIZED));
+    assert!(flags.contains(tauri_plugin_window_state::StateFlags::FULLSCREEN));
 }
 
 /// 函数 `rpc_call_tolerates_slow_response`

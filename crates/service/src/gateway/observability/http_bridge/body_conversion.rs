@@ -737,74 +737,71 @@ pub(super) fn convert_chat_completions_body_to_responses(
         return None;
     }
     for choice in choices {
-            let message = choice.get("message")?.as_object()?;
-            if let Some(content) = message.get("content") {
-                collect_chat_completion_message_text(content, &mut output_text);
+        let message = choice.get("message")?.as_object()?;
+        if let Some(content) = message.get("content") {
+            collect_chat_completion_message_text(content, &mut output_text);
+        }
+        if let Some(reasoning) = message
+            .get("reasoning_content")
+            .or_else(|| message.get("reasoning"))
+            .and_then(Value::as_str)
+        {
+            if !reasoning_text.is_empty() {
+                reasoning_text.push_str("\n\n");
             }
-            if let Some(reasoning) = message
-                .get("reasoning_content")
-                .or_else(|| message.get("reasoning"))
-                .and_then(Value::as_str)
-            {
-                if !reasoning_text.is_empty() {
-                    reasoning_text.push_str("\n\n");
-                }
-                reasoning_text.push_str(reasoning);
-            }
-            if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
-                for tool_call in tool_calls {
-                    let tool_call = tool_call.as_object()?;
-                    let function = tool_call.get("function").and_then(Value::as_object)?;
-                    let name = function
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty())
-                        ?;
-                    let call_id = tool_call
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        ?
-                        .to_string();
-                    let arguments = function
-                        .get("arguments")
-                        .and_then(Value::as_str)
-                        ?
-                        .to_string();
-                    let is_custom = custom_tool_names.is_some_and(|names| names.contains(name));
-                    if is_custom {
-                        let parsed = serde_json::from_str::<Value>(arguments.as_str()).ok();
-                        let input = match parsed {
-                            Some(Value::Object(map)) if map.len() == 1 => map
-                                .get("input")
-                                .and_then(Value::as_str)
-                                .map(|input| Value::String(input.to_string())),
-                            _ => None,
-                        };
-                        // 畸形 custom 包装：不允许作为空 patch 传给客户端。
-                        let input = input?;
-                        output.push(json!({
-                            "id": call_id,
-                            "type": "custom_tool_call",
-                            "status": "completed",
-                            "call_id": call_id,
-                            "name": name,
-                            "input": input,
-                        }));
-                    } else {
-                        output.push(json!({
-                            "id": call_id,
-                            "type": "function_call",
-                            "status": "completed",
-                            "call_id": call_id,
-                            "name": name,
-                            "arguments": arguments,
-                        }));
-                    }
+            reasoning_text.push_str(reasoning);
+        }
+        if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+            for tool_call in tool_calls {
+                let tool_call = tool_call.as_object()?;
+                let function = tool_call.get("function").and_then(Value::as_object)?;
+                let name = function
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())?;
+                let call_id = tool_call
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())?
+                    .to_string();
+                let arguments = function
+                    .get("arguments")
+                    .and_then(Value::as_str)?
+                    .to_string();
+                let is_custom = custom_tool_names.is_some_and(|names| names.contains(name));
+                if is_custom {
+                    let parsed = serde_json::from_str::<Value>(arguments.as_str()).ok();
+                    let input = match parsed {
+                        Some(Value::Object(map)) if map.len() == 1 => map
+                            .get("input")
+                            .and_then(Value::as_str)
+                            .map(|input| Value::String(input.to_string())),
+                        _ => None,
+                    };
+                    // 畸形 custom 包装：不允许作为空 patch 传给客户端。
+                    let input = input?;
+                    output.push(json!({
+                        "id": call_id,
+                        "type": "custom_tool_call",
+                        "status": "completed",
+                        "call_id": call_id,
+                        "name": name,
+                        "input": input,
+                    }));
+                } else {
+                    output.push(json!({
+                        "id": call_id,
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments,
+                    }));
                 }
             }
+        }
     }
 
     if !reasoning_text.trim().is_empty() {

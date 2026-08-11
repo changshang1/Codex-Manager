@@ -49,7 +49,7 @@ pub use model_billing_v2::{
 };
 pub use model_catalog_v2::{
     ManagedModelBatchStateV2Update, ManagedModelStateV2Update, ManagedModelV2,
-    ManagedModelV2Upsert, ModelCatalogV2Stats, ModelPriceV2, ModelRouteV2,
+    ManagedModelV2Upsert, ModelCatalogV2Stats, ModelFastPolicyV2, ModelPriceV2, ModelRouteV2,
 };
 pub use proxy_profiles::derive_proxy_profile_url_metadata;
 
@@ -623,11 +623,11 @@ pub struct LoginSession {
 }
 
 fn login_session_select_columns() -> &'static str {
-    "login_id, code_verifier, state, status, error, workspace_id, note, tags, created_at, updated_at"
+    "login_id, code_verifier, state, status, error, workspace_id, note, tags, group_name, created_at, updated_at"
 }
 
 fn insert_login_session_sql() -> &'static str {
-    "INSERT INTO login_sessions (login_id, code_verifier, state, status, error, workspace_id, note, tags, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+    "INSERT INTO login_sessions (login_id, code_verifier, state, status, error, workspace_id, note, tags, group_name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
 }
 
 fn login_session_by_id_sql() -> String {
@@ -2349,6 +2349,19 @@ impl Storage {
             include_str!("../../migrations/132_aggregate_api_auto_toggle.sql"),
             |s| s.ensure_aggregate_api_auto_toggle_columns(),
         )?;
+        // 上游新增：128/129/130（纯 SQL 迁移，与本地同数字 migration 按完整字符串并存）
+        self.apply_sql_migration(
+            "128_login_sessions_group_name",
+            include_str!("../../migrations/128_login_sessions_group_name.sql"),
+        )?;
+        self.apply_sql_migration(
+            "129_model_fast_policy",
+            include_str!("../../migrations/129_model_fast_policy.sql"),
+        )?;
+        self.apply_sql_migration(
+            "130_accounts_subject_identity",
+            include_str!("../../migrations/130_accounts_subject_identity.sql"),
+        )?;
         self.apply_sql_or_compat_migration(
             "133_accounts_warranty_expires_on",
             include_str!("../../migrations/133_accounts_warranty_expires_on.sql"),
@@ -2362,7 +2375,7 @@ impl Storage {
         self.apply_sql_or_compat_migration(
             "135_responses_compatibility",
             include_str!("../../migrations/135_responses_compatibility.sql"),
-            |_s| Ok(()),
+            |s| s.ensure_aggregate_api_response_affinity_table(),
         )?;
         self.apply_sql_or_compat_migration(
             "136_aggregate_api_upstream_wire",
@@ -2508,6 +2521,7 @@ impl Storage {
                 &session.workspace_id,
                 &session.note,
                 &session.tags,
+                &session.group_name,
                 session.created_at,
                 session.updated_at,
             ),
@@ -2540,9 +2554,9 @@ impl Storage {
                 workspace_id: row.get(5)?,
                 note: row.get(6)?,
                 tags: row.get(7)?,
-                group_name: None,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                group_name: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             }))
         } else {
             Ok(None)

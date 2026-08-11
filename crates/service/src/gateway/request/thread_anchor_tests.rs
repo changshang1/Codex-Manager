@@ -1,9 +1,10 @@
 use super::{
-    has_native_thread_anchor, resolve_fallback_thread_anchor,
-    resolve_local_conversation_id_with_sticky_fallback,
+    align_existing_prompt_cache_key_with_native_anchor, has_native_thread_anchor,
+    resolve_fallback_thread_anchor, resolve_local_conversation_id_with_sticky_fallback,
 };
 use axum::http::{HeaderMap, HeaderValue};
 use codexmanager_core::storage::ConversationBinding;
+use serde_json::json;
 
 fn sample_headers(
     conversation_id: Option<&str>,
@@ -72,4 +73,40 @@ fn fallback_thread_anchor_is_suppressed_when_native_anchor_exists() {
         resolve_fallback_thread_anchor(&headers, Some("conversation-1"), Some(&sample_binding()));
 
     assert_eq!(actual, None);
+}
+
+#[test]
+fn native_conversation_replaces_conflicting_prompt_cache_key() {
+    let headers = sample_headers(Some("conversation-1"), None, Some("pk_test"));
+    let body = serde_json::to_vec(&json!({
+        "model": "gpt-5.4",
+        "prompt_cache_key": "client-thread"
+    }))
+    .expect("serialize body");
+
+    let actual = align_existing_prompt_cache_key_with_native_anchor(body, &headers);
+    let payload: serde_json::Value = serde_json::from_slice(&actual).expect("parse body");
+
+    assert_eq!(payload["prompt_cache_key"], "conversation-1");
+}
+
+#[test]
+fn complete_session_turn_anchor_removes_conflicting_prompt_cache_key() {
+    let mut headers = HeaderMap::new();
+    headers.insert("session_id", HeaderValue::from_static("session-1"));
+    headers.insert(
+        "x-codex-turn-state",
+        HeaderValue::from_static("turn-state-1"),
+    );
+    let headers = crate::gateway::IncomingHeaderSnapshot::from_http_headers(&headers);
+    let body = serde_json::to_vec(&json!({
+        "model": "gpt-5.4",
+        "prompt_cache_key": "client-thread"
+    }))
+    .expect("serialize body");
+
+    let actual = align_existing_prompt_cache_key_with_native_anchor(body, &headers);
+    let payload: serde_json::Value = serde_json::from_slice(&actual).expect("parse body");
+
+    assert!(payload.get("prompt_cache_key").is_none());
 }

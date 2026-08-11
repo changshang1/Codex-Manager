@@ -622,6 +622,9 @@ fn desired_model(
             .map(|model| model.instructions_mode.clone())
             .unwrap_or_else(|| "passthrough".to_string()),
         instructions_text: existing.and_then(|model| model.instructions_text.clone()),
+        fast_policy: existing
+            .map(|model| model.fast_policy.clone())
+            .unwrap_or_default(),
         builtin_revision: None,
         user_edited: true,
         price,

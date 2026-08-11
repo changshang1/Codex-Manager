@@ -741,33 +741,15 @@ pub(crate) fn next_account_sort(storage: &codexmanager_core::storage::Storage) -
         .unwrap_or(0)
 }
 
-fn resolve_existing_account_for_login(
+pub(crate) fn resolve_existing_account_for_login(
     storage: &Storage,
+    subject_account_id: &str,
     chatgpt_account_id: Option<&str>,
     workspace_id: Option<&str>,
     fallback_subject_key: Option<&str>,
-    tags: Option<&str>,
 ) -> Result<Option<String>, String> {
-    let has_tags = tags.map(str::trim).is_some_and(|value| !value.is_empty());
-    if !has_tags {
-        return storage
-            .find_account_id_by_identity(fallback_subject_key, chatgpt_account_id, workspace_id)
-            .map_err(|err| err.to_string());
-    }
-
-    let account_ids = [fallback_subject_key]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
     let identities = storage
-        .list_account_workspace_identities_matching_identity(
-            &account_ids,
-            chatgpt_account_id,
-            workspace_id,
-        )
+        .list_account_workspace_identities_for_subject(subject_account_id)
         .map_err(|e| e.to_string())?;
     Ok(pick_existing_account_id_by_identity(
         identities.iter(),
@@ -1389,10 +1371,10 @@ pub(crate) fn complete_login_with_redirect(
         );
         let account_key = resolve_existing_account_for_login(
             &storage,
+            &subject_account_id,
             chatgpt_account_id.as_deref(),
             workspace_id.as_deref(),
             fallback_subject_key.as_deref(),
-            session.tags.as_deref(),
         )?
         .unwrap_or(account_storage_id);
         let now = now_ts();
@@ -1423,6 +1405,9 @@ pub(crate) fn complete_login_with_redirect(
         };
         storage
             .insert_account(&account)
+            .map_err(|err| err.to_string())?;
+        storage
+            .update_account_subject_identity(&account_key, &subject_account_id)
             .map_err(|err| err.to_string())?;
         storage
             .upsert_account_metadata(

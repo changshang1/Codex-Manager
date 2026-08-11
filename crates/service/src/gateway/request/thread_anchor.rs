@@ -37,6 +37,36 @@ pub(crate) fn resolve_fallback_thread_anchor(
     super::conversation_binding::effective_thread_anchor(local_conversation_id, binding)
 }
 
+pub(crate) fn align_existing_prompt_cache_key_with_native_anchor(
+    body: Vec<u8>,
+    headers: &IncomingHeaderSnapshot,
+) -> Vec<u8> {
+    let Ok(mut payload) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return body;
+    };
+    if !object.contains_key("prompt_cache_key") {
+        return body;
+    }
+
+    if let Some(conversation_id) = normalize_anchor(headers.conversation_id()) {
+        object.insert(
+            "prompt_cache_key".to_string(),
+            serde_json::Value::String(conversation_id),
+        );
+    } else if normalize_anchor(headers.session_id()).is_some()
+        && normalize_anchor(headers.turn_state()).is_some()
+    {
+        object.remove("prompt_cache_key");
+    } else {
+        return body;
+    }
+
+    serde_json::to_vec(&payload).unwrap_or(body)
+}
+
 #[cfg(test)]
 #[path = "thread_anchor_tests.rs"]
 mod tests;

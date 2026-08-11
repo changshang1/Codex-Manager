@@ -21,7 +21,7 @@ use super::{
     current_saved_service_addr, current_service_bind_mode, default_gateway_originator,
     default_gateway_user_agent_version, env_override_catalog_value, env_override_reserved_keys,
     env_override_unsupported_keys, normalize_optional_text, normalize_ui_appearance_preset,
-    normalize_ui_locale, normalize_ui_theme, parse_bool_with_default,
+    normalize_ui_locale, normalize_ui_theme, normalize_ui_zoom_factor, parse_bool_with_default,
     residency_requirement_options, save_env_overrides_value, save_persisted_app_setting,
     save_persisted_bool_setting, sync_runtime_settings_from_storage,
     APP_SETTING_AUTHOR_SERVER_RECOMMENDATIONS_KEY, APP_SETTING_AUTHOR_SPONSORS_KEY,
@@ -42,8 +42,8 @@ use super::{
     APP_SETTING_SERVICE_ADDR_KEY, APP_SETTING_SHOW_MAIN_WINDOW_ON_STARTUP_KEY,
     APP_SETTING_UI_APPEARANCE_PRESET_KEY, APP_SETTING_UI_CODEX_CLI_GUIDE_DISMISSED_KEY,
     APP_SETTING_UI_LOCALE_KEY, APP_SETTING_UI_LOW_TRANSPARENCY_KEY, APP_SETTING_UI_THEME_KEY,
-    APP_SETTING_UPDATE_AUTO_CHECK_KEY, SERVICE_BIND_MODE_ALL_INTERFACES,
-    SERVICE_BIND_MODE_LOOPBACK, SERVICE_BIND_MODE_SETTING_KEY,
+    APP_SETTING_UI_ZOOM_FACTOR_KEY, APP_SETTING_UPDATE_AUTO_CHECK_KEY,
+    SERVICE_BIND_MODE_ALL_INTERFACES, SERVICE_BIND_MODE_LOOPBACK, SERVICE_BIND_MODE_SETTING_KEY,
 };
 
 const DEFAULT_FREE_ACCOUNT_MAX_MODEL_OPTIONS: &[&str] = &[
@@ -190,6 +190,12 @@ fn current_app_settings_value_inner(
         false,
     );
     let low_transparency = setting_bool(&settings, APP_SETTING_UI_LOW_TRANSPARENCY_KEY, false);
+    let zoom_factor = normalize_ui_zoom_factor(
+        settings
+            .get(APP_SETTING_UI_ZOOM_FACTOR_KEY)
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or(1.0),
+    );
     let theme = normalize_ui_theme(settings.get(APP_SETTING_UI_THEME_KEY).map(String::as_str));
     let appearance_preset = normalize_ui_appearance_preset(
         settings
@@ -385,6 +391,9 @@ fn current_app_settings_value_inner(
         "envOverrideUnsupportedKeys": env_override_unsupported_keys(),
         "webAccessPasswordConfigured": web_access_password_configured(),
     });
+    if let Some(object) = result.as_object_mut() {
+        object.insert("zoomFactor".to_string(), zoom_factor.into());
+    }
     if let Some(object) = result.as_object_mut() {
         object.insert(
             "keepWindowUiMounted".to_string(),

@@ -38,11 +38,11 @@ pub(super) use super::service::{
 pub(super) use super::store::{save_persisted_app_setting, save_persisted_bool_setting};
 pub(super) use super::ui::{
     normalize_ui_appearance_preset, normalize_ui_locale, normalize_ui_theme,
-    set_auto_start_enabled_setting, set_close_to_tray_on_close_setting,
+    normalize_ui_zoom_factor, set_auto_start_enabled_setting, set_close_to_tray_on_close_setting,
     set_codex_cli_guide_dismissed, set_keep_window_ui_mounted_setting,
     set_lightweight_mode_on_close_to_tray_setting, set_show_main_window_on_startup_setting,
     set_ui_appearance_preset, set_ui_locale, set_ui_low_transparency_enabled, set_ui_theme,
-    set_update_auto_check_enabled,
+    set_ui_zoom_factor, set_update_auto_check_enabled,
 };
 pub(super) use super::{normalize_optional_text, parse_bool_with_default};
 pub(super) use super::{
@@ -64,7 +64,7 @@ pub(super) use super::{
     APP_SETTING_SERVICE_ADDR_KEY, APP_SETTING_SHOW_MAIN_WINDOW_ON_STARTUP_KEY,
     APP_SETTING_UI_APPEARANCE_PRESET_KEY, APP_SETTING_UI_CODEX_CLI_GUIDE_DISMISSED_KEY,
     APP_SETTING_UI_LOCALE_KEY, APP_SETTING_UI_LOW_TRANSPARENCY_KEY, APP_SETTING_UI_THEME_KEY,
-    APP_SETTING_UPDATE_AUTO_CHECK_KEY,
+    APP_SETTING_UI_ZOOM_FACTOR_KEY, APP_SETTING_UPDATE_AUTO_CHECK_KEY,
 };
 
 /// 函数 `app_settings_get`

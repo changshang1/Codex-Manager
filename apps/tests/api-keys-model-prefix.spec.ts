@@ -198,6 +198,7 @@ async function mockApiKeyRpc(
             capabilities: { inputModalities: ["text", "image"] },
             instructionsMode: "fallback",
             instructionsText: null,
+            fastPolicy: "passthrough",
             builtinRevision: 1,
             userEdited: false,
             price: {
@@ -244,6 +245,7 @@ async function mockApiKeyRpc(
             },
             instructionsMode: "passthrough",
             instructionsText: null,
+            fastPolicy: "passthrough",
             builtinRevision: 5,
             userEdited: false,
             price: {

@@ -713,6 +713,152 @@ async fn start_mock_upstream_ws() -> (
     (addr.to_string(), event_rx, capture_rx, handle)
 }
 
+async fn start_mock_upstream_ws_closes_after_each_response() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<(usize, String)>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind reconnecting mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("reconnecting mock upstream addr");
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = tokio::spawn(async move {
+        for round in 0..2 {
+            let (stream, _) = listener
+                .accept()
+                .await
+                .expect("accept reconnecting mock upstream");
+            let mut websocket =
+                accept_hdr_async(stream, |_: &Request, response: Response| Ok(response))
+                    .await
+                    .expect("accept reconnecting websocket handshake");
+            let text = match websocket.next().await {
+                Some(Ok(Message::Text(text))) => text.to_string(),
+                other => panic!("expected response.create for round {round}, got {other:?}"),
+            };
+            event_tx
+                .send((round, text))
+                .expect("record reconnecting upstream frame");
+            for payload in [
+                serde_json::json!({
+                    "type": "response.created",
+                    "response": { "id": format!("resp_ws_reconnect_{round}") }
+                }),
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": { "id": format!("resp_ws_reconnect_{round}") }
+                }),
+            ] {
+                websocket
+                    .send(Message::Text(payload.to_string().into()))
+                    .await
+                    .expect("send reconnecting upstream response");
+            }
+            websocket
+                .close(None)
+                .await
+                .expect("close upstream after terminal response");
+        }
+    });
+    (addr.to_string(), event_rx, handle)
+}
+
+async fn start_mock_upstream_ws_closes_after_accepting_follow_up() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<(usize, String)>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stale-follow-up mock upstream");
+    let addr = listener
+        .local_addr()
+        .expect("stale-follow-up mock upstream addr");
+    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = tokio::spawn(async move {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("accept initial stale-follow-up upstream");
+        let mut websocket =
+            accept_hdr_async(stream, |_: &Request, response: Response| Ok(response))
+                .await
+                .expect("accept initial stale-follow-up websocket handshake");
+
+        let first_text = match websocket.next().await {
+            Some(Ok(Message::Text(text))) => text.to_string(),
+            other => panic!("expected initial response.create, got {other:?}"),
+        };
+        event_tx
+            .send((0, first_text))
+            .expect("record initial upstream frame");
+        for payload in [
+            serde_json::json!({
+                "type": "response.created",
+                "response": { "id": "resp_ws_stale_follow_up_0" }
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": { "id": "resp_ws_stale_follow_up_0" }
+            }),
+        ] {
+            websocket
+                .send(Message::Text(payload.to_string().into()))
+                .await
+                .expect("send initial stale-follow-up response");
+        }
+
+        let stale_follow_up = match websocket.next().await {
+            Some(Ok(Message::Text(text))) => text.to_string(),
+            other => panic!("expected follow-up on stale upstream, got {other:?}"),
+        };
+        event_tx
+            .send((1, stale_follow_up))
+            .expect("record follow-up accepted by stale upstream");
+        websocket
+            .close(None)
+            .await
+            .expect("close stale upstream after accepting follow-up");
+
+        let (replacement_stream, _) = listener
+            .accept()
+            .await
+            .expect("accept replacement stale-follow-up upstream");
+        let mut replacement =
+            accept_hdr_async(replacement_stream, |_: &Request, response: Response| {
+                Ok(response)
+            })
+            .await
+            .expect("accept replacement stale-follow-up websocket handshake");
+        let resent_follow_up = match replacement.next().await {
+            Some(Ok(Message::Text(text))) => text.to_string(),
+            other => panic!("expected resent follow-up on replacement upstream, got {other:?}"),
+        };
+        event_tx
+            .send((2, resent_follow_up))
+            .expect("record resent follow-up upstream frame");
+        for payload in [
+            serde_json::json!({
+                "type": "response.created",
+                "response": { "id": "resp_ws_stale_follow_up_1" }
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": { "id": "resp_ws_stale_follow_up_1" }
+            }),
+        ] {
+            replacement
+                .send(Message::Text(payload.to_string().into()))
+                .await
+                .expect("send replacement stale-follow-up response");
+        }
+    });
+    (addr.to_string(), event_rx, handle)
+}
+
 async fn start_mock_upstream_ws_usage_limit_then_success() -> (
     String,
     tokio::sync::mpsc::UnboundedReceiver<String>,
@@ -1256,9 +1402,263 @@ async fn official_responses_websocket_proxies_frames_and_headers() {
         .expect("join mock upstream");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_reconnects_upstream_without_closing_client() {
+    let _guard = crate::test_env_guard();
+    let _http_proxy = EnvGuard::clear("http_proxy");
+    let _https_proxy = EnvGuard::clear("https_proxy");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_http_proxy = EnvGuard::clear("HTTP_PROXY");
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::set("NO_PROXY", "127.0.0.1,localhost");
+    let _lower_no_proxy = EnvGuard::clear("no_proxy");
+    let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-reconnect");
+    let storage = init_test_storage(&db_path);
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let (upstream_addr, mut upstream_events, upstream_handle) =
+        start_mock_upstream_ws_closes_after_each_response().await;
+    insert_api_key_record(
+        &storage,
+        "platform_key_ws_reconnect",
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some(format!(
+            "http://{upstream_addr}/chatgpt.com/backend-api/codex"
+        )),
+    );
+    insert_account_and_token(&storage);
+    tokio::task::spawn_blocking(|| {
+        crate::gateway::reload_runtime_config_from_env();
+        let _ = crate::gateway::front_proxy_max_body_bytes();
+    })
+    .await
+    .expect("reload runtime config");
+
+    let state = ProxyState {
+        backend_base_url: "http://127.0.0.1:1".to_string(),
+        client: Client::new(),
+    };
+    let (front_addr, shutdown_tx, server_handle) = start_front_proxy_test_server(state).await;
+    let request = build_ws_request(
+        &format!("ws://{front_addr}/v1/responses"),
+        "platform_key_ws_reconnect",
+        &[
+            ("OpenAI-Beta", "responses_websockets=2026-02-06"),
+            ("session_id", "session_ws_reconnect"),
+            ("x-client-request-id", "client_req_ws_reconnect"),
+        ],
+    );
+    let (mut client_ws, response) = connect_async(request).await.expect("websocket connects");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+
+    for round in 0..2 {
+        client_ws
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "response.create",
+                    "model": "gpt-4.1",
+                    "input": format!("resume round {round}")
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap_or_else(|err| panic!("send response.create round {round}: {err}"));
+
+        let (upstream_round, upstream_text) =
+            tokio::time::timeout(Duration::from_secs(5), upstream_events.recv())
+                .await
+                .expect("upstream reconnect frame timeout")
+                .expect("upstream reconnect frame channel");
+        assert_eq!(upstream_round, round);
+        assert!(upstream_text.contains(format!("resume round {round}").as_str()));
+
+        let mut completed = false;
+        while !completed {
+            let event = tokio::time::timeout(Duration::from_secs(5), client_ws.next())
+                .await
+                .expect("client reconnect event timeout")
+                .expect("client websocket must remain open")
+                .expect("client reconnect event result");
+            match event {
+                Message::Text(text) => {
+                    completed = text.contains("\"response.completed\"");
+                }
+                other => panic!("unexpected reconnect client event: {other:?}"),
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    let request_logs = storage
+        .list_request_logs(None, 10)
+        .expect("list reconnect request logs");
+    assert_eq!(
+        request_logs
+            .iter()
+            .filter(|item| item.request_type.as_deref() == Some("ws"))
+            .count(),
+        2,
+        "both response.create frames must stay on the client websocket"
+    );
+
+    let _ = client_ws.close(None).await;
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), server_handle)
+        .await
+        .expect("front proxy reconnect shutdown timeout")
+        .expect("join reconnect front proxy");
+    tokio::time::timeout(Duration::from_secs(5), upstream_handle)
+        .await
+        .expect("mock reconnect upstream shutdown timeout")
+        .expect("join reconnect mock upstream");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn official_responses_websocket_replays_follow_up_accepted_by_closing_upstream() {
+    let _guard = crate::test_env_guard();
+    let _http_proxy = EnvGuard::clear("http_proxy");
+    let _https_proxy = EnvGuard::clear("https_proxy");
+    let _all_proxy = EnvGuard::clear("all_proxy");
+    let _upper_http_proxy = EnvGuard::clear("HTTP_PROXY");
+    let _upper_https_proxy = EnvGuard::clear("HTTPS_PROXY");
+    let _upper_all_proxy = EnvGuard::clear("ALL_PROXY");
+    let _no_proxy = EnvGuard::set("NO_PROXY", "127.0.0.1,localhost");
+    let _lower_no_proxy = EnvGuard::clear("no_proxy");
+    let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-stale-follow-up");
+    let storage = init_test_storage(&db_path);
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let (upstream_addr, mut upstream_events, upstream_handle) =
+        start_mock_upstream_ws_closes_after_accepting_follow_up().await;
+    insert_api_key_record(
+        &storage,
+        "platform_key_ws_stale_follow_up",
+        crate::apikey_profile::ROTATION_ACCOUNT,
+        Some(format!(
+            "http://{upstream_addr}/chatgpt.com/backend-api/codex"
+        )),
+    );
+    insert_account_and_token(&storage);
+    tokio::task::spawn_blocking(|| {
+        crate::gateway::reload_runtime_config_from_env();
+        let _ = crate::gateway::front_proxy_max_body_bytes();
+    })
+    .await
+    .expect("reload runtime config");
+
+    let state = ProxyState {
+        backend_base_url: "http://127.0.0.1:1".to_string(),
+        client: Client::new(),
+    };
+    let (front_addr, shutdown_tx, server_handle) = start_front_proxy_test_server(state).await;
+    let request = build_ws_request(
+        &format!("ws://{front_addr}/v1/responses"),
+        "platform_key_ws_stale_follow_up",
+        &[
+            ("OpenAI-Beta", "responses_websockets=2026-02-06"),
+            ("session_id", "session_ws_stale_follow_up"),
+            ("x-client-request-id", "client_req_ws_stale_follow_up"),
+        ],
+    );
+    let (mut client_ws, response) = connect_async(request).await.expect("websocket connects");
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+
+    client_ws
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "response.create",
+                "model": "gpt-4.1",
+                "input": "historical resume seed"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send initial historical response.create");
+    let (initial_phase, initial_text) =
+        tokio::time::timeout(Duration::from_secs(5), upstream_events.recv())
+            .await
+            .expect("initial upstream frame timeout")
+            .expect("initial upstream frame channel");
+    assert_eq!(initial_phase, 0);
+    assert!(initial_text.contains("historical resume seed"));
+
+    let mut initial_completed = false;
+    while !initial_completed {
+        let event = tokio::time::timeout(Duration::from_secs(5), client_ws.next())
+            .await
+            .expect("initial historical client event timeout")
+            .expect("historical client websocket must remain open")
+            .expect("initial historical client event result");
+        match event {
+            Message::Text(text) => {
+                initial_completed = text.contains("\"response.completed\"");
+            }
+            other => panic!("unexpected initial historical client event: {other:?}"),
+        }
+    }
+
+    client_ws
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "response.create",
+                "model": "gpt-4.1",
+                "input": "historical resume follow-up"
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .expect("send historical follow-up response.create");
+
+    for expected_phase in [1, 2] {
+        let (phase, text) = tokio::time::timeout(Duration::from_secs(5), upstream_events.recv())
+            .await
+            .expect("historical follow-up replay timeout")
+            .expect("historical follow-up replay channel");
+        assert_eq!(phase, expected_phase);
+        assert!(text.contains("historical resume follow-up"));
+    }
+
+    let mut follow_up_completed = false;
+    while !follow_up_completed {
+        let event = tokio::time::timeout(Duration::from_secs(5), client_ws.next())
+            .await
+            .expect("historical follow-up client event timeout")
+            .expect("historical client websocket must survive stale upstream close")
+            .expect("historical follow-up client event result");
+        match event {
+            Message::Text(text) => {
+                follow_up_completed = text.contains("\"response.completed\"");
+            }
+            other => panic!("unexpected historical follow-up client event: {other:?}"),
+        }
+    }
+
+    let request_logs = storage
+        .list_request_logs(None, 10)
+        .expect("list stale-follow-up request logs");
+    let ws_logs = request_logs
+        .iter()
+        .filter(|item| item.request_type.as_deref() == Some("ws"))
+        .collect::<Vec<_>>();
+    assert_eq!(ws_logs.len(), 2);
+    assert!(ws_logs.iter().all(|item| item.status_code == Some(200)));
+
+    let _ = client_ws.close(None).await;
+    let _ = shutdown_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), server_handle)
+        .await
+        .expect("front proxy stale-follow-up shutdown timeout")
+        .expect("join stale-follow-up front proxy");
+    tokio::time::timeout(Duration::from_secs(5), upstream_handle)
+        .await
+        .expect("mock stale-follow-up upstream shutdown timeout")
+        .expect("join stale-follow-up mock upstream");
+}
+
 #[tokio::test]
-async fn official_responses_websocket_preserves_explicit_prompt_cache_key_when_session_anchor_exists(
-) {
+async fn official_responses_websocket_aligns_prompt_cache_key_with_resolved_session_anchor() {
     let _guard = crate::test_env_guard();
     let db_path = new_test_db_path("codexmanager-proxy-runtime-ws-explicit-prompt-cache-key");
     let storage = init_test_storage(&db_path);
@@ -1322,11 +1722,20 @@ async fn official_responses_websocket_preserves_explicit_prompt_cache_key_when_s
     let payload: serde_json::Value =
         serde_json::from_str(&upstream_frame).expect("parse upstream frame");
     assert_eq!(payload["type"], "response.create");
-    assert_eq!(
-        payload
-            .get("prompt_cache_key")
-            .and_then(serde_json::Value::as_str),
-        Some("client_ws_thread_123")
+    let upstream_prompt_cache_key = payload
+        .get("prompt_cache_key")
+        .and_then(serde_json::Value::as_str)
+        .expect("resolved session anchor is forwarded as prompt_cache_key");
+    assert_ne!(upstream_prompt_cache_key, "client_ws_thread_123");
+    assert!(
+        upstream_prompt_cache_key
+            .split('-')
+            .map(str::len)
+            .eq([8, 4, 4, 4, 12])
+            && upstream_prompt_cache_key
+                .chars()
+                .all(|ch| ch == '-' || ch.is_ascii_hexdigit()),
+        "resolved session anchor should use the generated conversation id"
     );
 
     let client_event = tokio::time::timeout(Duration::from_secs(5), client_ws.next())

@@ -158,7 +158,10 @@ pub(crate) fn handle_main_window_event(window: &tauri::Window, event: &tauri::Wi
             return;
         }
 
-        if let Err(err) = window.app_handle().save_window_state(tauri_plugin_window_state::StateFlags::all()) {
+        if let Err(err) = window
+            .app_handle()
+            .save_window_state(crate::desktop_window_state_flags())
+        {
             log::warn!("save window state before close failed: {}", err);
         }
 

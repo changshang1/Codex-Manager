@@ -71,6 +71,7 @@ export const useAppStore = create<AppState>((set) => ({
     closeToTraySupported: false,
     keepWindowUiMounted: true,
     lowTransparency: false,
+    zoomFactor: 1,
     lightweightModeOnCloseToTray: false,
     codexCliGuideDismissed: false,
     webAccessPasswordConfigured: false,

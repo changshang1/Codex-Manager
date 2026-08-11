@@ -371,7 +371,7 @@ fn inspect_ws_terminal_event_maps_incomplete_to_terminal_error() {
 }
 
 #[test]
-fn websocket_frame_preserves_prompt_cache_key_when_native_conversation_anchor_exists() {
+fn websocket_frame_aligns_prompt_cache_key_with_native_conversation_anchor() {
     let _guard = crate::test_env_guard();
     let context = WsRequestContext {
         api_key: sample_api_key(),
@@ -392,7 +392,7 @@ fn websocket_frame_preserves_prompt_cache_key_when_native_conversation_anchor_ex
         value
             .get("prompt_cache_key")
             .and_then(serde_json::Value::as_str),
-        Some("client-thread")
+        Some("conversation-1")
     );
 }
 

@@ -87,6 +87,10 @@ function metricValue(usage: DashboardTokenUsage, metric: AdminUsageMetric): numb
   return metric === "requests" ? usage.requestCount : usage.totalTokens;
 }
 
+function finiteChartIndex(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
 function fallbackSeries(summary: DashboardAdminUsageSummary): DashboardUsageSeriesPoint[] {
   if (summary.seriesUsage.length > 0) {
     return summary.seriesUsage;
@@ -213,11 +217,14 @@ export function AdminUsageTrendChart({
     if (chartData.length === 0) return null;
     const startIndex = Math.max(
       0,
-      Math.min(zoomWindow?.startIndex ?? 0, chartData.length - 1),
+      Math.min(finiteChartIndex(zoomWindow?.startIndex, 0), chartData.length - 1),
     );
     const endIndex = Math.max(
       startIndex,
-      Math.min(zoomWindow?.endIndex ?? chartData.length - 1, chartData.length - 1),
+      Math.min(
+        finiteChartIndex(zoomWindow?.endIndex, chartData.length - 1),
+        chartData.length - 1,
+      ),
     );
     return { startIndex, endIndex };
   }, [chartData.length, zoomWindow?.endIndex, zoomWindow?.startIndex]);
@@ -237,6 +244,13 @@ export function AdminUsageTrendChart({
           visibleChartData[visibleChartData.length - 1]?.label ?? "",
         )}`
       : "";
+  const chartInstanceKey = [
+    summary.rangeStartTs,
+    summary.rangeEndTs,
+    granularity,
+    summary.seriesBucketSeconds,
+    chartData.length,
+  ].join(":");
 
   useEffect(() => {
     let active = true;
@@ -532,6 +546,7 @@ export function AdminUsageTrendChart({
             aria-describedby="usage-chart-range-help usage-chart-visible-range"
           >
             <ComposedChart
+              key={chartInstanceKey}
               accessibilityLayer
               data={chartData}
               margin={{ top: 18, right: 14, left: 10, bottom: 8 }}
@@ -618,7 +633,9 @@ export function AdminUsageTrendChart({
                 onChange={(nextWindow) => {
                   if (
                     typeof nextWindow.startIndex === "number" &&
-                    typeof nextWindow.endIndex === "number"
+                    typeof nextWindow.endIndex === "number" &&
+                    Number.isFinite(nextWindow.startIndex) &&
+                    Number.isFinite(nextWindow.endIndex)
                   ) {
                     setZoomWindow({
                       startIndex: nextWindow.startIndex,

@@ -894,6 +894,52 @@ impl Storage {
         rows.collect()
     }
 
+    pub fn list_account_workspace_identities_for_subject(
+        &self,
+        subject_account_id: &str,
+    ) -> Result<Vec<AccountWorkspaceIdentity>> {
+        let subject_account_id = subject_account_id.trim();
+        if subject_account_id.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT id, chatgpt_account_id, workspace_id
+             FROM accounts
+             WHERE subject_account_id = ?1
+                OR (
+                    subject_account_id IS NULL
+                    AND (id = ?1 OR substr(id, 1, length(?1) + 2) = ?1 || '::')
+                )
+             ORDER BY updated_at DESC, id ASC",
+        )?;
+        let rows = stmt.query_map([subject_account_id], |row| {
+            Ok(AccountWorkspaceIdentity {
+                id: row.get(0)?,
+                chatgpt_account_id: row.get(1)?,
+                workspace_id: row.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn update_account_subject_identity(
+        &self,
+        account_id: &str,
+        subject_account_id: &str,
+    ) -> Result<()> {
+        let subject_account_id = subject_account_id.trim();
+        if subject_account_id.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "UPDATE accounts
+             SET subject_account_id = ?1
+             WHERE id = ?2",
+            (subject_account_id, account_id),
+        )?;
+        Ok(())
+    }
+
     /// 函数 `list_accounts_paginated`
     ///
     /// 作者: gaohongshun

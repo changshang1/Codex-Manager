@@ -185,20 +185,25 @@ fn next_account_sort_uses_step_five() {
 fn resolve_existing_account_for_login_uses_identity_lookup_without_tags() {
     let storage = Storage::open_in_memory().expect("open in memory");
     storage.init().expect("init");
+    let existing = build_account(
+        "subject-fallback::cgpt=cgpt-1|ws=ws-1",
+        Some("cgpt-1"),
+        Some("ws-1"),
+    );
     storage
-        .insert_account(&build_account("acc-existing", Some("cgpt-1"), Some("ws-1")))
+        .insert_account(&existing)
         .expect("insert existing account");
 
     let found = resolve_existing_account_for_login(
         &storage,
+        "subject-fallback",
         Some("cgpt-1"),
         Some("ws-1"),
         Some("subject-fallback"),
-        None,
     )
     .expect("resolve account");
 
-    assert_eq!(found.as_deref(), Some("acc-existing"));
+    assert_eq!(found.as_deref(), Some(existing.id.as_str()));
 }
 
 #[test]
@@ -215,10 +220,10 @@ fn resolve_existing_account_for_login_preserves_tagged_fallback_behavior() {
 
     let found = resolve_existing_account_for_login(
         &storage,
+        "subject-fallback",
         Some("cgpt-1"),
         Some("ws-1"),
         Some("subject-fallback::team-a"),
-        Some("team-a"),
     )
     .expect("resolve tagged account");
 
@@ -249,14 +254,55 @@ fn resolve_existing_account_for_login_with_tags_uses_identity_candidates() {
 
     let found = resolve_existing_account_for_login(
         &storage,
+        "subject-fallback",
         Some("cgpt-target"),
         Some("ws-target"),
         Some("subject-fallback::team-a"),
-        Some("team-a"),
     )
     .expect("resolve account");
 
     assert_eq!(found.as_deref(), Some("subject-fallback"));
+}
+
+#[test]
+fn resolve_existing_account_for_login_keeps_same_team_accounts_separate_by_subject() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    let first = build_account("user-a::cgpt=shared|ws=team", Some("shared"), Some("team"));
+    let second = build_account("user-b::cgpt=shared|ws=team", Some("shared"), Some("team"));
+    storage.insert_account(&first).expect("insert first");
+    storage.insert_account(&second).expect("insert second");
+    storage
+        .update_account_subject_identity(&first.id, "user-a")
+        .expect("set first subject");
+    storage
+        .update_account_subject_identity(&second.id, "user-b")
+        .expect("set second subject");
+
+    assert_eq!(
+        resolve_existing_account_for_login(
+            &storage,
+            "user-a",
+            Some("shared"),
+            Some("team"),
+            Some("user-a"),
+        )
+        .expect("resolve first")
+        .as_deref(),
+        Some(first.id.as_str())
+    );
+    assert_eq!(
+        resolve_existing_account_for_login(
+            &storage,
+            "user-b",
+            Some("shared"),
+            Some("team"),
+            Some("user-b"),
+        )
+        .expect("resolve second")
+        .as_deref(),
+        Some(second.id.as_str())
+    );
 }
 
 /// 函数 `jwt_with_claims`

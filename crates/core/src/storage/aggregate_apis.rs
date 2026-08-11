@@ -1067,6 +1067,22 @@ impl Storage {
              WHERE sort IS NULL",
             [],
         )?;
+        self.ensure_aggregate_api_response_affinity_table()?;
+        Ok(())
+    }
+
+    /// 确保响应亲和表存在（135 migration 的 CREATE TABLE 若因兼容回退被跳过时兜底）。
+    pub(super) fn ensure_aggregate_api_response_affinity_table(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS aggregate_api_response_affinity (
+               response_id TEXT PRIMARY KEY,
+               aggregate_api_id TEXT NOT NULL REFERENCES aggregate_apis(id) ON DELETE CASCADE,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_aggregate_api_response_affinity_api
+               ON aggregate_api_response_affinity(aggregate_api_id, updated_at DESC);",
+        )?;
         Ok(())
     }
 

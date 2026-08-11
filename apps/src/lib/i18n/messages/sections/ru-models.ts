@@ -98,6 +98,13 @@ export const RU_MODELS_MESSAGES: MessageCatalog = {
   "隐藏模型 {slug}": "Скрыть модель {slug}",
   "删除模型 {slug}": "Удалить модель {slug}",
   编辑模型: "Изменить модель",
+  "Fast 策略": "Политика Fast",
+  "透传（保留 service_tier）": "Пропускать (сохранять service_tier)",
+  "过滤（移除 service_tier）": "Фильтровать (удалять service_tier)",
+  "强制设置 priority（Fast）": "Принудительно задать priority (Fast)",
+  "拦截（拒绝 Fast 请求）": "Блокировать (отклонять запросы Fast)",
+  "控制该模型如何处理请求中的 service_tier。":
+    "Управляет обработкой service_tier в запросах для этой модели.",
   删除模型: "Удалить модель",
   "Builtin 模型 {slug} 将被禁用，数据不会删除。":
     "Builtin-модель {slug} будет отключена без удаления данных.",

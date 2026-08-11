@@ -98,6 +98,13 @@ export const KO_MODELS_MESSAGES: MessageCatalog = {
   "隐藏模型 {slug}": "모델 {slug} 숨기기",
   "删除模型 {slug}": "모델 {slug} 삭제",
   编辑模型: "모델 편집",
+  "Fast 策略": "Fast 정책",
+  "透传（保留 service_tier）": "전달 (service_tier 유지)",
+  "过滤（移除 service_tier）": "필터링 (service_tier 제거)",
+  "强制设置 priority（Fast）": "priority 강제 설정 (Fast)",
+  "拦截（拒绝 Fast 请求）": "차단 (Fast 요청 거부)",
+  "控制该模型如何处理请求中的 service_tier。":
+    "이 모델이 요청의 service_tier를 처리하는 방식을 제어합니다.",
   删除模型: "모델 삭제",
   "Builtin 模型 {slug} 将被禁用，数据不会删除。":
     "Builtin 모델 {slug}는 데이터 삭제 없이 비활성화됩니다.",
