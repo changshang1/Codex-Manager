@@ -2,11 +2,12 @@ use codexmanager_core::storage::{now_ts, AggregateApi, Storage};
 
 use super::{
     apply_compatibility_static_headers, apply_previous_response_affinity,
-    build_anthropic_bridge_aggregate_api_request, build_upstream_url, effective_action_path,
-    merge_compatibility_config_json, resolve_aggregate_api_rotation_candidates,
-    resolve_passthrough_sse_protocol, responses_to_anthropic_messages_action_path,
-    rewrite_body_for_compatibility, rewrite_body_model_override,
-    should_bridge_responses_to_anthropic,
+    build_anthropic_bridge_aggregate_api_request, build_upstream_url,
+    chat_completions_bridge_action_path, effective_action_path, merge_compatibility_config_json,
+    resolve_aggregate_api_rotation_candidates, resolve_passthrough_sse_protocol,
+    responses_to_anthropic_messages_action_path, rewrite_body_for_compatibility,
+    rewrite_body_model_override, should_bridge_responses_to_anthropic,
+    should_bridge_responses_to_chat_completions,
 };
 use crate::aggregate_api::{
     AGGREGATE_API_AUTH_APIKEY, AGGREGATE_API_PROVIDER_CLAUDE, AGGREGATE_API_PROVIDER_CODEX,
@@ -28,6 +29,7 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         action: action.map(str::to_string),
         model_override: None,
         compatibility_config_json: None,
+        upstream_wire: None,
         status: "active".to_string(),
         auto_toggle_enabled: false,
         consecutive_failures: 0,
@@ -301,6 +303,52 @@ fn responses_bridge_respects_custom_action_path() {
 }
 
 #[test]
+fn responses_chat_bridge_is_selected_only_by_upstream_wire_and_responses_path() {
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+    api.upstream_wire = Some("chat_completions".to_string());
+    assert!(should_bridge_responses_to_chat_completions(
+        &api,
+        "/v1/responses"
+    ));
+    assert!(should_bridge_responses_to_chat_completions(
+        &api,
+        "/v1/responses?beta=true"
+    ));
+    assert!(!should_bridge_responses_to_chat_completions(
+        &api,
+        "/v1/chat/completions"
+    ));
+
+    api.upstream_wire = Some("passthrough".to_string());
+    api.action = Some("/v1/chat/completions".to_string());
+    assert!(!should_bridge_responses_to_chat_completions(
+        &api,
+        "/v1/responses"
+    ));
+}
+
+#[test]
+fn responses_chat_bridge_defaults_path_and_respects_action_override() {
+    let mut api = aggregate_api_with_action(None);
+    api.provider_type = AGGREGATE_API_PROVIDER_CODEX.to_string();
+    api.upstream_wire = Some("chat_completions".to_string());
+    api.url = "https://opencode.example/v1".to_string();
+    let path = chat_completions_bridge_action_path(&api, "/v1/responses");
+    assert_eq!(path, "/chat/completions");
+    assert_eq!(
+        build_upstream_url(&api.url, &path).unwrap().as_str(),
+        "https://opencode.example/v1/chat/completions"
+    );
+
+    api.action = Some("/gateway/chat/completions?channel=go".to_string());
+    assert_eq!(
+        chat_completions_bridge_action_path(&api, "/v1/responses"),
+        "/gateway/chat/completions?channel=go"
+    );
+}
+
+#[test]
 fn anthropic_bridge_request_adds_required_messages_headers_with_default_auth() {
     let request: tiny_http::Request = tiny_http::TestRequest::new()
         .with_header(
@@ -389,6 +437,7 @@ fn gemini_native_candidates_resolve_to_gemini_provider_only() {
                 action: None,
                 model_override: None,
                 compatibility_config_json: None,
+                upstream_wire: None,
                 status: "active".to_string(),
                 auto_toggle_enabled: false,
                 consecutive_failures: 0,
@@ -524,6 +573,7 @@ fn explicit_aggregate_api_id_promotes_matching_active_provider_candidate_only() 
                 action: None,
                 model_override: None,
                 compatibility_config_json: None,
+                upstream_wire: None,
                 status: "active".to_string(),
                 auto_toggle_enabled: false,
                 consecutive_failures: 0,

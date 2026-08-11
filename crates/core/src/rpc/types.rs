@@ -856,6 +856,8 @@ pub struct AggregateApiSummary {
     pub model_override: Option<String>,
     #[serde(default)]
     pub compatibility_config_json: Option<String>,
+    #[serde(default)]
+    pub upstream_wire: Option<String>,
     pub status: String,
     #[serde(default)]
     pub auto_toggle_enabled: bool,

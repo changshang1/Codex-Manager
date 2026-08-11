@@ -9,6 +9,11 @@ export function aggregateApiUsesIncomingPath(providerType: string): boolean {
   return normalizeAggregateApiProvider(providerType) === "compatible";
 }
 
+export function aggregateApiSupportsUpstreamWire(providerType: string): boolean {
+  const provider = normalizeAggregateApiProvider(providerType);
+  return provider === "codex" || provider === "responses" || provider === "compatible";
+}
+
 export function aggregateApiProviderMatchesFilter(
   providerType: string,
   providerFilter: string,

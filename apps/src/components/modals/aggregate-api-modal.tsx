@@ -29,12 +29,15 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { accountClient } from "@/lib/api/account-client";
-import { aggregateApiUsesIncomingPath } from "@/lib/aggregate-api-provider";
+import {
+  aggregateApiSupportsUpstreamWire,
+  aggregateApiUsesIncomingPath,
+} from "@/lib/aggregate-api-provider";
 import { copyTextToClipboard } from "@/lib/utils/clipboard";
 import { useAppStore } from "@/lib/store/useAppStore";
 import { useRuntimeCapabilities } from "@/hooks/useRuntimeCapabilities";
 import { useI18n } from "@/lib/i18n/provider";
-import { AggregateApi } from "@/types";
+import { AggregateApi, AggregateApiUpstreamWire } from "@/types";
 
 const AGGREGATE_API_PROVIDER_LABELS: Record<string, string> = {
   codex: "Codex",
@@ -140,6 +143,8 @@ export function AggregateApiModal({
   const [actionCustomEnabled, setActionCustomEnabled] = useState(false);
   const [action, setAction] = useState("");
   const [compatibilityConfigJson, setCompatibilityConfigJson] = useState("{}");
+  const [upstreamWire, setUpstreamWire] =
+    useState<AggregateApiUpstreamWire>("passthrough");
   const [autoToggleEnabled, setAutoToggleEnabled] = useState(false);
   const [balanceQueryEnabled, setBalanceQueryEnabled] = useState(false);
   const [balanceQueryTemplate, setBalanceQueryTemplate] =
@@ -171,7 +176,9 @@ export function AggregateApiModal({
   const unavailableMessage = canAccessManagementRpc
     ? t("服务未连接，聚合 API 暂不可编辑；连接恢复后可继续操作。")
     : t("当前运行环境暂不支持聚合 API 管理。");
-  const usesIncomingPath = aggregateApiUsesIncomingPath(providerType);
+  const usesIncomingPath =
+    aggregateApiUsesIncomingPath(providerType) &&
+    upstreamWire !== "chat_completions";
 
   useEffect(() => {
     if (!open) return;
@@ -234,6 +241,7 @@ export function AggregateApiModal({
     setAction(nextAction);
     setActionCustomEnabled(aggregateApi?.action !== null && aggregateApi?.action !== undefined);
     setCompatibilityConfigJson(aggregateApi?.compatibilityConfigJson || "{}");
+    setUpstreamWire(aggregateApi?.upstreamWire || "passthrough");
     setAutoToggleEnabled(Boolean(aggregateApi?.autoToggleEnabled));
     setBalanceQueryEnabled(Boolean(aggregateApi?.balanceQueryEnabled));
     const nextBalanceQueryTemplate =
@@ -434,6 +442,7 @@ export function AggregateApiModal({
             !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
           compatibilityConfigJson:
             providerType === "responses" ? compatibilityConfigJson.trim() || "{}" : null,
+          upstreamWire,
           username: authType === "userpass" ? username.trim() || null : null,
           password: authType === "userpass" ? password.trim() || null : null,
           autoToggleEnabled,
@@ -465,9 +474,10 @@ export function AggregateApiModal({
         authCustomEnabled,
         authParams,
         actionCustomEnabled: usesIncomingPath ? false : actionCustomEnabled,
-          action: !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
-          compatibilityConfigJson:
-            providerType === "responses" ? compatibilityConfigJson.trim() || "{}" : null,
+        action: !usesIncomingPath && actionCustomEnabled ? action.trim() : null,
+        compatibilityConfigJson:
+          providerType === "responses" ? compatibilityConfigJson.trim() || "{}" : null,
+        upstreamWire,
         username: authType === "userpass" ? username.trim() : null,
         password: authType === "userpass" ? password.trim() : null,
         autoToggleEnabled,
@@ -597,7 +607,13 @@ export function AggregateApiModal({
                     onValueChange={(value) => {
                       if (!value) return;
                       setProviderType(value);
-                      if (aggregateApiUsesIncomingPath(value)) {
+                      if (!aggregateApiSupportsUpstreamWire(value)) {
+                        setUpstreamWire("passthrough");
+                      }
+                      if (
+                        aggregateApiUsesIncomingPath(value) &&
+                        upstreamWire !== "chat_completions"
+                      ) {
                         setActionCustomEnabled(false);
                       }
                     }}
@@ -632,6 +648,52 @@ export function AggregateApiModal({
                     </p>
                   ) : null}
                 </div>
+
+                {aggregateApiSupportsUpstreamWire(providerType) ? (
+                  <div className="grid gap-2">
+                    <Label htmlFor="aggregate-api-upstream-wire">
+                      {t("上游协议")}
+                    </Label>
+                    <Select
+                      value={upstreamWire}
+                      disabled={!isServiceReady}
+                      onValueChange={(value) => {
+                        if (!value) return;
+                        setUpstreamWire(
+                          value === "chat_completions"
+                            ? "chat_completions"
+                            : "passthrough"
+                        );
+                      }}
+                    >
+                      <SelectTrigger
+                        id="aggregate-api-upstream-wire"
+                        className="w-full"
+                      >
+                        <SelectValue>
+                          {(value) =>
+                            String(value || "") === "chat_completions"
+                              ? t("Chat Completions（通过 Chat Completions 桥接）")
+                              : t("透传（不转换，直连上游）")
+                          }
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="passthrough">
+                            {t("透传（不转换，直连上游）")}
+                          </SelectItem>
+                          <SelectItem value="chat_completions">
+                            {t("Chat Completions（通过 Chat Completions 桥接）")}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[11px] leading-4 text-muted-foreground">
+                      {t("选择 Chat Completions 可将 Responses 请求桥接到仅支持 Chat Completions 的上游。")}
+                    </p>
+                  </div>
+                ) : null}
 
                 <div className="grid gap-2">
                   <Label htmlFor="aggregate-api-auth-type">{t("认证类型")}</Label>

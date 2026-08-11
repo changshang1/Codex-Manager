@@ -58,6 +58,7 @@ fn insert_aggregate_api(storage: &Storage, aggregate_id: &str, addr: &str, actio
             action: Some(action.to_string()),
             model_override: None,
             compatibility_config_json: None,
+            upstream_wire: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,

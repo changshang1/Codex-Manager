@@ -66,6 +66,7 @@ impl Storage {
                 action,
                 model_override,
                 compatibility_config_json,
+                upstream_wire,
                 status,
                 created_at,
                 updated_at,
@@ -86,7 +87,7 @@ impl Storage {
                 auto_disabled,
                 auto_disabled_at,
                 auto_disabled_reason
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
             ON CONFLICT(id) DO UPDATE SET
                 provider_type = excluded.provider_type,
                 supplier_name = excluded.supplier_name,
@@ -97,6 +98,7 @@ impl Storage {
                 action = excluded.action,
                 model_override = excluded.model_override,
                 compatibility_config_json = excluded.compatibility_config_json,
+                upstream_wire = excluded.upstream_wire,
                 status = excluded.status,
                 created_at = excluded.created_at,
                 updated_at = excluded.updated_at,
@@ -123,6 +125,7 @@ impl Storage {
                 &api.action,
                 &api.model_override,
                 &api.compatibility_config_json,
+                api.upstream_wire.as_deref().unwrap_or("passthrough"),
                 &api.status,
                 api.created_at,
                 api.updated_at,
@@ -743,6 +746,18 @@ impl Storage {
         Ok(())
     }
 
+    pub fn update_aggregate_api_upstream_wire(
+        &self,
+        api_id: &str,
+        upstream_wire: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            update_aggregate_api_upstream_wire_sql(),
+            (upstream_wire.unwrap_or("passthrough"), now_ts(), api_id),
+        )?;
+        Ok(())
+    }
+
     pub fn update_aggregate_api_balance_query(
         &self,
         api_id: &str,
@@ -972,6 +987,7 @@ impl Storage {
                 auth_params_json TEXT,
                 action TEXT,
                 model_override TEXT,
+                upstream_wire TEXT NOT NULL DEFAULT 'passthrough',
                 status TEXT NOT NULL DEFAULT 'active',
                 auto_toggle_enabled INTEGER NOT NULL DEFAULT 0,
                 consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -1011,6 +1027,11 @@ impl Storage {
         self.ensure_column("aggregate_apis", "auth_params_json", "TEXT")?;
         self.ensure_column("aggregate_apis", "action", "TEXT")?;
         self.ensure_column("aggregate_apis", "model_override", "TEXT")?;
+        self.ensure_column(
+            "aggregate_apis",
+            "upstream_wire",
+            "TEXT NOT NULL DEFAULT 'passthrough'",
+        )?;
         self.ensure_column(
             "aggregate_apis",
             "balance_query_enabled",
@@ -1270,34 +1291,35 @@ fn map_aggregate_api_row(row: &Row<'_>) -> Result<AggregateApi> {
         action: row.get(7)?,
         model_override: row.get(8)?,
         compatibility_config_json: row.get(9)?,
-        status: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
-        last_test_at: row.get(13)?,
-        last_test_status: row.get(14)?,
-        last_test_error: row.get(15)?,
-        balance_query_enabled: row.get(16)?,
-        balance_query_template: row.get(17)?,
-        balance_query_base_url: row.get(18)?,
-        balance_query_user_id: row.get(19)?,
-        balance_query_config_json: row.get(20)?,
-        last_balance_at: row.get(21)?,
-        last_balance_status: row.get(22)?,
-        last_balance_error: row.get(23)?,
-        last_balance_json: row.get(24)?,
-        auto_toggle_enabled: row.get(25)?,
-        consecutive_failures: row.get(26)?,
-        auto_disabled: row.get(27)?,
-        auto_disabled_at: row.get(28)?,
-        auto_disabled_reason: row.get(29)?,
+        upstream_wire: row.get(10)?,
+        status: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        last_test_at: row.get(14)?,
+        last_test_status: row.get(15)?,
+        last_test_error: row.get(16)?,
+        balance_query_enabled: row.get(17)?,
+        balance_query_template: row.get(18)?,
+        balance_query_base_url: row.get(19)?,
+        balance_query_user_id: row.get(20)?,
+        balance_query_config_json: row.get(21)?,
+        last_balance_at: row.get(22)?,
+        last_balance_status: row.get(23)?,
+        last_balance_error: row.get(24)?,
+        last_balance_json: row.get(25)?,
+        auto_toggle_enabled: row.get(26)?,
+        consecutive_failures: row.get(27)?,
+        auto_disabled: row.get(28)?,
+        auto_disabled_at: row.get(29)?,
+        auto_disabled_reason: row.get(30)?,
     })
 }
 
 fn map_aggregate_api_with_secrets_row(row: &Row<'_>) -> Result<AggregateApiWithSecrets> {
     Ok(AggregateApiWithSecrets {
         api: map_aggregate_api_row(row)?,
-        secret_value: row.get(30)?,
-        balance_access_token: row.get(31)?,
+        secret_value: row.get(31)?,
+        balance_access_token: row.get(32)?,
     })
 }
 
@@ -1313,26 +1335,27 @@ fn map_aggregate_api_list_summary_row(row: &Row<'_>) -> Result<AggregateApiListS
         action: row.get(7)?,
         model_override: row.get(8)?,
         compatibility_config_json: row.get(9)?,
-        status: row.get(10)?,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
-        last_test_at: row.get(13)?,
-        last_test_status: row.get(14)?,
-        last_test_error: row.get(15)?,
-        balance_query_enabled: row.get(16)?,
-        balance_query_template: row.get(17)?,
-        balance_query_base_url: row.get(18)?,
-        balance_query_user_id: row.get(19)?,
-        balance_query_config_json: row.get(20)?,
-        last_balance_at: row.get(21)?,
-        last_balance_status: row.get(22)?,
-        last_balance_error: row.get(23)?,
-        last_balance_json: row.get(24)?,
-        auto_toggle_enabled: row.get(25)?,
-        consecutive_failures: row.get(26)?,
-        auto_disabled: row.get(27)?,
-        auto_disabled_at: row.get(28)?,
-        auto_disabled_reason: row.get(29)?,
+        upstream_wire: row.get(10)?,
+        status: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        last_test_at: row.get(14)?,
+        last_test_status: row.get(15)?,
+        last_test_error: row.get(16)?,
+        balance_query_enabled: row.get(17)?,
+        balance_query_template: row.get(18)?,
+        balance_query_base_url: row.get(19)?,
+        balance_query_user_id: row.get(20)?,
+        balance_query_config_json: row.get(21)?,
+        last_balance_at: row.get(22)?,
+        last_balance_status: row.get(23)?,
+        last_balance_error: row.get(24)?,
+        last_balance_json: row.get(25)?,
+        auto_toggle_enabled: row.get(26)?,
+        consecutive_failures: row.get(27)?,
+        auto_disabled: row.get(28)?,
+        auto_disabled_at: row.get(29)?,
+        auto_disabled_reason: row.get(30)?,
     })
 }
 
@@ -1659,6 +1682,7 @@ mod supplier_model_tests {
             action: None,
             model_override: None,
             compatibility_config_json: None,
+            upstream_wire: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,
@@ -1680,6 +1704,46 @@ mod supplier_model_tests {
             last_balance_error: None,
             last_balance_json: None,
         }
+    }
+
+    #[test]
+    fn aggregate_api_upstream_wire_defaults_and_round_trips() {
+        let storage = Storage::open_in_memory().expect("open storage");
+        storage.init().expect("init storage");
+        let now = now_ts();
+
+        let default_api = sample_aggregate_api("agg-wire-default", now);
+        storage
+            .insert_aggregate_api(&default_api)
+            .expect("insert default api");
+        let stored_default = storage
+            .find_aggregate_api_by_id(&default_api.id)
+            .expect("find default api")
+            .expect("default api exists");
+        assert_eq!(stored_default.upstream_wire.as_deref(), Some("passthrough"));
+
+        let mut chat_api = sample_aggregate_api("agg-wire-chat", now + 1);
+        chat_api.upstream_wire = Some("chat_completions".to_string());
+        storage
+            .insert_aggregate_api(&chat_api)
+            .expect("insert chat api");
+        let listed = storage.list_aggregate_apis().expect("list aggregate apis");
+        assert_eq!(
+            listed
+                .iter()
+                .find(|api| api.id == chat_api.id)
+                .and_then(|api| api.upstream_wire.as_deref()),
+            Some("chat_completions")
+        );
+
+        storage
+            .update_aggregate_api_upstream_wire(&chat_api.id, Some("passthrough"))
+            .expect("update wire");
+        let updated = storage
+            .find_aggregate_api_by_id(&chat_api.id)
+            .expect("find updated api")
+            .expect("updated api exists");
+        assert_eq!(updated.upstream_wire.as_deref(), Some("passthrough"));
     }
 
     #[test]

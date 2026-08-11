@@ -26,6 +26,8 @@ export interface ApiKeyCreateResult {
   key: string;
 }
 
+export type AggregateApiUpstreamWire = "passthrough" | "chat_completions";
+
 export interface AggregateApi {
   id: string;
   providerType: string;
@@ -36,6 +38,7 @@ export interface AggregateApi {
   authParams: Record<string, unknown> | null;
   action: string | null;
   compatibilityConfigJson: string | null;
+  upstreamWire: AggregateApiUpstreamWire;
   status: string;
   autoToggleEnabled: boolean;
   consecutiveFailures: number;

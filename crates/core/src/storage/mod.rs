@@ -1295,6 +1295,7 @@ pub struct AggregateApi {
     pub action: Option<String>,
     pub model_override: Option<String>,
     pub compatibility_config_json: Option<String>,
+    pub upstream_wire: Option<String>,
     pub status: String,
     pub auto_toggle_enabled: bool,
     pub consecutive_failures: i64,
@@ -1336,6 +1337,7 @@ pub struct AggregateApiListSummary {
     pub action: Option<String>,
     pub model_override: Option<String>,
     pub compatibility_config_json: Option<String>,
+    pub upstream_wire: Option<String>,
     pub status: String,
     pub auto_toggle_enabled: bool,
     pub consecutive_failures: i64,
@@ -2361,6 +2363,22 @@ impl Storage {
             "135_responses_compatibility",
             include_str!("../../migrations/135_responses_compatibility.sql"),
             |_s| Ok(()),
+        )?;
+        self.apply_sql_or_compat_migration(
+            "136_aggregate_api_upstream_wire",
+            include_str!("../../migrations/136_aggregate_api_upstream_wire.sql"),
+            |s| {
+                // 老库可能已通过 ensure_aggregate_apis_table 加过 upstream_wire 列；
+                // 此时 ALTER 会因 duplicate column 回退到这里，仍要完成默认值回填。
+                s.ensure_column("aggregate_apis", "upstream_wire", "TEXT")?;
+                s.conn.execute(
+                    "UPDATE aggregate_apis
+                     SET upstream_wire = 'passthrough'
+                     WHERE upstream_wire IS NULL OR TRIM(upstream_wire) = ''",
+                    [],
+                )?;
+                Ok(())
+            },
         )?;
         self.ensure_api_key_rotation_columns()?;
         self.ensure_api_key_account_group_filter_column()?;

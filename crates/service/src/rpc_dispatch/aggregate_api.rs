@@ -63,6 +63,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let balance_query_user_id = super::string_param(req, "balanceQueryUserId");
             let balance_query_config_json = super::string_param(req, "balanceQueryConfigJson");
             let compatibility_config_json = super::string_param(req, "compatibilityConfigJson");
+            let upstream_wire = super::string_param(req, "upstreamWire");
             super::value_or_error(create_aggregate_api(
                 url,
                 key,
@@ -85,6 +86,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 balance_query_user_id,
                 balance_query_config_json,
                 compatibility_config_json,
+                upstream_wire,
             ))
         }
         "aggregateApi/update" => {
@@ -115,6 +117,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let balance_query_user_id = super::string_param(req, "balanceQueryUserId");
             let balance_query_config_json = super::string_param(req, "balanceQueryConfigJson");
             let compatibility_config_json = super::string_param(req, "compatibilityConfigJson");
+            let upstream_wire = super::string_param(req, "upstreamWire");
             super::ok_or_error(update_aggregate_api(
                 api_id,
                 url,
@@ -139,6 +142,7 @@ pub(super) fn try_handle(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 balance_query_user_id,
                 balance_query_config_json,
                 compatibility_config_json,
+                upstream_wire,
             ))
         }
         "aggregateApi/recover" => {

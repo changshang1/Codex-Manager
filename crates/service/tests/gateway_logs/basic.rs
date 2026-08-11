@@ -6,6 +6,83 @@ const MISSING_AUTH_JSON_OPENAI_API_KEY_ERROR: &str =
     "配置错误：未配置auth.json的OPENAI_API_KEY(invalid api key)";
 const LEGACY_COMPACT_MODEL_FORWARD_RULES_SETTING_KEY: &str = "gateway.compact_model_forward_rules";
 
+fn seed_chat_completions_bridge(
+    storage: &Storage,
+    aggregate_id: &str,
+    upstream_addr: &str,
+    platform_key: &str,
+) {
+    let now = now_ts();
+    storage
+        .insert_aggregate_api(&AggregateApi {
+            id: aggregate_id.to_string(),
+            provider_type: "codex".to_string(),
+            supplier_name: Some("OpenCode Go".to_string()),
+            sort: 0,
+            url: format!("http://{upstream_addr}/v1"),
+            auth_type: "apikey".to_string(),
+            auth_params_json: None,
+            action: None,
+            model_override: Some("deepseek-v4-flash".to_string()),
+            compatibility_config_json: None,
+            upstream_wire: Some("chat_completions".to_string()),
+            status: "active".to_string(),
+            auto_toggle_enabled: false,
+            consecutive_failures: 0,
+            auto_disabled: false,
+            auto_disabled_at: None,
+            auto_disabled_reason: None,
+            created_at: now,
+            updated_at: now,
+            last_test_at: None,
+            last_test_status: None,
+            last_test_error: None,
+            balance_query_enabled: false,
+            balance_query_template: None,
+            balance_query_base_url: None,
+            balance_query_user_id: None,
+            balance_query_config_json: None,
+            last_balance_at: None,
+            last_balance_status: None,
+            last_balance_error: None,
+            last_balance_json: None,
+        })
+        .expect("insert chat bridge aggregate api");
+    storage
+        .upsert_aggregate_api_secret(aggregate_id, "upstream-secret")
+        .expect("insert chat bridge secret");
+    seed_model_catalog_route(
+        storage,
+        "gpt-5.4",
+        "aggregate_api",
+        aggregate_id,
+        "deepseek-v4-flash",
+        10,
+    );
+    storage
+        .insert_api_key(&ApiKey {
+            id: format!("gk_{aggregate_id}"),
+            name: Some("responses-chat-bridge".to_string()),
+            model_slug: None,
+            reasoning_effort: None,
+            service_tier: None,
+            rotation_strategy: "aggregate_api_rotation".to_string(),
+            aggregate_api_id: Some(aggregate_id.to_string()),
+            account_plan_filter: None,
+            aggregate_api_url: None,
+            client_type: "codex".to_string(),
+            protocol_type: "openai_compat".to_string(),
+            auth_scheme: "authorization_bearer".to_string(),
+            upstream_base_url: None,
+            static_headers_json: None,
+            key_hash: hash_platform_key_for_test(platform_key),
+            status: "active".to_string(),
+            created_at: now,
+            last_used_at: None,
+        })
+        .expect("insert chat bridge api key");
+}
+
 /// 函数 `gateway_logs_invalid_api_key_error`
 ///
 /// 作者: gaohongshun
@@ -635,6 +712,7 @@ fn gateway_aggregate_api_model_override_rewrites_minimax_responses_request() {
             action: None,
             model_override: Some("MiniMax-M3".to_string()),
             compatibility_config_json: None,
+            upstream_wire: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,
@@ -792,6 +870,173 @@ fn gateway_aggregate_api_model_override_rewrites_minimax_responses_request() {
 }
 
 #[test]
+fn gateway_aggregate_responses_to_chat_bridge_rewrites_path_body_and_response() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-gateway-responses-chat-bridge");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let upstream_response = serde_json::json!({
+        "id": "chatcmpl-bridge",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "deepseek-v4-flash",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "bridge ok" },
+            "finish_reason": "stop"
+        }],
+        "usage": { "prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6 }
+    });
+    let (upstream_addr, upstream_rx, upstream_join) = start_mock_upstream_once(
+        &serde_json::to_string(&upstream_response).expect("serialize upstream response"),
+    );
+
+    let platform_key = "pk_responses_chat_bridge";
+    let aggregate_id = "agg_responses_chat_bridge";
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init schema");
+    seed_chat_completions_bridge(&storage, aggregate_id, upstream_addr.as_str(), platform_key);
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request = serde_json::json!({
+        "model": "gpt-5.4",
+        "instructions": "Use tools when needed.",
+        "input": "hello",
+        "tools": [{
+            "type": "custom",
+            "name": "apply_patch",
+            "description": "Apply a patch"
+        }],
+        "stream": false
+    });
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &serde_json::to_string(&request).unwrap(),
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    assert_eq!(status, 200, "gateway response: {response_body}");
+    let response: serde_json::Value =
+        serde_json::from_str(&response_body).expect("parse Responses body");
+    assert_eq!(response["id"], "resp_chatcmpl-bridge");
+    assert_eq!(response["output"][0]["content"][0]["text"], "bridge ok");
+    assert_eq!(response["usage"]["total_tokens"], 6);
+
+    let captured = upstream_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive upstream request");
+    upstream_join.join().expect("join upstream");
+    assert_eq!(captured.path, "/v1/chat/completions");
+    assert_eq!(
+        captured.headers.get("authorization").map(String::as_str),
+        Some("Bearer upstream-secret")
+    );
+    let upstream_body: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&captured))
+            .expect("parse Chat request body");
+    assert_eq!(upstream_body["model"], "deepseek-v4-flash");
+    assert_eq!(upstream_body["messages"][0]["role"], "system");
+    assert_eq!(upstream_body["messages"][1]["role"], "user");
+    assert_eq!(upstream_body["tools"][0]["type"], "function");
+    assert_eq!(upstream_body["tools"][0]["function"]["name"], "apply_patch");
+    assert_eq!(upstream_body["stream"], false);
+}
+
+#[test]
+fn gateway_aggregate_responses_to_chat_bridge_streams_responses_events() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-gateway-responses-chat-bridge-stream");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let upstream_sse = concat!(
+        "data: {\"id\":\"chatcmpl-stream-bridge\",\"object\":\"chat.completion.chunk\",\"created\":123,\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"stream ok\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"id\":\"chatcmpl-stream-bridge\",\"object\":\"chat.completion.chunk\",\"model\":\"deepseek-v4-flash\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (upstream_addr, upstream_rx, upstream_join) =
+        start_mock_upstream_once_with_content_type(upstream_sse, "text/event-stream");
+
+    let platform_key = "pk_responses_chat_bridge_stream";
+    let aggregate_id = "agg_responses_chat_bridge_stream";
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init schema");
+    seed_chat_completions_bridge(&storage, aggregate_id, upstream_addr.as_str(), platform_key);
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request = serde_json::json!({ "model": "gpt-5.4", "input": "hello", "stream": true });
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &serde_json::to_string(&request).unwrap(),
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    assert_eq!(status, 200, "gateway response: {response_body}");
+    assert!(response_body.contains("event: response.created"));
+    assert!(response_body.contains("event: response.output_text.delta"));
+    assert!(response_body.contains("event: response.completed"));
+    assert!(response_body.contains("stream ok"));
+
+    let captured = upstream_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("receive upstream request");
+    upstream_join.join().expect("join upstream");
+    assert_eq!(captured.path, "/v1/chat/completions");
+    let upstream_body: serde_json::Value =
+        serde_json::from_slice(&decode_upstream_request_body(&captured)).unwrap();
+    assert_eq!(upstream_body["stream"], true);
+    assert_eq!(upstream_body["stream_options"]["include_usage"], true);
+}
+
+#[test]
+fn gateway_chat_bridge_rejects_stateful_fields_before_upstream_send() {
+    let _lock = test_env_guard();
+    let dir = new_test_dir("codexmanager-gateway-chat-bridge-stateful-reject");
+    let db_path: PathBuf = dir.join("codexmanager.db");
+    let _db_guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+
+    let platform_key = "pk_chat_bridge_stateful_reject";
+    let aggregate_id = "agg_chat_bridge_stateful_reject";
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init schema");
+    // 端口 9 没有测试上游。若桥接错误地发起请求，结果会变成连接失败的 502。
+    seed_chat_completions_bridge(&storage, aggregate_id, "127.0.0.1:9", platform_key);
+
+    let server = codexmanager_service::start_one_shot_server().expect("start server");
+    let request = serde_json::json!({
+        "model": "gpt-5.4",
+        "input": "hello",
+        "previous_response_id": "resp_stateful",
+        "stream": false
+    });
+    let (status, response_body) = post_http_raw(
+        &server.addr,
+        "/v1/responses",
+        &serde_json::to_string(&request).unwrap(),
+        &[
+            ("Content-Type", "application/json"),
+            ("Authorization", &format!("Bearer {platform_key}")),
+        ],
+    );
+    server.join();
+    assert_eq!(status, 400, "gateway response: {response_body}");
+    let error: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+    assert_eq!(error["error"]["type"], "invalid_request_error");
+    assert!(error["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("previous_response_id")));
+}
+
+#[test]
 fn gateway_aggregate_codex_failover_to_minimax_isolates_candidate_request_bodies() {
     let _lock = test_env_guard();
     let dir = new_test_dir("codexmanager-gateway-aggregate-codex-minimax-failover");
@@ -845,6 +1090,7 @@ fn gateway_aggregate_codex_failover_to_minimax_isolates_candidate_request_bodies
         action: Some("/responses".to_string()),
         model_override: Some("gpt-5.4".to_string()),
         compatibility_config_json: None,
+        upstream_wire: None,
         status: "active".to_string(),
         auto_toggle_enabled: false,
         consecutive_failures: 0,

@@ -7,6 +7,7 @@ import {
   AccountListResult,
   AccountUsage,
   AggregateApi,
+  AggregateApiUpstreamWire,
   AggregateApiBalanceRefreshResult,
   AggregateApiBalanceSnapshot,
   AggregateApiCreateResult,
@@ -141,6 +142,11 @@ function asArray<T = unknown>(payload: unknown): T[] {
  */
 function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+/** 归一化聚合 API 上游协议（upstream_wire）到受支持的字面量值。 */
+function normalizeAggregateApiUpstreamWire(value: string): AggregateApiUpstreamWire {
+  return value === "chat_completions" ? "chat_completions" : "passthrough";
 }
 
 /**
@@ -840,6 +846,9 @@ export function normalizeAggregateApi(item: unknown): AggregateApi | null {
       asString(
         source.compatibilityConfigJson ?? source.compatibility_config_json,
       ) || null,
+    upstreamWire: normalizeAggregateApiUpstreamWire(
+      asString(source.upstreamWire ?? source.upstream_wire)
+    ),
     status: asString(source.status) || "active",
     autoToggleEnabled: asBoolean(
       source.autoToggleEnabled ?? source.auto_toggle_enabled,

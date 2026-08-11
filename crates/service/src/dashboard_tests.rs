@@ -99,6 +99,7 @@ fn aggregate_api(id: &str) -> AggregateApi {
         action: None,
         model_override: None,
         compatibility_config_json: None,
+        upstream_wire: None,
         status: "active".to_string(),
         auto_toggle_enabled: true,
         consecutive_failures: 3,

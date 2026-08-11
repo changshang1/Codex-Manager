@@ -99,4 +99,11 @@ export const EN_AGGREGATE_API_MESSAGES: MessageCatalog = {
   "解除中...": "Clearing...",
   自动熔断已解除: "Automatic circuit breaker cleared",
   解除熔断失败: "Failed to clear circuit breaker",
+  上游协议: "Upstream protocol",
+  "透传（不转换，直连上游）":
+    "Passthrough (no conversion, connect directly to upstream)",
+  "Chat Completions（通过 Chat Completions 桥接）":
+    "Chat Completions (bridged through Chat Completions)",
+  "选择 Chat Completions 可将 Responses 请求桥接到仅支持 Chat Completions 的上游。":
+    "Choose Chat Completions to bridge Responses requests to upstreams that only support Chat Completions.",
 };

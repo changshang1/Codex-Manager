@@ -47,3 +47,14 @@ test("only compatible aggregate APIs require the incoming request path", () => {
   assert.equal(usesIncomingPath("codex"), false);
   assert.equal(usesIncomingPath("claude"), false);
 });
+
+test("Responses-to-Chat bridge is available only on OpenAI-style aggregate APIs", () => {
+  const supportsUpstreamWire =
+    providerModule.aggregateApiSupportsUpstreamWire;
+
+  assert.equal(supportsUpstreamWire("codex"), true);
+  assert.equal(supportsUpstreamWire("responses"), true);
+  assert.equal(supportsUpstreamWire("compatible"), true);
+  assert.equal(supportsUpstreamWire("claude"), false);
+  assert.equal(supportsUpstreamWire("gemini"), false);
+});

@@ -409,6 +409,20 @@ fn normalize_compatibility_config_json(value: Option<String>) -> Result<Option<S
     Ok(Some(raw))
 }
 
+fn normalize_upstream_wire(value: Option<String>) -> Result<String, String> {
+    let normalized = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("passthrough")
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "passthrough" => Ok("passthrough".to_string()),
+        "chat_completions" => Ok("chat_completions".to_string()),
+        other => Err(format!("unsupported aggregate api upstream wire: {other}")),
+    }
+}
+
 fn normalize_balance_query_template(value: Option<String>) -> Result<Option<String>, String> {
     let Some(raw) = value else {
         return Ok(None);
@@ -1793,6 +1807,7 @@ pub(crate) fn list_aggregate_apis() -> Result<Vec<AggregateApiSummary>, String> 
             action: item.action,
             model_override: item.model_override,
             compatibility_config_json: item.compatibility_config_json,
+            upstream_wire: item.upstream_wire,
             status: item.status,
             auto_toggle_enabled: item.auto_toggle_enabled,
             consecutive_failures: item.consecutive_failures,
@@ -1850,6 +1865,7 @@ pub(crate) fn create_aggregate_api(
     balance_query_user_id: Option<String>,
     balance_query_config_json: Option<String>,
     compatibility_config_json: Option<String>,
+    upstream_wire: Option<String>,
 ) -> Result<AggregateApiCreateResult, String> {
     let storage = open_storage().ok_or_else(|| "storage unavailable".to_string())?;
     let normalized_provider_type = normalize_provider_type(provider_type)?;
@@ -1868,6 +1884,7 @@ pub(crate) fn create_aggregate_api(
     let normalized_model_override = normalize_model_override(model_override)?;
     let normalized_compatibility_config_json =
         normalize_compatibility_config_json(compatibility_config_json)?;
+    let normalized_upstream_wire = normalize_upstream_wire(upstream_wire)?;
     let normalized_balance_query_enabled = balance_query_enabled.unwrap_or(false);
     let normalized_balance_query_template = if normalized_balance_query_enabled {
         Some(default_balance_query_template(
@@ -1914,6 +1931,7 @@ pub(crate) fn create_aggregate_api(
         action: normalized_action,
         model_override: normalized_model_override,
         compatibility_config_json: normalized_compatibility_config_json,
+        upstream_wire: Some(normalized_upstream_wire),
         status: "active".to_string(),
         auto_toggle_enabled: auto_toggle_enabled.unwrap_or(false),
         consecutive_failures: 0,
@@ -1995,6 +2013,7 @@ pub(crate) fn update_aggregate_api(
     balance_query_user_id: Option<String>,
     balance_query_config_json: Option<String>,
     compatibility_config_json: Option<String>,
+    upstream_wire: Option<String>,
 ) -> Result<(), String> {
     if api_id.is_empty() {
         return Err("aggregate api id required".to_string());
@@ -2085,6 +2104,12 @@ pub(crate) fn update_aggregate_api(
         let normalized = normalize_compatibility_config_json(Some(config_json))?;
         storage
             .update_aggregate_api_compatibility_config(api_id, normalized.as_deref())
+            .map_err(|err| err.to_string())?;
+    }
+    if let Some(value) = upstream_wire {
+        let normalized = normalize_upstream_wire(Some(value))?;
+        storage
+            .update_aggregate_api_upstream_wire(api_id, Some(normalized.as_str()))
             .map_err(|err| err.to_string())?;
     }
 

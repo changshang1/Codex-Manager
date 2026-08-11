@@ -15,7 +15,9 @@ use crate::aggregate_api::{
     AGGREGATE_API_PROVIDER_COMPATIBLE, AGGREGATE_API_PROVIDER_GEMINI,
     AGGREGATE_API_PROVIDER_RESPONSES,
 };
-use crate::gateway::protocol_adapter::adapt_openai_responses_to_anthropic_messages;
+use crate::gateway::protocol_adapter::{
+    adapt_openai_responses_to_anthropic_messages, adapt_responses_request_to_chat_completions,
+};
 use crate::gateway::request_log::RequestLogUsage;
 use serde_json::Value;
 
@@ -672,6 +674,35 @@ fn aggregate_upstream_model_for_log<'a>(
 fn should_bridge_responses_to_anthropic(candidate: &AggregateApi, path: &str) -> bool {
     normalize_provider_type_value(candidate.provider_type.as_str()) == AGGREGATE_API_PROVIDER_CLAUDE
         && (path == "/v1/responses" || path.starts_with("/v1/responses?"))
+}
+
+/// 判断是否将 /v1/responses 请求桥接到 Chat Completions 上游。
+///
+/// 依据持久化的 `upstream_wire` 字段（而非 action 字符串推断）。
+fn should_bridge_responses_to_chat_completions(candidate: &AggregateApi, path: &str) -> bool {
+    let upstream_wire = candidate
+        .upstream_wire
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("passthrough");
+    upstream_wire.eq_ignore_ascii_case("chat_completions")
+        && (path == "/v1/responses" || path.starts_with("/v1/responses?"))
+}
+
+/// Chat Completions 桥接的有效上游路径：action 覆盖优先，否则默认 /v1/chat/completions。
+fn chat_completions_bridge_action_path(candidate: &AggregateApi, path: &str) -> String {
+    if candidate.action.is_some() {
+        return effective_action_path(candidate, path);
+    }
+    let base_path = reqwest::Url::parse(candidate.url.as_str())
+        .ok()
+        .map(|url| url.path().trim_end_matches('/').to_string())
+        .unwrap_or_default();
+    if base_path == "/v1" || base_path.ends_with("/v1") {
+        "/chat/completions".to_string()
+    } else {
+        "/v1/chat/completions".to_string()
+    }
 }
 
 fn responses_to_anthropic_messages_action_path(candidate: &AggregateApi, path: &str) -> String {
@@ -2185,13 +2216,19 @@ pub(in super::super) fn proxy_aggregate_request(
         };
 
         let bridge_responses_to_anthropic = should_bridge_responses_to_anthropic(&candidate, path);
+        let bridge_responses_to_chat =
+            should_bridge_responses_to_chat_completions(&candidate, path);
         let effective_path = if bridge_responses_to_anthropic {
             responses_to_anthropic_messages_action_path(&candidate, path)
+        } else if bridge_responses_to_chat {
+            chat_completions_bridge_action_path(&candidate, path)
         } else {
             effective_action_path(&candidate, path)
         };
         let response_adapter_for_candidate = if bridge_responses_to_anthropic {
             super::super::super::ResponseAdapter::ResponsesFromAnthropicMessages
+        } else if bridge_responses_to_chat {
+            super::super::super::ResponseAdapter::ResponsesFromChatCompletions
         } else {
             response_adapter
         };
@@ -2239,6 +2276,8 @@ pub(in super::super) fn proxy_aggregate_request(
                 continue;
             }
         };
+        // Chat Completions 桥接：一次性执行请求转换，同时取得转换后的请求体与 custom tool 名集合。
+        let mut candidate_custom_tool_names = None;
         let upstream_body = if bridge_responses_to_anthropic {
             match adapt_openai_responses_to_anthropic_messages(
                 candidate_body.as_ref(),
@@ -2250,6 +2289,26 @@ pub(in super::super) fn proxy_aggregate_request(
                     last_attempt_supplier_name = candidate_supplier_name.clone();
                     last_attempt_error = Some(err);
                     last_failure_status = 502;
+                    continue;
+                }
+            }
+        } else if bridge_responses_to_chat {
+            match adapt_responses_request_to_chat_completions(
+                candidate_body.as_ref(),
+                candidate.model_override.as_deref(),
+                effective_path.as_str(),
+            ) {
+                Ok(bridge) => {
+                    candidate_custom_tool_names = Some(bridge.custom_tool_names);
+                    // 契约校验：adapter 返回的有效 Chat 上游路径应与本候选构造的一致。
+                    debug_assert_eq!(bridge.chat_path, effective_path);
+                    Bytes::from(bridge.body)
+                }
+                Err(err) => {
+                    last_attempt_url = Some(base_upstream_url.to_string());
+                    last_attempt_supplier_name = candidate_supplier_name.clone();
+                    last_attempt_error = Some(err);
+                    last_failure_status = 400;
                     continue;
                 }
             }
@@ -2642,6 +2701,7 @@ pub(in super::super) fn proxy_aggregate_request(
                 None,
                 path,
                 None,
+                candidate_custom_tool_names.as_ref(),
                 is_stream,
                 false,
                 Some(trace_id),
@@ -2918,6 +2978,7 @@ mod bridge_tests {
             action: None,
             model_override: None,
             compatibility_config_json: None,
+            upstream_wire: None,
             status: "active".to_string(),
             auto_toggle_enabled: false,
             consecutive_failures: 0,
@@ -3556,6 +3617,61 @@ data: {"error":{"type":"billing_error","message":"daily usage limit exceeded"}}
             std::env::remove_var("CODEXMANAGER_ROUTE_STRATEGY");
         }
         crate::gateway::reload_runtime_config_from_env();
+    }
+
+    #[test]
+    fn upstream_wire_selects_chat_completions_bridge() {
+        let mut api = candidate("chat-bridge", 0);
+        api.upstream_wire = Some("chat_completions".to_string());
+        assert!(should_bridge_responses_to_chat_completions(
+            &api,
+            "/v1/responses"
+        ));
+        assert!(should_bridge_responses_to_chat_completions(
+            &api,
+            "/v1/responses?x=1"
+        ));
+
+        let mut passthrough = candidate("passthrough", 1);
+        passthrough.upstream_wire = None;
+        assert!(!should_bridge_responses_to_chat_completions(
+            &passthrough,
+            "/v1/responses"
+        ));
+        passthrough.upstream_wire = Some("passthrough".to_string());
+        assert!(!should_bridge_responses_to_chat_completions(
+            &passthrough,
+            "/v1/responses"
+        ));
+        assert!(!should_bridge_responses_to_chat_completions(
+            &passthrough,
+            "/v1/chat/completions"
+        ));
+    }
+
+    #[test]
+    fn chat_completions_bridge_action_path_defaults_and_override() {
+        // 无 action 时默认 /v1/chat/completions（base 已是 /v1 则相对拼接）。
+        let mut api = candidate("chat-path-default", 0);
+        api.url = "https://open.opencode.com/v1".to_string();
+        api.upstream_wire = Some("chat_completions".to_string());
+        assert_eq!(
+            chat_completions_bridge_action_path(&api, "/v1/responses"),
+            "/chat/completions"
+        );
+
+        api.url = "https://open.opencode.com/".to_string();
+        assert_eq!(
+            chat_completions_bridge_action_path(&api, "/v1/responses"),
+            "/v1/chat/completions"
+        );
+
+        // action 覆盖优先。
+        api.action = Some("/custom/chat".to_string());
+        assert_eq!(
+            chat_completions_bridge_action_path(&api, "/v1/responses"),
+            "/custom/chat"
+        );
     }
 }
 

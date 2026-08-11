@@ -256,6 +256,7 @@ fn aggregate_api_with_action(action: Option<&str>) -> AggregateApi {
         action: action.map(str::to_string),
         model_override: None,
         compatibility_config_json: None,
+        upstream_wire: None,
         status: "active".to_string(),
         auto_toggle_enabled: false,
         consecutive_failures: 0,
@@ -302,6 +303,7 @@ fn create_test_aggregate_api(suffix: &str, auto_toggle_enabled: Option<bool>) ->
         None,
         None,
         None,
+        None,
     )
     .expect("create aggregate API")
     .id
@@ -317,6 +319,7 @@ fn update_test_aggregate_api_auto_toggle(api_id: &str, supplier_name: &str, enab
         None,
         None,
         Some(enabled),
+        None,
         None,
         None,
         None,
@@ -393,6 +396,7 @@ fn update_disabling_auto_toggle_clears_current_breaker_but_preserves_history() {
         None,
         Some("disabled".to_string()),
         Some(false),
+        None,
         None,
         None,
         None,
@@ -940,4 +944,169 @@ fn minimax_codex_probe_uses_responses_string_input() {
     let body: Value = serde_json::from_str(captured.2.as_str()).expect("parse body");
     assert_eq!(body["model"], "MiniMax-M3");
     assert_eq!(body["input"], "Who are you?");
+}
+
+#[test]
+fn upstream_wire_create_defaults_and_roundtrip() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-upstream-wire");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+
+    // 未传 upstream_wire 时默认 passthrough。
+    let default_id = create_test_aggregate_api("wire-default", None);
+    let default_api = storage
+        .find_aggregate_api_by_id(&default_id)
+        .expect("read default API")
+        .expect("default API exists");
+    assert_eq!(default_api.upstream_wire.as_deref(), Some("passthrough"));
+
+    // 传 chat_completions 时 round-trip 保持。
+    let chat_id = create_aggregate_api(
+        Some("https://wire-chat.example.test/v1".to_string()),
+        Some("test-key-wire-chat".to_string()),
+        Some(AGGREGATE_API_PROVIDER_RESPONSES.to_string()),
+        Some("wire-chat".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("chat_completions".to_string()),
+    )
+    .expect("create aggregate API with upstream wire")
+    .id;
+    let chat_api = storage
+        .find_aggregate_api_by_id(&chat_id)
+        .expect("read chat API")
+        .expect("chat API exists");
+    assert_eq!(chat_api.upstream_wire.as_deref(), Some("chat_completions"));
+}
+
+#[test]
+fn upstream_wire_rejects_unsupported_value_and_update_roundtrip() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-upstream-wire-update");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+
+    let err = create_aggregate_api(
+        Some("https://wire-bad.example.test/v1".to_string()),
+        Some("test-key-wire-bad".to_string()),
+        Some(AGGREGATE_API_PROVIDER_RESPONSES.to_string()),
+        Some("wire-bad".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("bogus".to_string()),
+    )
+    .expect_err("unsupported upstream wire must be rejected");
+    assert!(err.contains("unsupported aggregate api upstream wire"));
+
+    let id = create_test_aggregate_api("wire-update", None);
+    update_aggregate_api(
+        &id,
+        None,
+        None,
+        None,
+        Some("wire-update".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("chat_completions".to_string()),
+    )
+    .expect("update upstream wire");
+    let updated = storage
+        .find_aggregate_api_by_id(&id)
+        .expect("read updated API")
+        .expect("updated API exists");
+    assert_eq!(updated.upstream_wire.as_deref(), Some("chat_completions"));
+}
+
+#[test]
+fn upstream_wire_list_summary_carries_value() {
+    let _lock = crate::test_env_guard();
+    let dir = new_test_dir("aggregate-api-upstream-wire-list");
+    let db_path = dir.join("codexmanager.db");
+    let _guard = EnvGuard::set("CODEXMANAGER_DB_PATH", db_path.to_string_lossy().as_ref());
+    let storage = Storage::open(&db_path).expect("open db");
+    storage.init().expect("init db");
+
+    create_aggregate_api(
+        Some("https://wire-list.example.test/v1".to_string()),
+        Some("test-key-wire-list".to_string()),
+        Some(AGGREGATE_API_PROVIDER_RESPONSES.to_string()),
+        Some("wire-list".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("chat_completions".to_string()),
+    )
+    .expect("create aggregate API with upstream wire");
+
+    let items = list_aggregate_apis().expect("list aggregate APIs");
+    let item = items
+        .iter()
+        .find(|item| item.supplier_name.as_deref() == Some("wire-list"))
+        .expect("find listed aggregate API");
+    assert_eq!(item.upstream_wire.as_deref(), Some("chat_completions"));
 }

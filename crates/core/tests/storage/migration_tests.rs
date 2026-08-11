@@ -1,3 +1,5 @@
+use super::now_ts;
+use super::AggregateApi;
 use super::Storage;
 use std::fs;
 use std::path::PathBuf;
@@ -2144,4 +2146,171 @@ fn init_migrates_quota_assignments_to_model_source_mappings() {
     assert_eq!(mapping_row.3, 1);
     assert_eq!(mapping_row.4, 0);
     assert_eq!(mapping_row.5, 1);
+}
+
+#[test]
+fn init_backfills_upstream_wire_default_on_legacy_rows() {
+    // 模拟老库：已有 aggregate_apis 表但无 upstream_wire 列，且已应用旧迁移标记。
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage
+        .conn
+        .execute_batch(
+            "CREATE TABLE aggregate_apis (
+                id TEXT PRIMARY KEY,
+                provider_type TEXT NOT NULL DEFAULT 'codex',
+                supplier_name TEXT,
+                sort INTEGER NOT NULL DEFAULT 0,
+                url TEXT NOT NULL,
+                auth_type TEXT NOT NULL DEFAULT 'apikey',
+                auth_params_json TEXT,
+                action TEXT,
+                model_override TEXT,
+                compatibility_config_json TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_test_at INTEGER,
+                last_test_status TEXT,
+                last_test_error TEXT,
+                balance_query_enabled INTEGER NOT NULL DEFAULT 0,
+                balance_query_template TEXT,
+                balance_query_base_url TEXT,
+                balance_query_user_id TEXT,
+                balance_query_config_json TEXT,
+                last_balance_at INTEGER,
+                last_balance_status TEXT,
+                last_balance_error TEXT,
+                last_balance_json TEXT,
+                auto_toggle_enabled INTEGER NOT NULL DEFAULT 0,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                auto_disabled INTEGER NOT NULL DEFAULT 0,
+                auto_disabled_at INTEGER,
+                auto_disabled_reason TEXT
+            );
+            INSERT INTO aggregate_apis (
+                id, provider_type, url, status, created_at, updated_at
+            ) VALUES
+                ('legacy-wire-a', 'codex', 'https://wire-a.example.test', 'active', 1, 1),
+                ('legacy-wire-b', 'responses', 'https://wire-b.example.test', 'active', 1, 1);",
+        )
+        .expect("create legacy aggregate_apis table");
+    storage
+        .ensure_migrations_table()
+        .expect("ensure migration tracker");
+    storage
+        .conn
+        .execute(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES ('135_responses_compatibility', 1)",
+            [],
+        )
+        .expect("insert legacy migration marker");
+
+    storage.init().expect("repair legacy aggregate API schema");
+
+    assert!(storage
+        .has_column("aggregate_apis", "upstream_wire")
+        .expect("check upstream_wire column"));
+    let (not_null, default_value): (i64, Option<String>) = storage
+        .conn
+        .query_row(
+            "SELECT \"notnull\", dflt_value
+             FROM pragma_table_info('aggregate_apis')
+             WHERE name = 'upstream_wire'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read upstream_wire schema");
+    assert_eq!(not_null, 1, "upstream_wire must be NOT NULL");
+    assert_eq!(
+        default_value.as_deref(),
+        Some("'passthrough'"),
+        "upstream_wire must default to passthrough"
+    );
+
+    let migration_marker: Option<String> = storage
+        .conn
+        .query_row(
+            "SELECT version FROM schema_migrations WHERE version = '136_aggregate_api_upstream_wire'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read migration marker");
+    assert!(
+        migration_marker.is_some(),
+        "136_aggregate_api_upstream_wire 迁移必须被记录"
+    );
+
+    let values: Vec<(String, String)> = storage
+        .conn
+        .prepare("SELECT id, COALESCE(upstream_wire, '') FROM aggregate_apis ORDER BY id")
+        .expect("prepare select")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect rows");
+    assert_eq!(
+        values,
+        vec![
+            ("legacy-wire-a".to_string(), "passthrough".to_string()),
+            ("legacy-wire-b".to_string(), "passthrough".to_string()),
+        ],
+        "既有行迁移后必须保持 passthrough 默认值"
+    );
+}
+
+#[test]
+fn upstream_wire_roundtrip_via_storage_helpers() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init db");
+
+    let now = now_ts();
+    let api = AggregateApi {
+        id: "wire-roundtrip".to_string(),
+        provider_type: "responses".to_string(),
+        supplier_name: Some("wire".to_string()),
+        sort: 0,
+        url: "https://wire.example.test/v1".to_string(),
+        auth_type: "apikey".to_string(),
+        auth_params_json: None,
+        action: None,
+        model_override: None,
+        compatibility_config_json: None,
+        upstream_wire: Some("chat_completions".to_string()),
+        status: "active".to_string(),
+        auto_toggle_enabled: false,
+        consecutive_failures: 0,
+        auto_disabled: false,
+        auto_disabled_at: None,
+        auto_disabled_reason: None,
+        created_at: now,
+        updated_at: now,
+        last_test_at: None,
+        last_test_status: None,
+        last_test_error: None,
+        balance_query_enabled: false,
+        balance_query_template: None,
+        balance_query_base_url: None,
+        balance_query_user_id: None,
+        balance_query_config_json: None,
+        last_balance_at: None,
+        last_balance_status: None,
+        last_balance_error: None,
+        last_balance_json: None,
+    };
+    storage.insert_aggregate_api(&api).expect("insert API");
+
+    let loaded = storage
+        .find_aggregate_api_by_id("wire-roundtrip")
+        .expect("read API")
+        .expect("API exists");
+    assert_eq!(loaded.upstream_wire.as_deref(), Some("chat_completions"));
+
+    storage
+        .update_aggregate_api_upstream_wire("wire-roundtrip", Some("passthrough"))
+        .expect("update upstream wire");
+    let updated = storage
+        .find_aggregate_api_by_id("wire-roundtrip")
+        .expect("read updated API")
+        .expect("updated API exists");
+    assert_eq!(updated.upstream_wire.as_deref(), Some("passthrough"));
 }

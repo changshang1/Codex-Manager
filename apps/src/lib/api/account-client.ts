@@ -62,6 +62,7 @@ import {
   AccountListResult,
   AccountUsage,
   AggregateApi,
+  AggregateApiUpstreamWire,
   AggregateApiBalanceRefreshResult,
   AggregateApiCreateResult,
   AggregateApiModelDiscoveryResult,
@@ -200,6 +201,7 @@ interface AggregateApiPayload {
   actionCustomEnabled?: boolean | null;
   action?: string | null;
   compatibilityConfigJson?: string | null;
+  upstreamWire?: AggregateApiUpstreamWire | null;
   username?: string | null;
   password?: string | null;
   balanceQueryEnabled?: boolean | null;
@@ -826,6 +828,7 @@ export const accountClient = {
             : null,
         action: params.action ?? null,
         compatibilityConfigJson: params.compatibilityConfigJson ?? null,
+        upstreamWire: params.upstreamWire ?? null,
         username: params.username || null,
         password: params.password || null,
         balanceQueryEnabled:
@@ -877,6 +880,7 @@ export const accountClient = {
             : null,
         action: params.action ?? null,
         compatibilityConfigJson: params.compatibilityConfigJson ?? null,
+        upstreamWire: params.upstreamWire ?? null,
         username: params.username || null,
         password: params.password || null,
         balanceQueryEnabled:
