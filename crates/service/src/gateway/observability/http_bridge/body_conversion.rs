@@ -537,6 +537,7 @@ pub(super) fn convert_success_body_for_adapter(
     body: &[u8],
     _request_path: &str,
     tool_name_restore_map: Option<&ToolNameRestoreMap>,
+    custom_tool_names: Option<&std::collections::BTreeSet<String>>,
 ) -> Option<Vec<u8>> {
     match response_adapter {
         ResponseAdapter::AnthropicMessagesFromResponses => {
@@ -547,6 +548,9 @@ pub(super) fn convert_success_body_for_adapter(
         }
         ResponseAdapter::ChatCompletionsFromResponses => {
             convert_responses_body_to_chat_completions(body)
+        }
+        ResponseAdapter::ResponsesFromChatCompletions => {
+            convert_chat_completions_body_to_responses(body, custom_tool_names)
         }
         ResponseAdapter::CompactFromChatCompletions => {
             convert_chat_completions_body_to_compact(body)
@@ -689,6 +693,224 @@ pub(super) fn convert_responses_body_to_chat_completions(body: &[u8]) -> Option<
     serde_json::to_vec(&completion).ok()
 }
 
+/// 将非流式 Chat Completions 响应转换为一个 Responses 对象。
+///
+/// - `id` 使用稳定的 `resp_` 值（上游 id 已带 resp_ 前缀则原样，否则前缀 resp_）。
+/// - 文本转为 completed 的 message item（output_text 内容）。
+/// - function call 转为 completed 的 `function_call` item；名字在 custom_tool_names
+///   中时转为 `custom_tool_call`，并把 `{"input": raw}` 包装的 `input` 解包出来。
+/// - 畸形 custom tool 包装（arguments 非 `{"input":...}` 形状）返回 None，作为协议错误，
+///   不向客户端透传空 patch。
+/// - Chat usage 映射为 Responses input/output/total token 字段，并保留 cached 与
+///   reasoning token 明细。
+pub(super) fn convert_chat_completions_body_to_responses(
+    body: &[u8],
+    custom_tool_names: Option<&std::collections::BTreeSet<String>>,
+) -> Option<Vec<u8>> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let upstream_id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let response_id = match upstream_id.as_deref() {
+        Some(id) if id.starts_with("resp_") => id.to_string(),
+        Some(id) => format!("resp_{id}"),
+        None => "resp_codexmanager".to_string(),
+    };
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let created_at = value
+        .get("created")
+        .or_else(|| value.get("created_at"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let mut output = Vec::new();
+    let mut output_text = String::new();
+    let mut reasoning_text = String::new();
+
+    let choices = value.get("choices").and_then(Value::as_array)?;
+    if choices.is_empty() {
+        return None;
+    }
+    for choice in choices {
+            let message = choice.get("message")?.as_object()?;
+            if let Some(content) = message.get("content") {
+                collect_chat_completion_message_text(content, &mut output_text);
+            }
+            if let Some(reasoning) = message
+                .get("reasoning_content")
+                .or_else(|| message.get("reasoning"))
+                .and_then(Value::as_str)
+            {
+                if !reasoning_text.is_empty() {
+                    reasoning_text.push_str("\n\n");
+                }
+                reasoning_text.push_str(reasoning);
+            }
+            if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                for tool_call in tool_calls {
+                    let tool_call = tool_call.as_object()?;
+                    let function = tool_call.get("function").and_then(Value::as_object)?;
+                    let name = function
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|name| !name.is_empty())
+                        ?;
+                    let call_id = tool_call
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        ?
+                        .to_string();
+                    let arguments = function
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        ?
+                        .to_string();
+                    let is_custom = custom_tool_names.is_some_and(|names| names.contains(name));
+                    if is_custom {
+                        let parsed = serde_json::from_str::<Value>(arguments.as_str()).ok();
+                        let input = match parsed {
+                            Some(Value::Object(map)) if map.len() == 1 => map
+                                .get("input")
+                                .and_then(Value::as_str)
+                                .map(|input| Value::String(input.to_string())),
+                            _ => None,
+                        };
+                        // 畸形 custom 包装：不允许作为空 patch 传给客户端。
+                        let input = input?;
+                        output.push(json!({
+                            "id": call_id,
+                            "type": "custom_tool_call",
+                            "status": "completed",
+                            "call_id": call_id,
+                            "name": name,
+                            "input": input,
+                        }));
+                    } else {
+                        output.push(json!({
+                            "id": call_id,
+                            "type": "function_call",
+                            "status": "completed",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments,
+                        }));
+                    }
+                }
+            }
+    }
+
+    if !reasoning_text.trim().is_empty() {
+        output.insert(
+            0,
+            json!({
+                "id": format!("rs_{response_id}"),
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": reasoning_text }],
+            }),
+        );
+    }
+    if !output_text.trim().is_empty() {
+        output.insert(
+            if reasoning_text.trim().is_empty() {
+                0
+            } else {
+                1
+            },
+            json!({
+                "id": format!("msg_{response_id}"),
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": output_text }],
+            }),
+        );
+    }
+
+    let payload = json!({
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "completed",
+        "model": model,
+        "output": Value::Array(output),
+        "usage": chat_usage_to_responses_usage(&value),
+    });
+    serde_json::to_vec(&payload).ok()
+}
+
+/// 将 Chat usage 映射为 Responses usage，保留 cached / reasoning 明细。
+fn chat_usage_to_responses_usage(value: &Value) -> Value {
+    let usage = value.get("usage").cloned().unwrap_or(Value::Null);
+    let input_tokens = usage
+        .get("prompt_tokens")
+        .or_else(|| usage.get("input_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("completion_tokens")
+        .or_else(|| usage.get("output_tokens"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(input_tokens + output_tokens);
+    let cached_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("cached_tokens"))
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(Value::as_object)
+                .and_then(|d| d.get("cached_tokens"))
+        })
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let cache_write_tokens = usage
+        .get("prompt_tokens_details")
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("cache_write_tokens"))
+        .or_else(|| {
+            usage
+                .get("input_tokens_details")
+                .and_then(Value::as_object)
+                .and_then(|d| d.get("cache_write_tokens"))
+        })
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let reasoning_tokens = usage
+        .get("completion_tokens_details")
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("reasoning_tokens"))
+        .or_else(|| {
+            usage
+                .get("output_tokens_details")
+                .and_then(Value::as_object)
+                .and_then(|d| d.get("reasoning_tokens"))
+        })
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    json!({
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "input_tokens_details": {
+            "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
+        },
+        "output_tokens_details": { "reasoning_tokens": reasoning_tokens },
+    })
+}
+
 fn collect_chat_completion_message_text(value: &Value, out: &mut String) {
     match value {
         Value::String(text) => out.push_str(text),
@@ -754,7 +976,8 @@ pub(super) fn convert_error_body_for_adapter(
             convert_upstream_error_to_anthropic_body(message)
         }
         ResponseAdapter::ResponsesFromAnthropicMessages
-        | ResponseAdapter::ChatCompletionsFromResponses => serde_json::to_vec(&json!({
+        | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions => serde_json::to_vec(&json!({
             "error": {
                 "message": message,
                 "type": "upstream_error",
@@ -795,7 +1018,8 @@ pub(super) fn compatibility_stream_content_type(
     match response_adapter {
         ResponseAdapter::AnthropicMessagesFromResponses => "text/event-stream",
         ResponseAdapter::ResponsesFromAnthropicMessages
-        | ResponseAdapter::ChatCompletionsFromResponses => "text/event-stream",
+        | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions => "text/event-stream",
         ResponseAdapter::CompactFromChatCompletions => "application/json",
         ResponseAdapter::ImagesB64JsonFromResponses | ResponseAdapter::ImagesUrlFromResponses => {
             "text/event-stream"

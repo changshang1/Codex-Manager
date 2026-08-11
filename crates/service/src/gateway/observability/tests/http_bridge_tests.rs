@@ -2835,3 +2835,203 @@ fn passthrough_sse_reader_treats_message_stop_as_terminal_for_anthropic_native()
     assert_eq!(collector.last_event_type.as_deref(), Some("message_stop"));
     assert_eq!(collector.terminal_error, None);
 }
+
+#[test]
+fn convert_chat_completions_body_to_responses_text_and_usage() {
+    use super::body_conversion::convert_success_body_for_adapter;
+    use crate::gateway::ResponseAdapter;
+
+    let chat = json!({
+        "id": "chatcmpl-abc",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "deepseek-v4-flash",
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": "你好世界" },
+            "finish_reason": "stop",
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_tokens_details": { "cached_tokens": 6 },
+            "completion_tokens_details": { "reasoning_tokens": 2 },
+        },
+    });
+    let body = convert_success_body_for_adapter(
+        ResponseAdapter::ResponsesFromChatCompletions,
+        serde_json::to_vec(&chat).unwrap().as_slice(),
+        "/v1/responses",
+        None,
+        None,
+    )
+    .expect("conversion should succeed");
+    let value: Value = serde_json::from_slice(body.as_slice()).unwrap();
+    assert_eq!(
+        value.get("object").and_then(Value::as_str),
+        Some("response")
+    );
+    assert_eq!(
+        value.get("id").and_then(Value::as_str),
+        Some("resp_chatcmpl-abc")
+    );
+    assert_eq!(
+        value.get("status").and_then(Value::as_str),
+        Some("completed")
+    );
+    let output = value.get("output").and_then(Value::as_array).unwrap();
+    assert_eq!(output.len(), 1);
+    assert_eq!(
+        output[0].get("type").and_then(Value::as_str),
+        Some("message")
+    );
+    assert_eq!(
+        output[0].get("content").and_then(Value::as_array).unwrap()[0]
+            .get("text")
+            .and_then(Value::as_str),
+        Some("你好世界")
+    );
+    let usage = value.get("usage").unwrap();
+    assert_eq!(usage.get("input_tokens").and_then(Value::as_i64), Some(10));
+    assert_eq!(usage.get("output_tokens").and_then(Value::as_i64), Some(5));
+    assert_eq!(usage.get("total_tokens").and_then(Value::as_i64), Some(15));
+    assert_eq!(
+        usage
+            .get("input_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(Value::as_i64),
+        Some(6)
+    );
+    assert_eq!(
+        usage
+            .get("output_tokens_details")
+            .and_then(|d| d.get("reasoning_tokens"))
+            .and_then(Value::as_i64),
+        Some(2)
+    );
+}
+
+#[test]
+fn convert_chat_completions_body_to_responses_function_and_custom_tools() {
+    use super::body_conversion::convert_success_body_for_adapter;
+    use crate::gateway::ResponseAdapter;
+    use std::collections::BTreeSet;
+
+    let mut custom_tool_names = BTreeSet::new();
+    custom_tool_names.insert("apply_patch".to_string());
+
+    let chat = json!({
+        "id": "chatcmpl-tools",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "get_weather", "arguments": "{\"city\":\"北京\"}" },
+                    },
+                    {
+                        "id": "call_2",
+                        "type": "function",
+                        "function": { "name": "apply_patch", "arguments": "{\"input\":\"*** Begin Patch\\n*** Update File: a.rs\"}" },
+                    },
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }],
+        "usage": { "prompt_tokens": 8, "completion_tokens": 4, "total_tokens": 12 },
+    });
+    let body = convert_success_body_for_adapter(
+        ResponseAdapter::ResponsesFromChatCompletions,
+        serde_json::to_vec(&chat).unwrap().as_slice(),
+        "/v1/responses",
+        None,
+        Some(&custom_tool_names),
+    )
+    .expect("conversion should succeed");
+    let value: Value = serde_json::from_slice(body.as_slice()).unwrap();
+    let output = value.get("output").and_then(Value::as_array).unwrap();
+    assert_eq!(output.len(), 2);
+    let function_call = &output[0];
+    assert_eq!(
+        function_call.get("type").and_then(Value::as_str),
+        Some("function_call")
+    );
+    assert_eq!(
+        function_call.get("name").and_then(Value::as_str),
+        Some("get_weather")
+    );
+    assert_eq!(
+        function_call.get("call_id").and_then(Value::as_str),
+        Some("call_1")
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            function_call
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap()
+        )
+        .unwrap()
+        .get("city")
+        .and_then(Value::as_str),
+        Some("北京")
+    );
+    let custom_call = &output[1];
+    assert_eq!(
+        custom_call.get("type").and_then(Value::as_str),
+        Some("custom_tool_call")
+    );
+    assert_eq!(
+        custom_call.get("name").and_then(Value::as_str),
+        Some("apply_patch")
+    );
+    assert_eq!(
+        custom_call.get("call_id").and_then(Value::as_str),
+        Some("call_2")
+    );
+    assert_eq!(
+        custom_call.get("input").and_then(Value::as_str),
+        Some("*** Begin Patch\n*** Update File: a.rs")
+    );
+}
+
+#[test]
+fn convert_chat_completions_body_to_responses_rejects_malformed_custom_wrapper() {
+    use super::body_conversion::convert_success_body_for_adapter;
+    use crate::gateway::ResponseAdapter;
+    use std::collections::BTreeSet;
+
+    let mut custom_tool_names = BTreeSet::new();
+    custom_tool_names.insert("apply_patch".to_string());
+
+    // 畸形 custom 包装：arguments 不是 {"input": ...} 形状。
+    let chat = json!({
+        "id": "chatcmpl-bad",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": "call_bad",
+                    "type": "function",
+                    "function": { "name": "apply_patch", "arguments": "not-json" },
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }],
+        "usage": {},
+    });
+    let result = convert_success_body_for_adapter(
+        ResponseAdapter::ResponsesFromChatCompletions,
+        serde_json::to_vec(&chat).unwrap().as_slice(),
+        "/v1/responses",
+        None,
+        Some(&custom_tool_names),
+    );
+    assert!(result.is_none(), "畸形 custom 包装应返回协议错误（None）");
+}

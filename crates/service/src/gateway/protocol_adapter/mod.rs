@@ -1,9 +1,14 @@
 mod request_router;
+mod responses_to_chat_completions;
 mod types;
 
 pub(super) use self::request_router::{
     adapt_openai_responses_to_anthropic_messages, adapt_request_for_protocol,
 };
+pub(super) use self::responses_to_chat_completions::adapt_responses_request_to_chat_completions;
+// 类型仅被响应转换测试直接引用；生产代码通过函数返回类型推断，无需显式导入。
+#[allow(unused_imports)]
+pub(super) use self::responses_to_chat_completions::ResponsesToChatCompletionsBridge;
 pub(super) use self::types::{
     AdaptedGatewayRequest, GeminiStreamOutputMode, ResponseAdapter, ToolNameRestoreMap,
 };

@@ -1,7 +1,8 @@
 use super::super::body_conversion::{
-    convert_chat_completions_body_to_compact, convert_responses_body_to_chat_completions,
-    convert_responses_body_to_gemini_generate_content, convert_responses_body_to_images,
-    gemini_cli_wrap_response_envelope, merge_usage_from_body_without_output_text,
+    convert_chat_completions_body_to_compact, convert_chat_completions_body_to_responses,
+    convert_responses_body_to_chat_completions, convert_responses_body_to_gemini_generate_content,
+    convert_responses_body_to_images, gemini_cli_wrap_response_envelope,
+    merge_usage_from_body_without_output_text,
 };
 use super::super::compact_errors::{
     build_passthrough_non_success_message, classify_compact_non_success_kind,
@@ -12,7 +13,8 @@ use super::{
     response_adapter_uses_manual_chunked_streaming, write_streaming_chunked_response,
     ImagesResponseFormat, ResponseAdapter, StatusCode,
 };
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use tiny_http::{HTTPVersion, Header};
 
@@ -589,4 +591,106 @@ fn gemini_cli_wrap_response_envelope_is_enabled_for_gemini_adapter_only() {
     assert!(!gemini_cli_wrap_response_envelope(
         ResponseAdapter::Passthrough
     ));
+}
+
+#[test]
+fn non_stream_chat_completion_maps_text_reasoning_tools_and_usage_to_responses() {
+    let patch = "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** End Patch";
+    let body = json!({
+        "id": "chatcmpl-non-stream",
+        "created": 123,
+        "model": "deepseek-v4-flash",
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": "完成",
+                "reasoning_content": "先检查文件",
+                "tool_calls": [
+                    {
+                        "id": "call_fn",
+                        "type": "function",
+                        "function": { "name": "read_file", "arguments": "{\"path\":\"src/main.rs\"}" }
+                    },
+                    {
+                        "id": "call_patch",
+                        "type": "function",
+                        "function": {
+                            "name": "apply_patch",
+                            "arguments": serde_json::to_string(&json!({ "input": patch })).unwrap()
+                        }
+                    }
+                ]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 8,
+            "total_tokens": 18,
+            "prompt_tokens_details": { "cached_tokens": 4 },
+            "completion_tokens_details": { "reasoning_tokens": 3 }
+        }
+    });
+    let custom_names: BTreeSet<String> = ["apply_patch".to_string()].into_iter().collect();
+    let mapped = convert_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).unwrap().as_slice(),
+        Some(&custom_names),
+    )
+    .expect("convert chat completion");
+    let value: Value = serde_json::from_slice(&mapped).unwrap();
+
+    assert_eq!(value["id"], "resp_chatcmpl-non-stream");
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["output"][0]["type"], "reasoning");
+    assert_eq!(value["output"][1]["content"][0]["text"], "完成");
+    assert_eq!(value["output"][2]["type"], "function_call");
+    assert_eq!(value["output"][3]["type"], "custom_tool_call");
+    assert_eq!(value["output"][3]["input"], patch);
+    assert_eq!(value["usage"]["input_tokens"], 10);
+    assert_eq!(
+        value["usage"]["output_tokens_details"]["reasoning_tokens"],
+        3
+    );
+}
+
+#[test]
+fn non_stream_chat_completion_rejects_malformed_custom_tool_wrapper() {
+    let body = json!({
+        "id": "chatcmpl-bad-custom",
+        "choices": [{
+            "message": {
+                "tool_calls": [{
+                    "id": "call_patch",
+                    "type": "function",
+                    "function": { "name": "apply_patch", "arguments": "{\"wrong\":true}" }
+                }]
+            }
+        }]
+    });
+    let custom_names: BTreeSet<String> = ["apply_patch".to_string()].into_iter().collect();
+    assert!(convert_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).unwrap().as_slice(),
+        Some(&custom_names),
+    )
+    .is_none());
+}
+
+#[test]
+fn non_stream_chat_completion_rejects_tool_call_without_stable_identity() {
+    let body = json!({
+        "id": "chatcmpl-missing-tool-id",
+        "choices": [{
+            "message": {
+                "tool_calls": [{
+                    "type": "function",
+                    "function": { "name": "read_file", "arguments": "{}" }
+                }]
+            }
+        }]
+    });
+    assert!(convert_chat_completions_body_to_responses(
+        serde_json::to_vec(&body).unwrap().as_slice(),
+        None,
+    )
+    .is_none());
 }

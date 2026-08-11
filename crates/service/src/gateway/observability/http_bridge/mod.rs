@@ -16,8 +16,8 @@ use aggregate::openai_responses_event::{OpenAIResponsesEvent, OpenAIResponsesOut
 pub(crate) use aggregate::PassthroughSseProtocol;
 #[allow(unused_imports)]
 use aggregate::{
-    append_output_text, collect_output_text_from_event_fields, collect_response_output_text,
-    collect_response_reasoning_summary_text,
+    append_output_text, append_output_text_raw, collect_output_text_from_event_fields,
+    collect_response_output_text, collect_response_reasoning_summary_text,
 };
 use aggregate::{
     collect_non_stream_json_from_sse_bytes, extract_error_hint_from_body,
@@ -92,6 +92,7 @@ pub(super) fn respond_with_upstream(
     gemini_stream_output_mode: Option<super::GeminiStreamOutputMode>,
     request_path: &str,
     tool_name_restore_map: Option<&super::ToolNameRestoreMap>,
+    custom_tool_names: Option<&std::collections::BTreeSet<String>>,
     is_stream: bool,
     allow_failover_for_deactivation: bool,
     trace_id: Option<&str>,
@@ -108,6 +109,7 @@ pub(super) fn respond_with_upstream(
             gemini_stream_output_mode,
             request_path,
             tool_name_restore_map,
+            custom_tool_names,
             is_stream,
             allow_failover_for_deactivation,
             trace_id,
@@ -123,6 +125,7 @@ pub(super) fn respond_with_upstream(
             gemini_stream_output_mode,
             request_path,
             tool_name_restore_map,
+            custom_tool_names,
             is_stream,
             allow_failover_for_deactivation,
             trace_id,
@@ -134,7 +137,7 @@ pub(super) fn respond_with_upstream(
 pub(super) use stream_readers::{
     ChatCompletionsFromResponsesSseReader, ImagesFromResponsesSseReader,
     OpenAIResponsesPassthroughSseReader, PassthroughSseCollector, PassthroughSseUsageReader,
-    ResponsesFromAnthropicSseReader, SseKeepAliveFrame,
+    ResponsesFromAnthropicSseReader, ResponsesFromChatCompletionsSseReader, SseKeepAliveFrame,
 };
 
 pub(super) use stream_readers::{AnthropicSseReader, GeminiSseReader};

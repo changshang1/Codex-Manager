@@ -1,6 +1,6 @@
 use rand::{distributions::Alphanumeric, Rng};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::{AdaptedGatewayRequest, GeminiStreamOutputMode, ResponseAdapter, ToolNameRestoreMap};
 use crate::apikey_profile::{
@@ -26,6 +26,7 @@ pub(crate) fn adapt_request_for_protocol(
         response_adapter: ResponseAdapter::Passthrough,
         gemini_stream_output_mode: None,
         tool_name_restore_map: ToolNameRestoreMap::new(),
+        custom_tool_names: BTreeSet::new(),
     })
 }
 
@@ -163,6 +164,7 @@ fn adapt_anthropic_messages_request(
         response_adapter: ResponseAdapter::AnthropicMessagesFromResponses,
         gemini_stream_output_mode: None,
         tool_name_restore_map,
+        custom_tool_names: BTreeSet::new(),
     })
 }
 
@@ -266,6 +268,7 @@ fn adapt_gemini_generate_content_request(
         response_adapter,
         gemini_stream_output_mode,
         tool_name_restore_map,
+        custom_tool_names: BTreeSet::new(),
     })
 }
 

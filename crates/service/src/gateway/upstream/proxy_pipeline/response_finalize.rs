@@ -209,6 +209,7 @@ pub(super) fn finalize_upstream_response(
         gemini_stream_output_mode,
         path,
         Some(tool_name_restore_map),
+        None,
         client_is_stream,
         // Once the bridge starts, tiny_http owns the request and it cannot be retried.
         // Retryable stream errors are therefore gated before this function is called.

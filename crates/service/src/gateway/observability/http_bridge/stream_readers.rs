@@ -2,10 +2,10 @@ use serde_json::{json, Map, Value};
 use std::io::{Cursor, Read};
 use std::sync::{Arc, Mutex};
 
-use super::{
-    append_output_text, collect_output_text_from_event_fields, collect_response_output_text,
-    collect_response_reasoning_summary_text, extract_error_hint_from_body,
-    extract_error_message_from_json, merge_usage,
+pub(super) use super::{
+    append_output_text, append_output_text_raw, collect_output_text_from_event_fields,
+    collect_response_output_text, collect_response_reasoning_summary_text,
+    extract_error_hint_from_body, extract_error_message_from_json, merge_usage,
 };
 use super::{
     build_images_api_response, chat_image_payload, collect_image_generation_data_urls,
@@ -17,6 +17,8 @@ use super::{
 mod anthropic;
 #[path = "stream_readers/chat_completions.rs"]
 mod chat_completions;
+#[path = "stream_readers/chat_to_responses.rs"]
+mod chat_to_responses;
 #[path = "stream_readers/common.rs"]
 mod common;
 #[path = "stream_readers/gemini.rs"]
@@ -32,6 +34,7 @@ mod responses_from_anthropic;
 
 pub(crate) use anthropic::AnthropicSseReader;
 pub(crate) use chat_completions::ChatCompletionsFromResponsesSseReader;
+pub(crate) use chat_to_responses::ResponsesFromChatCompletionsSseReader;
 use common::{
     classify_upstream_stream_read_error, mark_first_response_ms,
     should_emit_keepalive_after_first_frame, stream_idle_timed_out, stream_idle_timeout_message,

@@ -36,7 +36,8 @@ use super::{
     ChatCompletionsFromResponsesSseReader, GeminiSseReader, ImagesFromResponsesSseReader,
     ImagesResponseFormat, OpenAIResponsesPassthroughSseReader, PassthroughSseCollector,
     PassthroughSseProtocol, PassthroughSseUsageReader, ResponsesFromAnthropicSseReader,
-    SseKeepAliveFrame, UpstreamResponseBridgeResult, UpstreamResponseUsage,
+    ResponsesFromChatCompletionsSseReader, SseKeepAliveFrame, UpstreamResponseBridgeResult,
+    UpstreamResponseUsage,
 };
 
 /// 函数 `is_compact_request_path`
@@ -178,6 +179,7 @@ pub(crate) fn respond_with_upstream(
     gemini_stream_output_mode: Option<GeminiStreamOutputMode>,
     request_path: &str,
     tool_name_restore_map: Option<&ToolNameRestoreMap>,
+    custom_tool_names: Option<&std::collections::BTreeSet<String>>,
     is_stream: bool,
     allow_failover_for_deactivation: bool,
     trace_id: Option<&str>,
@@ -196,7 +198,7 @@ pub(crate) fn respond_with_upstream(
     let is_sse = upstream_meta.is_sse;
     let is_json = upstream_meta.is_json;
     if response_adapter != ResponseAdapter::Passthrough {
-        let status = StatusCode(upstream.status().as_u16());
+        let mut status = StatusCode(upstream.status().as_u16());
         let mut headers = copy_upstream_response_headers(upstream.headers(), trace_id);
 
         if !is_stream {
@@ -238,13 +240,24 @@ pub(crate) fn respond_with_upstream(
                 .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
                 convert_error_body_for_adapter(response_adapter, &message)
             } else {
-                convert_success_body_for_adapter(
+                let converted = convert_success_body_for_adapter(
                     response_adapter,
                     &body,
                     request_path,
                     tool_name_restore_map,
-                )
-                .unwrap_or_else(|| body.clone())
+                    custom_tool_names,
+                );
+                if response_adapter == ResponseAdapter::ResponsesFromChatCompletions
+                    && converted.is_none()
+                {
+                    status = StatusCode(502);
+                    convert_error_body_for_adapter(
+                        response_adapter,
+                        "上游 Chat Completions 响应无法转换为 Responses 协议",
+                    )
+                } else {
+                    converted.unwrap_or_else(|| body.clone())
+                }
             };
             let delivery_error = respond_json_bytes(request, status, headers, response_body);
             return Ok(terminal_bridge_result_with_debug_meta(
@@ -354,6 +367,30 @@ pub(crate) fn respond_with_upstream(
                     Box::new(ChatCompletionsFromResponsesSseReader::new(
                         upstream,
                         Arc::clone(&usage_collector),
+                        request_started_at,
+                    ));
+                return Ok(respond_passthrough_collector_stream(
+                    request,
+                    status,
+                    headers,
+                    response_body,
+                    usage_collector,
+                    UpstreamDebugMetaRefs {
+                        request_id: &upstream_request_id,
+                        cf_ray: &upstream_cf_ray,
+                        auth_error: &upstream_auth_error,
+                        identity_error_code: &upstream_identity_error_code,
+                        content_type: &upstream_content_type,
+                    },
+                ));
+            }
+            ResponseAdapter::ResponsesFromChatCompletions => {
+                let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+                let response_body: Box<dyn std::io::Read + Send> =
+                    Box::new(ResponsesFromChatCompletionsSseReader::new(
+                        upstream,
+                        Arc::clone(&usage_collector),
+                        custom_tool_names.cloned().unwrap_or_default(),
                         request_started_at,
                     ));
                 return Ok(respond_passthrough_collector_stream(
@@ -885,6 +922,7 @@ pub(crate) fn respond_with_upstream(
         ResponseAdapter::AnthropicMessagesFromResponses
         | ResponseAdapter::ResponsesFromAnthropicMessages
         | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ImagesB64JsonFromResponses
         | ResponseAdapter::ImagesUrlFromResponses
         | ResponseAdapter::GeminiJson
@@ -904,6 +942,7 @@ pub(crate) fn respond_with_stream_upstream(
     gemini_stream_output_mode: Option<GeminiStreamOutputMode>,
     request_path: &str,
     tool_name_restore_map: Option<&ToolNameRestoreMap>,
+    custom_tool_names: Option<&std::collections::BTreeSet<String>>,
     is_stream: bool,
     _allow_failover_for_deactivation: bool,
     trace_id: Option<&str>,
@@ -922,7 +961,7 @@ pub(crate) fn respond_with_stream_upstream(
     let is_sse = upstream_meta.is_sse;
     let is_json = upstream_meta.is_json;
     if response_adapter != ResponseAdapter::Passthrough {
-        let status = StatusCode(upstream.status().as_u16());
+        let mut status = StatusCode(upstream.status().as_u16());
         let mut headers = copy_upstream_response_headers(upstream.headers(), trace_id);
 
         if !is_stream {
@@ -964,13 +1003,24 @@ pub(crate) fn respond_with_stream_upstream(
                 .unwrap_or_else(|| "upstream compatibility bridge failed".to_string());
                 convert_error_body_for_adapter(response_adapter, &message)
             } else {
-                convert_success_body_for_adapter(
+                let converted = convert_success_body_for_adapter(
                     response_adapter,
                     &body,
                     request_path,
                     tool_name_restore_map,
-                )
-                .unwrap_or_else(|| body.clone())
+                    custom_tool_names,
+                );
+                if response_adapter == ResponseAdapter::ResponsesFromChatCompletions
+                    && converted.is_none()
+                {
+                    status = StatusCode(502);
+                    convert_error_body_for_adapter(
+                        response_adapter,
+                        "上游 Chat Completions 响应无法转换为 Responses 协议",
+                    )
+                } else {
+                    converted.unwrap_or_else(|| body.clone())
+                }
             };
             let delivery_error = respond_json_bytes(request, status, headers, response_body);
             return Ok(terminal_bridge_result_with_debug_meta(
@@ -1080,6 +1130,30 @@ pub(crate) fn respond_with_stream_upstream(
                     Box::new(ChatCompletionsFromResponsesSseReader::from_reader(
                         upstream.into_reader(),
                         Arc::clone(&usage_collector),
+                        request_started_at,
+                    ));
+                return Ok(respond_passthrough_collector_stream(
+                    request,
+                    status,
+                    headers,
+                    response_body,
+                    usage_collector,
+                    UpstreamDebugMetaRefs {
+                        request_id: &upstream_request_id,
+                        cf_ray: &upstream_cf_ray,
+                        auth_error: &upstream_auth_error,
+                        identity_error_code: &upstream_identity_error_code,
+                        content_type: &upstream_content_type,
+                    },
+                ));
+            }
+            ResponseAdapter::ResponsesFromChatCompletions => {
+                let usage_collector = Arc::new(Mutex::new(PassthroughSseCollector::default()));
+                let response_body: Box<dyn std::io::Read + Send> =
+                    Box::new(ResponsesFromChatCompletionsSseReader::from_reader(
+                        upstream.into_reader(),
+                        Arc::clone(&usage_collector),
+                        custom_tool_names.cloned().unwrap_or_default(),
                         request_started_at,
                     ));
                 return Ok(respond_passthrough_collector_stream(
@@ -1576,6 +1650,7 @@ pub(crate) fn respond_with_stream_upstream(
         ResponseAdapter::AnthropicMessagesFromResponses
         | ResponseAdapter::ResponsesFromAnthropicMessages
         | ResponseAdapter::ChatCompletionsFromResponses
+        | ResponseAdapter::ResponsesFromChatCompletions
         | ResponseAdapter::ImagesB64JsonFromResponses
         | ResponseAdapter::ImagesUrlFromResponses
         | ResponseAdapter::GeminiJson
