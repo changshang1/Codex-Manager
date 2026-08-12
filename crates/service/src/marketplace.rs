@@ -15,7 +15,7 @@ use std::time::Duration;
 
 const PRICEAI_BASE: &str = "https://priceai.cc";
 // 商品池的产品范围是当前产品决策，不是运行时用户配置。页面和自动轮询
-// 都只处理这个默认源；历史数据库中的其它源/报价仍保留，便于追溯。
+// 都只处理这个默认源；每次成功同步都会用本次结果替换全部旧报价。
 const MARKETPLACE_PRODUCT_ID: &str = "chatgpt-plus";
 const MARKETPLACE_SOURCE_ID: &str = "default-chatgpt-plus";
 const MARKETPLACE_DEFAULT_TAGS_JSON: &str = "[\"account_verified\"]";
@@ -870,28 +870,24 @@ fn process_rules(
     previous: Option<&MarketplaceOffer>,
     notify: bool,
     notifications: &mut Vec<String>,
-) -> Result<(), String> {
+) -> rusqlite::Result<()> {
     for rule in rules {
         let active = rule_active(rule, offer, previous);
         let signature = rule_signature(rule, offer);
-        let state = storage
-            .marketplace_alert_state_get(&rule.id, &offer.offer_key)
-            .map_err(|error| error.to_string())?;
+        let state = storage.marketplace_alert_state_get(&rule.id, &offer.offer_key)?;
         let should_notify = state.as_ref().is_some_and(|previous_state| {
             notify
                 && active
                 && (!previous_state.condition_active || previous_state.signature != signature)
         });
-        storage
-            .marketplace_alert_state_put(&MarketplaceAlertState {
-                rule_id: rule.id.clone(),
-                offer_key: offer.offer_key.clone(),
-                signature,
-                condition_active: active,
-                baseline_ready: true,
-                updated_at: now_ts(),
-            })
-            .map_err(|error| error.to_string())?;
+        storage.marketplace_alert_state_put(&MarketplaceAlertState {
+            rule_id: rule.id.clone(),
+            offer_key: offer.offer_key.clone(),
+            signature,
+            condition_active: active,
+            baseline_ready: true,
+            updated_at: now_ts(),
+        })?;
         if should_notify {
             notifications.push(format!(
                 "{}: {}",
@@ -922,16 +918,14 @@ fn record_offer_changes(
     storage: &Storage,
     previous: &MarketplaceOffer,
     current: &MarketplaceOffer,
-) -> Result<(), String> {
+) -> rusqlite::Result<()> {
     let key = &current.offer_key;
     if previous.price != current.price {
-        storage
-            .marketplace_change_insert(
-                key,
-                "price",
-                &json!({"before":previous.price,"after":current.price}).to_string(),
-            )
-            .map_err(|error| error.to_string())?;
+        storage.marketplace_change_insert(
+            key,
+            "price",
+            &json!({"before":previous.price,"after":current.price}).to_string(),
+        )?;
     }
     if previous.raw_status != current.raw_status
         || previous.effective_status != current.effective_status
@@ -939,46 +933,38 @@ fn record_offer_changes(
         || previous.expires_at != current.expires_at
         || previous.stock_count != current.stock_count
     {
-        storage
-            .marketplace_change_insert(
-                key,
-                "priceai_status",
-                &json!({
-                    "before": priceai_status(previous),
-                    "after": priceai_status(current),
-                    "rawBefore": previous.raw_status,
-                    "rawAfter": current.raw_status,
-                    "effectiveBefore": previous.effective_status,
-                    "effectiveAfter": current.effective_status,
-                    "stockBefore": previous.stock_count,
-                    "stockAfter": current.stock_count
-                })
-                .to_string(),
-            )
-            .map_err(|error| error.to_string())?;
+        storage.marketplace_change_insert(
+            key,
+            "priceai_status",
+            &json!({
+                "before": priceai_status(previous),
+                "after": priceai_status(current),
+                "rawBefore": previous.raw_status,
+                "rawAfter": current.raw_status,
+                "effectiveBefore": previous.effective_status,
+                "effectiveAfter": current.effective_status,
+                "stockBefore": previous.stock_count,
+                "stockAfter": current.stock_count
+            })
+            .to_string(),
+        )?;
     }
     if !priceai_in_stock(previous) && priceai_in_stock(current) {
-        storage
-            .marketplace_change_insert(key, "restock", &json!({}).to_string())
-            .map_err(|error| error.to_string())?;
+        storage.marketplace_change_insert(key, "restock", &json!({}).to_string())?;
     }
     if previous.local_status != current.local_status {
-        storage
-            .marketplace_change_insert(
-                key,
-                "verification",
-                &json!({"before":previous.local_status,"after":current.local_status}).to_string(),
-            )
-            .map_err(|error| error.to_string())?;
+        storage.marketplace_change_insert(
+            key,
+            "verification",
+            &json!({"before":previous.local_status,"after":current.local_status}).to_string(),
+        )?;
     }
     if previous.local_status != "invalid" && current.local_status == "invalid" {
-        storage
-            .marketplace_change_insert(
-                key,
-                "invalid_link",
-                &json!({"reason":current.local_error}).to_string(),
-            )
-            .map_err(|error| error.to_string())?;
+        storage.marketplace_change_insert(
+            key,
+            "invalid_link",
+            &json!({"reason":current.local_error}).to_string(),
+        )?;
     }
     Ok(())
 }
@@ -993,9 +979,26 @@ impl MarketplaceSyncMode {
     fn is_automatic(self) -> bool {
         self == Self::Automatic
     }
+}
 
-    fn commits_full_snapshot(self) -> bool {
-        self == Self::Manual
+fn preserved_verification(
+    previous: Option<&MarketplaceOffer>,
+) -> (String, Option<i64>, Option<String>) {
+    (
+        previous
+            .map(|offer| offer.local_status.clone())
+            .unwrap_or_else(|| "unknown".to_string()),
+        previous.and_then(|offer| offer.local_checked_at),
+        previous.and_then(|offer| offer.local_error.clone()),
+    )
+}
+
+fn sync_tags(source: &MarketplaceSource, mode: MarketplaceSyncMode) -> Result<Vec<String>, String> {
+    if mode.is_automatic() {
+        serde_json::from_str::<Vec<String>>(&source.tags_json)
+            .map_err(|_| "定时同步标签配置损坏，请重新保存商品池设置".to_string())
+    } else {
+        Ok(Vec::new())
     }
 }
 
@@ -1009,15 +1012,9 @@ fn sync_source(
     notifications: &mut Vec<String>,
 ) -> Result<usize, String> {
     let automatic = mode.is_automatic();
-    // Automatic tag syncs update only the returned subset. Reusing the last
-    // committed full-snapshot marker keeps offers outside that tag scope current.
-    let sync_id = if mode.commits_full_snapshot() {
-        chrono::Utc::now()
-            .timestamp_millis()
-            .max(source.last_successful_sync_id.saturating_add(1))
-    } else {
-        source.last_successful_sync_id
-    };
+    let sync_id = chrono::Utc::now()
+        .timestamp_millis()
+        .max(source.last_successful_sync_id.saturating_add(1));
     let mut offers = fetch_source(client, source, tags)?;
     offers.sort_by(|left, right| {
         match (
@@ -1031,7 +1028,7 @@ fn sync_source(
         }
     });
 
-    let mut count = 0_usize;
+    let mut inputs = Vec::with_capacity(offers.len());
     for (index, raw) in offers.into_iter().enumerate() {
         let offer_id = as_str(raw.get("id").unwrap_or(&Value::Null))
             .ok_or_else(|| "PriceAI 报价缺少 id，已拒绝保存不完整快照".to_string())?;
@@ -1063,55 +1060,46 @@ fn sync_source(
                 ),
             }
         } else {
-            (
-                previous
-                    .as_ref()
-                    .map(|offer| offer.local_status.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                previous.as_ref().and_then(|offer| offer.local_checked_at),
-                previous
-                    .as_ref()
-                    .and_then(|offer| offer.local_error.clone()),
-            )
+            preserved_verification(previous.as_ref())
         };
-        let input = offer_input(
-            source,
-            &raw,
-            &local_status,
-            checked_at,
-            local_error,
-            sync_id,
-        )
-        .ok_or_else(|| "PriceAI 报价字段不完整，已拒绝保存不完整快照".to_string())?;
-        let old = storage
-            .marketplace_offer_upsert(&input)
-            .map_err(|error| error.to_string())?;
-        let current = storage
-            .marketplace_offer_by_key(&key)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "报价写入后读取失败".to_string())?;
-        if let Some(previous) = old.as_ref() {
-            record_offer_changes(storage, previous, &current)?;
-        }
-        process_rules(
-            storage,
-            rules,
-            &current,
-            old.as_ref(),
-            automatic,
-            notifications,
-        )?;
-        count += 1;
+        inputs.push(
+            offer_input(
+                source,
+                &raw,
+                &local_status,
+                checked_at,
+                local_error,
+                sync_id,
+            )
+            .ok_or_else(|| "PriceAI 报价字段不完整，已拒绝保存不完整快照".to_string())?,
+        );
     }
-    if mode.commits_full_snapshot() {
-        storage
-            .marketplace_source_sync_succeeded(&source.id, sync_id)
-            .map_err(|error| error.to_string())?;
-    } else {
-        storage
-            .marketplace_source_partial_sync_succeeded(&source.id)
-            .map_err(|error| error.to_string())?;
-    }
+    let count = inputs.len();
+    let committed_notifications = storage
+        .marketplace_replace_offers(&source.id, sync_id, |storage| {
+            let mut staged_notifications = Vec::new();
+            for input in inputs {
+                let key = input.offer_key.clone();
+                let previous = storage.marketplace_offer_upsert(&input)?;
+                let current = storage
+                    .marketplace_offer_by_key(&key)?
+                    .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+                if let Some(previous) = previous.as_ref() {
+                    record_offer_changes(storage, previous, &current)?;
+                }
+                process_rules(
+                    storage,
+                    rules,
+                    &current,
+                    previous.as_ref(),
+                    automatic,
+                    &mut staged_notifications,
+                )?;
+            }
+            Ok(staged_notifications)
+        })
+        .map_err(|error| error.to_string())?;
+    notifications.extend(committed_notifications);
     Ok(count)
 }
 
@@ -1172,14 +1160,9 @@ pub fn refresh(automatic: bool) -> Result<Value, String> {
             "completedAt": now_ts()
         }));
     }
-    let tags = if mode.is_automatic() {
-        serde_json::from_str::<Vec<String>>(&source.tags_json)
-            .map_err(|_| "定时同步标签配置损坏，请重新保存商品池设置".to_string())?
-    } else {
-        // Manual refresh is the only full reconciliation. It never carries the
-        // scheduled tag scope, even when automatic sync is disabled.
-        Vec::new()
-    };
+    // Manual refresh never carries the scheduled tag scope, even when automatic
+    // sync is disabled. Both modes replace the stored offer set after validation.
+    let tags = sync_tags(&source, mode)?;
     let rules = storage
         .marketplace_rules()
         .map_err(|error| error.to_string())?;
@@ -1354,7 +1337,7 @@ pub fn verify_offer(key: &str) -> Result<MarketplaceOffer, String> {
         .marketplace_offer_verification_update(key, &local_status, local_error.as_deref())
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "验证结果写入后读取失败".to_string())?;
-    record_offer_changes(&storage, &previous, &current)?;
+    record_offer_changes(&storage, &previous, &current).map_err(|error| error.to_string())?;
 
     let rules = storage
         .marketplace_rules()
@@ -1367,7 +1350,8 @@ pub fn verify_offer(key: &str) -> Result<MarketplaceOffer, String> {
         Some(&previous),
         false,
         &mut ignored_notifications,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
     Ok(attach_merchant_key(current))
 }
 
@@ -1625,6 +1609,41 @@ mod tests {
         assert!(repaired.merchant.is_none());
         assert!(!repaired.enabled);
         assert!(!repaired.verify_enabled);
+    }
+
+    #[test]
+    fn sync_scope_uses_saved_tags_only_for_automatic_refresh() {
+        let storage = initialized_storage();
+        let mut source = ensure_default_source(&storage).expect("create default source");
+        source.tags_json = "[\"account_verified\",\"warranty_long\"]".to_string();
+
+        assert_eq!(
+            sync_tags(&source, MarketplaceSyncMode::Automatic).expect("read automatic tags"),
+            vec!["account_verified", "warranty_long"]
+        );
+        assert!(sync_tags(&source, MarketplaceSyncMode::Manual)
+            .expect("read manual tags")
+            .is_empty());
+    }
+
+    #[test]
+    fn unchanged_offer_preserves_local_verification_before_upsert() {
+        let mut previous = offer("offer-preserved", 8.0, true, "available");
+        previous.local_checked_at = Some(123);
+        previous.local_error = Some("last verification detail".to_string());
+
+        assert_eq!(
+            preserved_verification(Some(&previous)),
+            (
+                "available".to_string(),
+                Some(123),
+                Some("last verification detail".to_string())
+            )
+        );
+        assert_eq!(
+            preserved_verification(None),
+            ("unknown".to_string(), None, None)
+        );
     }
 
     #[test]

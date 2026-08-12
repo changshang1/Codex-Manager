@@ -11,7 +11,6 @@ import {
   ChevronRight,
   Clock3,
   ExternalLink,
-  History,
   Info,
   ListFilter,
   Pencil,
@@ -279,7 +278,6 @@ export default function MarketplacePage() {
   const [sourceDraft, setSourceDraft] = useState<SourceDraft>(DEFAULT_SOURCE_DRAFT);
   const [priceAiStatus, setPriceAiStatus] = useState("all");
   const [localStatus, setLocalStatus] = useState("all");
-  const [snapshotFilter, setSnapshotFilter] = useState<"current" | "history">("current");
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [filters, setFilters] = useState<MarketplaceAdvancedFilters>(
     DEFAULT_MARKETPLACE_FILTERS,
@@ -330,14 +328,16 @@ export default function MarketplacePage() {
   }, []);
 
   const scopedOffers = useMemo(
-    () => offers.filter((offer) => offer.productId === MARKETPLACE_PRODUCT_ID),
+    () =>
+      offers.filter(
+        (offer) => offer.productId === MARKETPLACE_PRODUCT_ID && offer.isCurrent,
+      ),
     [offers],
   );
 
   const tagFacets = useMemo(() => {
     const counts = new Map<string, number>();
     for (const offer of scopedOffers) {
-      if (!offer.isCurrent) continue;
       for (const tag of offer.filterTags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
     return MARKETPLACE_FILTER_TAGS
@@ -362,12 +362,12 @@ export default function MarketplacePage() {
     () =>
       Array.from(
         new Set(
-          offers
+          scopedOffers
             .flatMap((offer) => [offer.sourceName, offer.sourceId])
             .filter((merchant): merchant is string => Boolean(merchant?.trim())),
         ),
       ).sort((left, right) => left.localeCompare(right, "zh-CN")),
-    [offers],
+    [scopedOffers],
   );
 
   const favoriteMerchantKeys = useMemo(
@@ -378,8 +378,6 @@ export default function MarketplacePage() {
   const filteredOffers = useMemo(
     () =>
       scopedOffers.filter((offer) => {
-        if (snapshotFilter === "current" && !offer.isCurrent) return false;
-        if (snapshotFilter === "history" && offer.isCurrent) return false;
         const status = getPriceAiStatus(offer);
         if (priceAiStatus !== "all" && status !== priceAiStatus) return false;
         if (localStatus !== "all" && offer.localStatus !== localStatus) return false;
@@ -393,7 +391,6 @@ export default function MarketplacePage() {
       }),
     [
       scopedOffers,
-      snapshotFilter,
       priceAiStatus,
       localStatus,
       favoriteOnly,
@@ -416,7 +413,6 @@ export default function MarketplacePage() {
   const filterSignature = [
     priceAiStatus,
     localStatus,
-    snapshotFilter,
     favoriteOnly,
     filters.tags.join(","),
     filters.collector,
@@ -464,12 +460,9 @@ export default function MarketplacePage() {
 
   const offerCounts = useMemo(
     () => ({
-      current: scopedOffers.filter((offer) => offer.isCurrent).length,
-      history: scopedOffers.filter((offer) => !offer.isCurrent).length,
-      available: scopedOffers.filter((offer) => offer.isCurrent && getPriceAiStatus(offer) === "available")
-        .length,
+      available: scopedOffers.filter((offer) => getPriceAiStatus(offer) === "available").length,
       outOfStock: scopedOffers.filter(
-        (offer) => offer.isCurrent && getPriceAiStatus(offer) === "out_of_stock",
+        (offer) => getPriceAiStatus(offer) === "out_of_stock",
       ).length,
     }),
     [scopedOffers],
@@ -623,26 +616,7 @@ export default function MarketplacePage() {
 
       <Card>
         <CardHeader className="gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <CardTitle className="text-base">{t("报价列表")}</CardTitle>
-            <div className="flex items-center rounded-md border p-0.5" role="tablist" aria-label={t("商品范围")}>
-              <Button
-                size="sm"
-                variant={snapshotFilter === "current" ? "secondary" : "ghost"}
-                onClick={() => setSnapshotFilter("current")}
-              >
-                {t("当前全部")} {offerCounts.current}
-              </Button>
-              <Button
-                size="sm"
-                variant={snapshotFilter === "history" ? "secondary" : "ghost"}
-                onClick={() => setSnapshotFilter("history")}
-              >
-                <History className="mr-1 h-3.5 w-3.5" />
-                {t("历史/未返回")} {offerCounts.history}
-              </Button>
-            </div>
-          </div>
+          <CardTitle className="text-base">{t("报价列表")}</CardTitle>
           <div className="grid gap-3 xl:grid-cols-[minmax(260px,1.5fr)_repeat(2,minmax(130px,0.7fr))_repeat(2,minmax(150px,1fr))]">
             <label className="space-y-1 text-xs text-muted-foreground">
               <span>{t("包含关键词")}</span>
@@ -904,7 +878,6 @@ export default function MarketplacePage() {
                         <div className="truncate font-medium">{offer.title || offer.offerId}</div>
                         <div className="truncate text-xs text-muted-foreground">
                           {t(MARKETPLACE_PRODUCT_LABEL)}
-                          {!offer.isCurrent ? ` · ${t("历史/未返回")}` : ""}
                         </div>
                       </td>
                       <td className="whitespace-nowrap py-3 pr-3 font-mono">

@@ -292,12 +292,33 @@ impl Storage {
         Ok(())
     }
 
-    pub fn marketplace_source_partial_sync_succeeded(&self, id: &str) -> Result<()> {
+    pub fn marketplace_replace_offers<T>(
+        &self,
+        source_config_id: &str,
+        sync_id: i64,
+        operation: impl FnOnce(&Storage) -> Result<T>,
+    ) -> Result<T> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let value = operation(self)?;
         self.conn.execute(
-            "UPDATE marketplace_sources SET last_sync_at=?2,last_sync_error=NULL WHERE id=?1",
-            params![id, now_ts()],
+            "DELETE FROM marketplace_alert_state
+             WHERE NOT EXISTS (
+               SELECT 1
+               FROM marketplace_offers o
+               WHERE o.offer_key=marketplace_alert_state.offer_key
+                 AND o.source_config_id=?1
+                 AND o.last_seen_sync_id=?2
+             )",
+            params![source_config_id, sync_id],
         )?;
-        Ok(())
+        self.conn.execute(
+            "DELETE FROM marketplace_offers
+             WHERE source_config_id<>?1 OR last_seen_sync_id<>?2",
+            params![source_config_id, sync_id],
+        )?;
+        self.marketplace_source_sync_succeeded(source_config_id, sync_id)?;
+        transaction.commit()?;
+        Ok(value)
     }
 
     pub fn marketplace_source_sync_failed(&self, id: &str, error: &str) -> Result<()> {
@@ -784,32 +805,206 @@ mod tests {
     }
 
     #[test]
-    fn partial_sync_does_not_invalidate_full_snapshot() {
+    fn offer_replacement_removes_missing_and_legacy_source_offers() {
         let storage = storage();
+        storage
+            .marketplace_source_upsert(&MarketplaceSourceInput {
+                id: "legacy-source".to_string(),
+                product_id: "legacy-product".to_string(),
+                tags_json: "[]".to_string(),
+                merchant: None,
+                enabled: false,
+                verify_enabled: false,
+            })
+            .expect("insert legacy source");
         storage
             .marketplace_offer_upsert(&offer("inside", 10.0, true))
             .expect("insert inside offer");
         storage
             .marketplace_offer_upsert(&offer("outside", 20.0, true))
             .expect("insert outside offer");
+        let original_inside = storage
+            .marketplace_offer_by_key("inside")
+            .expect("read original inside offer")
+            .expect("original inside offer exists");
+        let mut legacy = offer("legacy", 30.0, true);
+        legacy.source_config_id = "legacy-source".to_string();
+        legacy.product_id = "legacy-product".to_string();
         storage
-            .marketplace_source_sync_succeeded("source-1", 100)
-            .expect("commit full snapshot");
+            .marketplace_offer_upsert(&legacy)
+            .expect("insert legacy offer");
+        for key in ["inside", "outside", "legacy"] {
+            storage
+                .marketplace_alert_state_put(&MarketplaceAlertState {
+                    rule_id: "rule-1".to_string(),
+                    offer_key: key.to_string(),
+                    signature: key.to_string(),
+                    condition_active: true,
+                    baseline_ready: true,
+                    updated_at: 1,
+                })
+                .expect("insert alert state");
+        }
+        storage
+            .marketplace_change_insert("outside", "price", "{}")
+            .expect("insert retained change history");
+        storage
+            .marketplace_rule_upsert(&MarketplaceAlertRuleInput {
+                id: "rule-1".to_string(),
+                name: "Retained rule".to_string(),
+                source_config_id: Some("source-1".to_string()),
+                product_id: Some("chatgpt-plus".to_string()),
+                tags_json: "[]".to_string(),
+                merchant: None,
+                currency: "CNY".to_string(),
+                max_price: Some(10.0),
+                drop_amount: None,
+                drop_percent: None,
+                notify_restock: true,
+                notify_verified: true,
+                notify_invalid_link: false,
+                enabled: true,
+            })
+            .expect("insert retained rule");
+        storage
+            .marketplace_setting_set("desktop_notifications", "true")
+            .expect("insert retained setting");
+        storage
+            .marketplace_favorite_merchant_set(
+                &MarketplaceFavoriteMerchantInput {
+                    merchant_key: "source:shopapi:merchant-1".to_string(),
+                    source_id: Some("merchant-1".to_string()),
+                    source_name: Some("Merchant".to_string()),
+                    collector_kind: Some("shopApi".to_string()),
+                },
+                true,
+            )
+            .expect("insert retained favorite");
 
         let mut inside = offer("inside", 9.0, true);
-        inside.last_seen_sync_id = 100;
+        inside.last_seen_sync_id = 101;
         storage
-            .marketplace_offer_upsert(&inside)
-            .expect("update partial offer");
-        storage
-            .marketplace_source_partial_sync_succeeded("source-1")
-            .expect("record partial sync");
+            .marketplace_replace_offers("source-1", 101, |storage| {
+                storage.marketplace_offer_upsert(&inside)?;
+                Ok(())
+            })
+            .expect("replace offers");
 
         let offers = storage
-            .marketplace_offers(Some("source-1"), None, 10)
+            .marketplace_offers(None, None, 10)
             .expect("list offers");
-        assert_eq!(offers.len(), 2);
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].offer_key, "inside");
+        assert_eq!(offers[0].price, Some(9.0));
+        assert_eq!(offers[0].first_seen_at, original_inside.first_seen_at);
         assert!(offers.iter().all(|offer| offer.is_current));
+        assert!(storage
+            .marketplace_alert_state_get("rule-1", "inside")
+            .expect("read retained state")
+            .is_some());
+        assert!(storage
+            .marketplace_alert_state_get("rule-1", "outside")
+            .expect("read removed state")
+            .is_none());
+        assert!(storage
+            .marketplace_alert_state_get("rule-1", "legacy")
+            .expect("read removed legacy state")
+            .is_none());
+        assert_eq!(
+            storage.marketplace_changes(10).expect("read changes").len(),
+            1
+        );
+        assert_eq!(storage.marketplace_rules().expect("read rules").len(), 1);
+        assert_eq!(
+            storage
+                .marketplace_setting_get("desktop_notifications")
+                .expect("read setting")
+                .as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            storage
+                .marketplace_favorite_merchants()
+                .expect("read favorites")
+                .len(),
+            1
+        );
+        assert_eq!(
+            storage.marketplace_sources().expect("read sources").len(),
+            2
+        );
+    }
+
+    #[test]
+    fn empty_offer_replacement_clears_offers_and_states() {
+        let storage = storage();
+        storage
+            .marketplace_offer_upsert(&offer("old", 10.0, true))
+            .expect("insert old offer");
+        storage
+            .marketplace_alert_state_put(&MarketplaceAlertState {
+                rule_id: "rule-1".to_string(),
+                offer_key: "old".to_string(),
+                signature: "old".to_string(),
+                condition_active: true,
+                baseline_ready: true,
+                updated_at: 1,
+            })
+            .expect("insert old state");
+
+        storage
+            .marketplace_replace_offers("source-1", 101, |_| Ok(()))
+            .expect("commit empty replacement");
+
+        assert!(storage
+            .marketplace_offers(None, None, 10)
+            .expect("list empty offers")
+            .is_empty());
+        assert!(storage
+            .marketplace_alert_state_get("rule-1", "old")
+            .expect("read removed state")
+            .is_none());
+        let source = storage
+            .marketplace_sources()
+            .expect("read source")
+            .into_iter()
+            .find(|source| source.id == "source-1")
+            .expect("source exists");
+        assert_eq!(source.last_successful_sync_id, 101);
+    }
+
+    #[test]
+    fn failed_offer_replacement_rolls_back_every_write() {
+        let storage = storage();
+        storage
+            .marketplace_offer_upsert(&offer("old", 10.0, true))
+            .expect("insert old offer");
+        storage
+            .marketplace_source_sync_succeeded("source-1", 100)
+            .expect("commit old sync");
+        let mut replacement = offer("new", 8.0, true);
+        replacement.last_seen_sync_id = 101;
+
+        let result = storage.marketplace_replace_offers("source-1", 101, |storage| {
+            storage.marketplace_offer_upsert(&replacement)?;
+            Err::<(), _>(rusqlite::Error::InvalidParameterName(
+                "forced rollback".to_string(),
+            ))
+        });
+        assert!(result.is_err());
+
+        let offers = storage
+            .marketplace_offers(None, None, 10)
+            .expect("list rolled back offers");
+        assert_eq!(offers.len(), 1);
+        assert_eq!(offers[0].offer_key, "old");
+        let source = storage
+            .marketplace_sources()
+            .expect("read source")
+            .into_iter()
+            .find(|source| source.id == "source-1")
+            .expect("source exists");
+        assert_eq!(source.last_successful_sync_id, 100);
     }
 
     #[test]
