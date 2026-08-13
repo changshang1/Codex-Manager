@@ -1,7 +1,8 @@
 use super::{
     auth_http_client_for_issuer, next_account_sort, normalized_device_poll_interval,
-    openai_auth_loopback_http_client_build_count, poll_device_auth_token_async_with_timeout,
-    resolve_existing_account_for_login, run_auth_future, DeviceLoginError,
+    openai_auth_loopback_http_client_build_count, persist_completed_oauth_login,
+    poll_device_auth_token_async_with_timeout, resolve_existing_account_for_login, run_auth_future,
+    DeviceLoginError, TokenResponse,
 };
 use crate::account_identity::{build_account_storage_id, pick_existing_account_id_by_identity};
 use crate::auth_tokens::{
@@ -10,7 +11,9 @@ use crate::auth_tokens::{
     issuer_uses_loopback_host, parse_token_endpoint_error,
 };
 use codexmanager_core::auth::parse_id_token_claims;
-use codexmanager_core::storage::{now_ts, Account, Storage};
+use codexmanager_core::storage::{
+    now_ts, Account, AccountAgentIdentity, LoginSession, Storage, Token,
+};
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use std::sync::atomic::AtomicBool;
@@ -68,6 +71,256 @@ fn build_account(
         created_at: now,
         updated_at: now,
     }
+}
+
+fn build_login_session(
+    note: Option<&str>,
+    tags: Option<&str>,
+    group_name: Option<&str>,
+) -> LoginSession {
+    let now = now_ts();
+    LoginSession {
+        login_id: "login-test".to_string(),
+        code_verifier: "verifier-test".to_string(),
+        state: "state-test".to_string(),
+        status: "completing".to_string(),
+        error: None,
+        workspace_id: None,
+        note: note.map(str::to_string),
+        tags: tags.map(str::to_string),
+        group_name: group_name.map(str::to_string),
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn completed_oauth_tokens(suffix: &str) -> TokenResponse {
+    TokenResponse {
+        id_token: format!("id-{suffix}"),
+        access_token: format!("access-{suffix}"),
+        refresh_token: format!("refresh-{suffix}"),
+    }
+}
+
+#[test]
+fn completed_oauth_login_preserves_existing_account_details() {
+    let mut storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    let account_id = "subject-old::cgpt=cgpt-old|ws=ws-old";
+    let created_at = now_ts().saturating_sub(100);
+    storage
+        .insert_account(&Account {
+            id: account_id.to_string(),
+            label: "本地名称".to_string(),
+            issuer: "https://issuer.old".to_string(),
+            chatgpt_account_id: Some("cgpt-old".to_string()),
+            workspace_id: Some("ws-old".to_string()),
+            group_name: Some("本地分组".to_string()),
+            sort: 25,
+            status: "disabled".to_string(),
+            created_at,
+            updated_at: created_at,
+        })
+        .expect("insert existing account");
+    storage
+        .upsert_account_metadata(account_id, Some("本地备注"), Some("本地标签"))
+        .expect("insert metadata");
+    storage
+        .update_account_warranty_expires_on(account_id, Some("2027-08-12"))
+        .expect("set warranty");
+    storage
+        .upsert_account_quota_capacity_override(account_id, Some(1234), Some(5678))
+        .expect("set quota override");
+    storage
+        .upsert_account_subscription(
+            account_id,
+            true,
+            Some("team"),
+            Some("team"),
+            Some(1_900_000_000),
+            Some(1_800_000_000),
+        )
+        .expect("set subscription");
+    storage
+        .upsert_account_agent_identity(&AccountAgentIdentity {
+            account_id: account_id.to_string(),
+            agent_runtime_id: "runtime-old".to_string(),
+            agent_private_key: "private-old".to_string(),
+            task_id: Some("task-old".to_string()),
+            chatgpt_user_id: "user-old".to_string(),
+            chatgpt_account_is_fedramp: false,
+            auth_mode: "agentIdentity".to_string(),
+            workspace_id: Some("ws-old".to_string()),
+            created_at,
+            updated_at: created_at,
+        })
+        .expect("set agent identity");
+    storage
+        .insert_token(&Token {
+            account_id: account_id.to_string(),
+            id_token: "id-old".to_string(),
+            access_token: "access-old".to_string(),
+            refresh_token: "refresh-old".to_string(),
+            api_key_access_token: Some("api-key-old".to_string()),
+            last_refresh: created_at,
+        })
+        .expect("insert old token");
+    assert!(storage
+        .mark_account_refresh_token_invalid_if_current(
+            account_id,
+            "refresh-old",
+            "refresh_token_invalid:refresh_token_invalidated",
+        )
+        .expect("mark old refresh token invalid"));
+    storage
+        .set_preferred_account(Some(account_id))
+        .expect("set preferred account");
+
+    persist_completed_oauth_login(
+        &storage,
+        &build_login_session(Some("本次备注"), Some("本次标签"), Some("本次分组")),
+        account_id,
+        "https://issuer.new",
+        "subject-new",
+        "授权返回名称".to_string(),
+        Some("cgpt-new".to_string()),
+        Some("ws-new".to_string()),
+        completed_oauth_tokens("new"),
+        None,
+    )
+    .expect("persist repeated OAuth login");
+
+    let account = storage
+        .find_account_by_id(account_id)
+        .expect("find account")
+        .expect("account exists");
+    assert_eq!(account.label, "本地名称");
+    assert_eq!(account.group_name.as_deref(), Some("本地分组"));
+    assert_eq!(account.sort, 25);
+    assert_eq!(account.status, "active");
+    assert_eq!(account.created_at, created_at);
+    assert_eq!(account.issuer, "https://issuer.new");
+    assert_eq!(account.chatgpt_account_id.as_deref(), Some("cgpt-new"));
+    assert_eq!(account.workspace_id.as_deref(), Some("ws-new"));
+
+    let metadata = storage
+        .find_account_metadata(account_id)
+        .expect("find metadata")
+        .expect("metadata exists");
+    assert_eq!(metadata.note.as_deref(), Some("本地备注"));
+    assert_eq!(metadata.tags.as_deref(), Some("本地标签"));
+    let token = storage
+        .find_token_by_account_id(account_id)
+        .expect("find token")
+        .expect("token exists");
+    assert_eq!(token.id_token, "id-new");
+    assert_eq!(token.access_token, "access-new");
+    assert_eq!(token.refresh_token, "refresh-new");
+    assert_eq!(token.api_key_access_token, None);
+    assert_eq!(
+        storage.preferred_account_id().expect("preferred account"),
+        Some(account_id.to_string())
+    );
+    let summary = storage
+        .list_account_summary_rows()
+        .expect("list account summary");
+    assert_eq!(
+        summary[0].warranty_expires_on.as_deref(),
+        Some("2027-08-12")
+    );
+    assert_eq!(summary[0].refresh_token_invalid_reason, None);
+    let quota = storage
+        .list_account_quota_capacity_overrides()
+        .expect("list quota overrides");
+    assert_eq!(quota.len(), 1);
+    assert_eq!(quota[0].primary_window_tokens, Some(1234));
+    assert_eq!(quota[0].secondary_window_tokens, Some(5678));
+    let subscription = storage
+        .find_account_subscription(account_id)
+        .expect("find subscription")
+        .expect("subscription exists");
+    assert_eq!(subscription.plan_type.as_deref(), Some("team"));
+    let identity = storage
+        .find_account_agent_identity(account_id)
+        .expect("find agent identity")
+        .expect("agent identity exists");
+    assert_eq!(identity.agent_runtime_id, "runtime-old");
+    assert_eq!(identity.agent_private_key, "private-old");
+    let subject_accounts = storage
+        .list_account_workspace_identities_for_subject("subject-new")
+        .expect("find updated subject identity");
+    assert_eq!(subject_accounts.len(), 1);
+    assert_eq!(subject_accounts[0].id, account_id);
+}
+
+#[test]
+fn completed_oauth_login_preserves_empty_existing_group() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    let account_id = "existing-without-group";
+    storage
+        .insert_account(&build_account(account_id, Some("cgpt-old"), Some("ws-old")))
+        .expect("insert existing account");
+
+    persist_completed_oauth_login(
+        &storage,
+        &build_login_session(None, None, Some("本次分组")),
+        account_id,
+        "https://issuer.new",
+        "subject-new",
+        "授权返回名称".to_string(),
+        Some("cgpt-new".to_string()),
+        Some("ws-new".to_string()),
+        completed_oauth_tokens("new"),
+        Some("api-key-new".to_string()),
+    )
+    .expect("persist repeated OAuth login");
+
+    let account = storage
+        .find_account_by_id(account_id)
+        .expect("find account")
+        .expect("account exists");
+    assert_eq!(account.group_name, None);
+}
+
+#[test]
+fn completed_oauth_login_uses_session_details_for_new_account() {
+    let storage = Storage::open_in_memory().expect("open in memory");
+    storage.init().expect("init");
+    let account_id = "subject-new::cgpt=cgpt-new|ws=ws-new";
+
+    persist_completed_oauth_login(
+        &storage,
+        &build_login_session(Some("新增备注"), Some("新增标签"), Some("新增分组")),
+        account_id,
+        "https://issuer.new",
+        "subject-new",
+        "新增账号名称".to_string(),
+        Some("cgpt-new".to_string()),
+        Some("ws-new".to_string()),
+        completed_oauth_tokens("new"),
+        Some("api-key-new".to_string()),
+    )
+    .expect("persist new OAuth login");
+
+    let account = storage
+        .find_account_by_id(account_id)
+        .expect("find account")
+        .expect("account exists");
+    assert_eq!(account.label, "新增账号名称");
+    assert_eq!(account.group_name.as_deref(), Some("新增分组"));
+    assert_eq!(account.status, "active");
+    let metadata = storage
+        .find_account_metadata(account_id)
+        .expect("find metadata")
+        .expect("metadata exists");
+    assert_eq!(metadata.note.as_deref(), Some("新增备注"));
+    assert_eq!(metadata.tags.as_deref(), Some("新增标签"));
+    let token = storage
+        .find_token_by_account_id(account_id)
+        .expect("find token")
+        .expect("token exists");
+    assert_eq!(token.api_key_access_token.as_deref(), Some("api-key-new"));
 }
 
 /// 函数 `pick_existing_account_requires_exact_scope_when_workspace_present`

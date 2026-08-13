@@ -4,7 +4,7 @@ use codexmanager_core::auth::{
     parse_id_token_claims, token_exchange_body_authorization_code,
     token_exchange_body_token_exchange, IdTokenClaims, DEFAULT_CLIENT_ID, DEFAULT_ISSUER,
 };
-use codexmanager_core::storage::{now_ts, Account, Storage, Token};
+use codexmanager_core::storage::{now_ts, Account, LoginSession, Storage, Token};
 use reqwest::header::HeaderMap;
 use reqwest::Client;
 use reqwest::Error as ReqwestError;
@@ -1377,57 +1377,20 @@ pub(crate) fn complete_login_with_redirect(
             fallback_subject_key.as_deref(),
         )?
         .unwrap_or(account_storage_id);
-        let now = now_ts();
-        let existing_state = storage
-            .find_account_upsert_state_by_id(&account_key)
-            .map_err(|err| err.to_string())?;
-        let sort = existing_state
-            .as_ref()
-            .map(|state| state.sort)
-            .unwrap_or_else(|| next_account_sort(&storage));
-        let created_at = existing_state
-            .as_ref()
-            .map(|state| state.created_at)
-            .unwrap_or(now);
         let workspace_id_for_log = workspace_id.clone();
         let chatgpt_account_id_for_log = chatgpt_account_id.clone();
-        let account = Account {
-            id: account_key.clone(),
+        persist_completed_oauth_login(
+            &storage,
+            &session,
+            &account_key,
+            &issuer,
+            &subject_account_id,
             label,
-            issuer: issuer.clone(),
             chatgpt_account_id,
             workspace_id,
-            group_name: session.group_name.clone(),
-            sort,
-            status: "active".to_string(),
-            created_at,
-            updated_at: now,
-        };
-        storage
-            .insert_account(&account)
-            .map_err(|err| err.to_string())?;
-        storage
-            .update_account_subject_identity(&account_key, &subject_account_id)
-            .map_err(|err| err.to_string())?;
-        storage
-            .upsert_account_metadata(
-                &account_key,
-                session.note.as_deref(),
-                session.tags.as_deref(),
-            )
-            .map_err(|err| err.to_string())?;
-
-        let token = Token {
-            account_id: account_key.clone(),
-            id_token: tokens.id_token,
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
+            tokens,
             api_key_access_token,
-            last_refresh: now,
-        };
-        storage
-            .insert_verified_token(&token)
-            .map_err(|err| err.to_string())?;
+        )?;
 
         let db_path =
             std::env::var("CODEXMANAGER_DB_PATH").unwrap_or_else(|_| "<unset>".to_string());
@@ -1467,6 +1430,76 @@ pub(crate) fn complete_login_with_redirect(
     crate::auth_account::set_current_auth_mode(Some("chatgpt"))?;
     let _ = crate::usage_refresh::enqueue_usage_refresh_after_account_add(&account_key);
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_completed_oauth_login(
+    storage: &Storage,
+    session: &LoginSession,
+    account_key: &str,
+    issuer: &str,
+    subject_account_id: &str,
+    authorized_label: String,
+    chatgpt_account_id: Option<String>,
+    workspace_id: Option<String>,
+    tokens: TokenResponse,
+    api_key_access_token: Option<String>,
+) -> Result<(), String> {
+    let existing_account = storage
+        .find_account_by_id(account_key)
+        .map_err(|err| err.to_string())?;
+    let is_existing_account = existing_account.is_some();
+    let now = now_ts();
+    let account = Account {
+        id: account_key.to_string(),
+        label: existing_account
+            .as_ref()
+            .map(|account| account.label.clone())
+            .unwrap_or(authorized_label),
+        issuer: issuer.to_string(),
+        chatgpt_account_id,
+        workspace_id,
+        group_name: existing_account
+            .as_ref()
+            .map(|account| account.group_name.clone())
+            .unwrap_or_else(|| session.group_name.clone()),
+        sort: existing_account
+            .as_ref()
+            .map(|account| account.sort)
+            .unwrap_or_else(|| next_account_sort(storage)),
+        status: "active".to_string(),
+        created_at: existing_account
+            .as_ref()
+            .map(|account| account.created_at)
+            .unwrap_or(now),
+        updated_at: now,
+    };
+    storage
+        .insert_account(&account)
+        .map_err(|err| err.to_string())?;
+    storage
+        .update_account_subject_identity(account_key, subject_account_id)
+        .map_err(|err| err.to_string())?;
+    if !is_existing_account {
+        storage
+            .upsert_account_metadata(
+                account_key,
+                session.note.as_deref(),
+                session.tags.as_deref(),
+            )
+            .map_err(|err| err.to_string())?;
+    }
+
+    storage
+        .insert_verified_token(&Token {
+            account_id: account_key.to_string(),
+            id_token: tokens.id_token,
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            api_key_access_token,
+            last_refresh: now,
+        })
+        .map_err(|err| err.to_string())
 }
 
 /// 函数 `build_exchange_code_request`
