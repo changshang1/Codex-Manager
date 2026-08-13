@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const SETTINGS_SNAPSHOT = {
   updateAutoCheck: true,
@@ -58,10 +58,13 @@ const ACCOUNT_ITEMS = [
   { id: "acct-3", label: "third@example.com", plan_type: "pro", status: "active", sort: 10 },
 ];
 
-test("account row menu moves an account to the top of the pool", async ({
-  page,
-}) => {
+async function installAccountRpcMock(
+  page: Page,
+  { failSingleSortUpdate = false } = {},
+) {
   const sortUpdatePayloads: Record<string, unknown>[][] = [];
+  const singleSortUpdatePayloads: Record<string, unknown>[] = [];
+  let accountItems = ACCOUNT_ITEMS.map((account) => ({ ...account }));
 
   await page.route("**/api/runtime**", async (route) => {
     await route.fulfill({
@@ -82,6 +85,7 @@ test("account row menu moves an account to the top of the pool", async ({
   await page.route("**/api/rpc**", async (route) => {
     const payload = route.request().postDataJSON();
     const method = typeof payload?.method === "string" ? payload.method : "";
+    const params = payload?.params ?? {};
     const id = payload?.id ?? 1;
 
     const ok = (result: unknown) =>
@@ -91,6 +95,15 @@ test("account row menu moves an account to the top of the pool", async ({
           jsonrpc: "2.0",
           id,
           result,
+        }),
+      });
+    const fail = (message: string) =>
+      route.fulfill({
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          error: { code: -32000, message },
         }),
       });
 
@@ -120,8 +133,8 @@ test("account row menu moves an account to the top of the pool", async ({
     }
     if (method === "account/list") {
       await ok({
-        items: ACCOUNT_ITEMS,
-        total: ACCOUNT_ITEMS.length,
+        items: accountItems,
+        total: accountItems.length,
         page: 1,
         pageSize: 20,
       });
@@ -132,8 +145,42 @@ test("account row menu moves an account to the top of the pool", async ({
       return;
     }
     if (method === "account/updateSorts") {
-      const updates = payload?.params?.updates;
+      const updates = params?.updates;
       sortUpdatePayloads.push(Array.isArray(updates) ? updates : []);
+      const nextSortById = new Map(
+        (Array.isArray(updates) ? updates : []).map((update) => [
+          String(update?.accountId || ""),
+          Number(update?.sort),
+        ]),
+      );
+      accountItems = accountItems
+        .map((account) => ({
+          ...account,
+          sort: nextSortById.has(account.id)
+            ? Number(nextSortById.get(account.id))
+            : account.sort,
+        }))
+        .sort((left, right) => left.sort - right.sort);
+      await ok({});
+      return;
+    }
+    if (method === "account/update") {
+      const update = {
+        accountId: String(params?.accountId || params?.account_id || ""),
+        sort: Number(params?.sort),
+      };
+      singleSortUpdatePayloads.push(update);
+      if (failSingleSortUpdate) {
+        await fail("sort update failed");
+        return;
+      }
+      accountItems = accountItems
+        .map((account) =>
+          account.id === update.accountId
+            ? { ...account, sort: update.sort }
+            : account,
+        )
+        .sort((left, right) => left.sort - right.sort);
       await ok({});
       return;
     }
@@ -151,6 +198,14 @@ test("account row menu moves an account to the top of the pool", async ({
       }),
     });
   });
+
+  return { sortUpdatePayloads, singleSortUpdatePayloads };
+}
+
+test("account row menu moves an account to the top of the pool", async ({
+  page,
+}) => {
+  const { sortUpdatePayloads } = await installAccountRpcMock(page);
 
   await page.goto("/accounts/");
 
@@ -196,4 +251,72 @@ test("account row menu moves an account to the top of the pool", async ({
     "aria-disabled",
     "true",
   );
+});
+
+test("account sort can be edited directly in the list", async ({ page }) => {
+  const { singleSortUpdatePayloads } = await installAccountRpcMock(page);
+
+  await page.goto("/accounts/");
+  await expect(page.getByRole("heading", { name: "OpenAI 账号池" })).toBeVisible();
+
+  const secondAccountRow = page
+    .getByRole("row")
+    .filter({ hasText: "second@example.com" });
+  const sortButton = secondAccountRow.getByRole("button", {
+    name: "更新账号顺序",
+  });
+
+  await sortButton.click();
+  const sortInput = secondAccountRow.getByRole("spinbutton", {
+    name: "顺序",
+  });
+  await expect(sortInput).toBeFocused();
+  await expect(sortInput).toHaveValue("5");
+
+  await sortInput.fill("8");
+  await page.keyboard.press("Escape");
+  await expect(sortInput).toHaveCount(0);
+  expect(singleSortUpdatePayloads).toEqual([]);
+
+  await sortButton.click();
+  await secondAccountRow
+    .getByRole("spinbutton", { name: "顺序" })
+    .fill("9");
+  await page.keyboard.press("Enter");
+
+  await expect.poll(() => singleSortUpdatePayloads.length).toBe(1);
+  expect(singleSortUpdatePayloads[0]).toEqual({
+    accountId: "acct-2",
+    sort: 9,
+  });
+  await expect(page.getByText("账号顺序已更新")).toBeVisible();
+  await expect(
+    secondAccountRow.getByRole("button", { name: "更新账号顺序" }),
+  ).toHaveText("9");
+});
+
+test("failed inline sort update keeps the draft available", async ({ page }) => {
+  const { singleSortUpdatePayloads } = await installAccountRpcMock(page, {
+    failSingleSortUpdate: true,
+  });
+
+  await page.goto("/accounts/");
+  const firstAccountRow = page
+    .getByRole("row")
+    .filter({ hasText: "first@example.com" });
+  await firstAccountRow
+    .getByRole("button", { name: "更新账号顺序" })
+    .click();
+
+  const sortInput = firstAccountRow.getByRole("spinbutton", {
+    name: "顺序",
+  });
+  await sortInput.fill("7");
+  await page.keyboard.press("Enter");
+
+  await expect.poll(() => singleSortUpdatePayloads.length).toBe(1);
+  await expect(page.getByText(/更新顺序失败.*sort update failed/)).toBeVisible();
+  await expect(sortInput).toBeVisible();
+  await expect(sortInput).toHaveValue("7");
+  await expect(sortInput).toBeFocused();
 });

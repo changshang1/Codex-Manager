@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import {
   ArrowDown,
   ArrowDownToLine,
@@ -88,6 +88,7 @@ import type { Account, ProxyProfile } from "@/types";
 import { AccountProxyCell } from "@/components/accounts/account-proxy-cell";
 import { AccountProxyGeoStatusGrid } from "@/components/accounts/account-proxy-status-grid";
 import { AccountProxyStatusHeader } from "@/components/accounts/account-proxy-status-header";
+import { AccountSortCell } from "@/components/accounts/account-sort-cell";
 import {
   type AccountEditorState,
   type AccountExportMode,
@@ -188,6 +189,7 @@ export interface AccountsPageViewProps {
   isSavingAccountProxy: boolean;
   isClearingAccountProxy: boolean;
   isTestingAccountProxy: boolean;
+  isUpdatingSortAccountId: string | null;
   isReorderingAccounts: boolean;
   isUpdatingProfileAccountId: string | null;
   isUpdatingStatusAccountId: string | null;
@@ -242,6 +244,7 @@ export interface AccountsPageViewProps {
   handleClearProxySettings: () => Promise<void>;
   handleTestProxySettings: () => Promise<void>;
   openAccountEditor: (account: Account) => void;
+  updateAccountSort: (accountId: string, sort: number) => Promise<void>;
   handleMoveAccount: (
     account: Account,
     direction: AccountMoveDirection,
@@ -325,6 +328,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     isSavingAccountProxy,
     isClearingAccountProxy,
     isTestingAccountProxy,
+    isUpdatingSortAccountId,
     isReorderingAccounts,
     isUpdatingProfileAccountId,
     isUpdatingStatusAccountId,
@@ -377,6 +381,7 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     handleClearProxySettings,
     handleTestProxySettings,
     openAccountEditor,
+    updateAccountSort,
     handleMoveAccount,
     handleApplyAccountSizeSort,
     handleConfirmAccountEditor,
@@ -393,6 +398,19 @@ export function AccountsPageView(props: AccountsPageViewProps) {
     toggleAccountStatus,
     forceEnableAccount,
   } = props;
+
+  const [editingSortAccountId, setEditingSortAccountId] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (
+      editingSortAccountId &&
+      !visibleAccounts.some((account) => account.id === editingSortAccountId)
+    ) {
+      setEditingSortAccountId(null);
+    }
+  }, [editingSortAccountId, visibleAccounts]);
 
   const accountProxyBusy =
     isProxySettingsLoading || isSavingAccountProxy || isClearingAccountProxy;
@@ -491,7 +509,11 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <DropdownMenuItem
                 className="gap-2"
                 disabled={
-                  !isServiceReady || isReorderingAccounts || isAtListTop
+                  !isServiceReady ||
+                  Boolean(editingSortAccountId) ||
+                  Boolean(isUpdatingSortAccountId) ||
+                  isReorderingAccounts ||
+                  isAtListTop
                 }
                 onClick={() => void handleMoveAccount(account, "top")}
               >
@@ -501,7 +523,11 @@ export function AccountsPageView(props: AccountsPageViewProps) {
               <DropdownMenuItem
                 className="gap-2"
                 disabled={
-                  !isServiceReady || isReorderingAccounts || isAtListBottom
+                  !isServiceReady ||
+                  Boolean(editingSortAccountId) ||
+                  Boolean(isUpdatingSortAccountId) ||
+                  isReorderingAccounts ||
+                  isAtListBottom
                 }
                 onClick={() => void handleMoveAccount(account, "bottom")}
               >
@@ -896,6 +922,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     className="h-9 rounded-lg px-2"
                     disabled={
                       !isServiceReady ||
+                      Boolean(editingSortAccountId) ||
+                      Boolean(isUpdatingSortAccountId) ||
                       isReorderingAccounts ||
                       accounts.length < 2
                     }
@@ -909,6 +937,8 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                     className="h-9 rounded-lg px-2"
                     disabled={
                       !isServiceReady ||
+                      Boolean(editingSortAccountId) ||
+                      Boolean(isUpdatingSortAccountId) ||
                       isReorderingAccounts ||
                       accounts.length < 2
                     }
@@ -1295,55 +1325,79 @@ export function AccountsPageView(props: AccountsPageViewProps) {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1">
-                          <span className="min-w-8 rounded-md bg-muted/60 px-2 py-1 text-center font-mono text-xs font-semibold tabular-nums">
-                            {account.priority}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
-                            disabled={
-                              !isServiceReady ||
-                              !canMoveWithinGroupUp ||
-                              isReorderingAccounts ||
-                              isUpdatingProfileAccountId === account.id
-                            }
-                            onClick={() => void handleMoveAccount(account, "up")}
-                            title={t("上移一位")}
-                          >
-                            <ArrowUp className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
-                            disabled={
-                              !isServiceReady ||
-                              !canMoveWithinGroupDown ||
-                              isReorderingAccounts ||
-                              isUpdatingProfileAccountId === account.id
-                            }
-                            onClick={() =>
-                              void handleMoveAccount(account, "down")
-                            }
-                            title={t("下移一位")}
-                          >
-                            <ArrowDown className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
+                          <AccountSortCell
+                            value={account.sort}
+                            isEditing={editingSortAccountId === account.id}
+                            isSaving={isUpdatingSortAccountId === account.id}
                             disabled={
                               !isServiceReady ||
                               isReorderingAccounts ||
-                              isUpdatingProfileAccountId === account.id
+                              isUpdatingProfileAccountId === account.id ||
+                              (Boolean(isUpdatingSortAccountId) &&
+                                isUpdatingSortAccountId !== account.id)
                             }
-                            onClick={() => openAccountEditor(account)}
-                            title={t("编辑账号信息")}
-                          >
-                            <PencilLine className="h-4 w-4" />
-                          </Button>
+                            onEdit={() => setEditingSortAccountId(account.id)}
+                            onCancel={() => setEditingSortAccountId(null)}
+                            onSave={(sort) => updateAccountSort(account.id, sort)}
+                          />
+                          {editingSortAccountId !== account.id ? (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
+                                disabled={
+                                  !isServiceReady ||
+                                  !canMoveWithinGroupUp ||
+                                  Boolean(editingSortAccountId) ||
+                                  Boolean(isUpdatingSortAccountId) ||
+                                  isReorderingAccounts ||
+                                  isUpdatingProfileAccountId === account.id
+                                }
+                                onClick={() =>
+                                  void handleMoveAccount(account, "up")
+                                }
+                                title={t("上移一位")}
+                              >
+                                <ArrowUp className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
+                                disabled={
+                                  !isServiceReady ||
+                                  !canMoveWithinGroupDown ||
+                                  Boolean(editingSortAccountId) ||
+                                  Boolean(isUpdatingSortAccountId) ||
+                                  isReorderingAccounts ||
+                                  isUpdatingProfileAccountId === account.id
+                                }
+                                onClick={() =>
+                                  void handleMoveAccount(account, "down")
+                                }
+                                title={t("下移一位")}
+                              >
+                                <ArrowDown className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary active:scale-95"
+                                disabled={
+                                  !isServiceReady ||
+                                  Boolean(editingSortAccountId) ||
+                                  Boolean(isUpdatingSortAccountId) ||
+                                  isReorderingAccounts ||
+                                  isUpdatingProfileAccountId === account.id
+                                }
+                                onClick={() => openAccountEditor(account)}
+                                title={t("编辑账号信息")}
+                              >
+                                <PencilLine className="h-4 w-4" />
+                              </Button>
+                            </>
+                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell>

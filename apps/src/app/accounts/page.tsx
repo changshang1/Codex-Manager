@@ -117,6 +117,8 @@ export default function AccountsPage() {
     isSavingAccountProxy,
     isClearingAccountProxy,
     isTestingAccountProxy,
+    updateAccountSort,
+    isUpdatingSortAccountId,
     reorderAccounts,
     isReorderingAccounts,
     updateAccountProfile,
@@ -991,6 +993,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       isSavingAccountProxy={isSavingAccountProxy}
       isClearingAccountProxy={isClearingAccountProxy}
       isTestingAccountProxy={isTestingAccountProxy}
+      isUpdatingSortAccountId={isUpdatingSortAccountId}
       isReorderingAccounts={isReorderingAccounts}
       isUpdatingProfileAccountId={isUpdatingProfileAccountId}
       isUpdatingStatusAccountId={isUpdatingStatusAccountId}
@@ -1047,6 +1050,7 @@ const toggleCleanupStatus = (rawStatus: string) => {
       handleClearProxySettings={handleClearProxySettings}
       handleTestProxySettings={handleTestProxySettings}
       openAccountEditor={openAccountEditor}
+      updateAccountSort={updateAccountSort}
       handleMoveAccount={handleMoveAccount}
       handleApplyAccountSizeSort={handleApplyAccountSizeSort}
       handleConfirmAccountEditor={handleConfirmAccountEditor}
